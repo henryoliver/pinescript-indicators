@@ -1,3 +1,9 @@
+//       __  _________   ________  __
+//      / / / / ____/ | / / __ \ \/ /   Henry Oliver
+//     / /_/ / __/ /  |/ / /_/ /\  /    https://github.com/henryoliver
+//    / __  / /___/ /|  / _, _/ / /     https://twitter.com/henry_s_oliver
+//   /_/ /_/_____/_/ |_/_/ |_| /_/
+//
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
 
@@ -19,6 +25,7 @@ type indicatorObject
     string indTooltip
 
 // General Style
+var bool showTableTitles = input.bool(defval = true, title = "Show Table Titles", group = "Table")
 var string tablePosition = input.string(defval = position.top_right, title='Table Position', options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
 var string tableSize = input.string(defval = size.normal, title='Table Size', options=[size.tiny, size.small, size.normal, size.large], group="Table")
 
@@ -35,11 +42,6 @@ var color colorIndNeutral = input.color(defval = color.new(#ECEFF4, 0), title = 
 var float MILLION = math.pow(10, 6)
 var float BILLION = math.pow(10, 9)
 var float TRILLION = math.pow(10, 12)
-
-var int TABLE_ROWS = 2
-var int TABLE_COLUMNS = 5
-var int[] FUND_TABLE_COLUMNS = array.from(0, 2)
-var int[] TECH_TABLE_COLUMNS = array.from(3, 4)
 
 // Global Variables
 float currEpsActual = request.earnings(ticker = syminfo.tickerid, field = earnings.actual, ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
@@ -62,25 +64,28 @@ createTableCells(tableId, numRows, startCol, endCol, indArray) =>
             currIndex += 1
 
 // Fundamental Performance
+var bool showFundIndicators = input.bool(defval = true, title = "Show Fundamental Performance", group = "Fundamental")
 
 // EPS Year Over Year % Growth
+var bool showEpsYrQtGrowth = input.bool(defval = true, title = "EPS(YY)", tooltip = "ABOVE and BELOW expectations in %", inline = "EPS Year Over Year % Growth", group = "Fundamental")
 getEpsYrQtGrowth() => 
-    var float epsGrowthAbove = input.float(defval = 0.25, title = "EPS(YY) ▲ - ▼ (%)", minval = -100, step = 0.01, inline="EPS Year Over Year % Growth", group = "Fundamental")
-    var float epsGrowthBelow = input.float(defval = 0.2, title = "-", minval = 0, step = 0.01, inline="EPS Year Over Year % Growth", group = "Fundamental")
+    var float epsGrowthAbove = input.float(defval = 0.25, title = "", minval = -100, step = 0.01, inline="EPS Year Over Year % Growth", group = "Fundamental")
+    var float epsGrowthBelow = input.float(defval = 0.2, title = "▲ - ▼", minval = 0, step = 0.01, inline="EPS Year Over Year % Growth", group = "Fundamental")
 
     float currEps = currEpsActual
     float prevEps = ta.valuewhen(isEpsEvent, currEps, 4)
     float epsGrowth = (currEps - prevEps) / math.abs(prevEps)
     
-    string epsGrowthText = "EPS(YY) " + str.tostring(na(epsGrowth) ? " -" : str.format("{0, number, #.##%}", epsGrowth))
+    string epsGrowthText = "EPS(YY) " + str.tostring(na(epsGrowth) ? " -" : str.format("{0, number, 0.00%}", epsGrowth))
     color epsGrowthColor = (epsGrowth >= epsGrowthAbove) ? colorIndAbove : (epsGrowth <= epsGrowthBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = epsGrowthText, indColor = epsGrowthColor, indTooltip = "Earnings growth % change, most recent reported quarter compared to year-ago quarter.")
 
 // EPS 3 Quarters Year Over Year % Growth
+var bool showEpsQtrGrowth = input.bool(defval = true, title = "EPS(3Q)", tooltip = "ABOVE and BELOW expectations in %", inline = "EPS 3 Quarters Year Over Year % Growth", group = "Fundamental")
 getEpsQtrGrowth() => 
-    var float epsGrowthAbove = input.float(defval = 0.4, title = "EPS(3Q) ▲ - ▼ (%)", minval = -100, step = 0.01, inline="EPS 3 Quarters Year Over Year % Growth", group = "Fundamental")
-    var float epsGrowthBelow = input.float(defval = 0.25, title = "-", minval = 0, step = 0.01, inline="EPS 3 Quarters Year Over Year % Growth", group = "Fundamental")
+    var float epsGrowthAbove = input.float(defval = 0.4, title = "", minval = -100, step = 0.01, inline="EPS 3 Quarters Year Over Year % Growth", group = "Fundamental")
+    var float epsGrowthBelow = input.float(defval = 0.25, title = "▲ - ▼", minval = 0, step = 0.01, inline="EPS 3 Quarters Year Over Year % Growth", group = "Fundamental")
 
     float currEps = currEpsActual
     float currEps2 = ta.valuewhen(isEpsEvent, currEps, 1)
@@ -94,29 +99,31 @@ getEpsQtrGrowth() =>
     float epsGrowth3 = (currEps3 - prevEps3) / math.abs(prevEps3)
     float epsGrowthAvg = (epsGrowth1 + epsGrowth2 + epsGrowth3) / 3
 
-    string epsGrowthText = "EPS(3Q) " + str.tostring(na(epsGrowthAvg) ? " -" : str.format("{0, number, #.##%}", epsGrowthAvg))
+    string epsGrowthText = "EPS(3Q) " + str.tostring(na(epsGrowthAvg) ? " -" : str.format("{0, number, 0.00%}", epsGrowthAvg))
     color epsGrowthColor = (epsGrowthAvg >= epsGrowthAbove) ? colorIndAbove : (epsGrowthAvg <= epsGrowthBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = epsGrowthText, indColor = epsGrowthColor, indTooltip = "Looks at quarterly earnings growth over the past 3 reported quarters and calculates average growth.")
 
 // Sales Year Over Year % Growth
+var bool showSalesYrQtGrowth = input.bool(defval = true, title = "SLS(YY)", tooltip = "ABOVE and BELOW expectations in %", inline = "Sales Year Over Year % Growth", group = "Fundamental")
 getSalesYrQtGrowth() => 
-    var float salesGrowthAbove = input.float(defval = 0.2, title = "SLS(YY) ▲ - ▼ (%)", minval = -100, step = 0.01, inline="Sales Year Over Year % Growth", group = "Fundamental")
-    var float salesGrowthBelow = input.float(defval = 0.1, title = "-", minval = 0, step = 0.01, inline="Sales Year Over Year % Growth", group = "Fundamental")
+    var float salesGrowthAbove = input.float(defval = 0.2, title = "", minval = -100, step = 0.01, inline="Sales Year Over Year % Growth", group = "Fundamental")
+    var float salesGrowthBelow = input.float(defval = 0.1, title = "▲ - ▼", minval = 0, step = 0.01, inline="Sales Year Over Year % Growth", group = "Fundamental")
 
     float currSales = currSalesActual
     float prevSales = ta.valuewhen(isEpsEvent, currSales, 4)
     float salesGrowth = (currSales - prevSales) / math.abs(prevSales)
 
-    string salesGrowthText = "SLS(YY) " + str.tostring(na(salesGrowth) ? " -" : str.format("{0, number, #.##%}", salesGrowth))
+    string salesGrowthText = "SLS(YY) " + str.tostring(na(salesGrowth) ? " -" : str.format("{0, number, 0.00%}", salesGrowth))
     color salesGrowthColor = (salesGrowth >= salesGrowthAbove) ? colorIndAbove : (salesGrowth <= salesGrowthBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = salesGrowthText, indColor = salesGrowthColor, indTooltip = "Percentage change in sales compared to the same quarter of the previous year.")
 
 // Sales 3 Quarters Year Over Year % Growth
+var bool showSalesQtrGrowth = input.bool(defval = true, title = "SLS(3Q)", tooltip = "ABOVE and BELOW expectations in %", inline = "Sales 3 Quarters Year Over Year % Growth", group = "Fundamental")
 getSalesQtrGrowth() => 
-    var float salesGrowthAbove = input.float(defval = 0.4, title = "SLS(3Q) ▲ - ▼ (%)", minval = -100, step = 0.01, inline="Sales 3 Quarters Year Over Year % Growth", group = "Fundamental")
-    var float salesGrowthBelow = input.float(defval = 0.25, title = "-", minval = 0, step = 0.01, inline="Sales 3 Quarters Year Over Year % Growth", group = "Fundamental")
+    var float salesGrowthAbove = input.float(defval = 0.4, title = "", minval = -100, step = 0.01, inline="Sales 3 Quarters Year Over Year % Growth", group = "Fundamental")
+    var float salesGrowthBelow = input.float(defval = 0.25, title = "▲ - ▼", minval = 0, step = 0.01, inline="Sales 3 Quarters Year Over Year % Growth", group = "Fundamental")
 
     float currSales = currSalesActual
     float currSales2 = ta.valuewhen(isEpsEvent, currSales, 1)
@@ -130,32 +137,34 @@ getSalesQtrGrowth() =>
     float salesGrowth3 = (currSales3 - prevSales3) / math.abs(prevSales3)
     float salesGrowthAvg = (salesGrowth1 + salesGrowth2 + salesGrowth3) / 3
 
-    string salesGrowthText = "SLS(3Q) " + str.tostring(na(salesGrowthAvg) ? " -" : str.format("{0, number, #.##%}", salesGrowthAvg))
+    string salesGrowthText = "SLS(3Q) " + str.tostring(na(salesGrowthAvg) ? " -" : str.format("{0, number, 0.00%}", salesGrowthAvg))
     color salesGrowthColor = (salesGrowthAvg >= salesGrowthAbove) ? colorIndAbove : (salesGrowthAvg <= salesGrowthBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = salesGrowthText, indColor = salesGrowthColor, indTooltip = "Looks at quarterly sales growth over the past 3 reported quarters and calculates average growth.")
 
 // Return On Equity
+var bool showReturnOnEquity = input.bool(defval = true, title = "ROE", tooltip = "ABOVE and BELOW expectations in %", inline = "Annual Return On Equity", group = "Fundamental")
 getReturnOnEquity() => 
-    var float roeReturnAbove = input.float(defval = 0.17, title = "ROE ▲ - ▼ (%)", minval = -100, step = 0.01, inline="Annual Return On Equity", group = "Fundamental")
-    var float roeReturnBelow = input.float(defval = 0.10, title = "-", minval = 0, step = 0.01, inline="Annual Return On Equity", group = "Fundamental")
+    var float roeReturnAbove = input.float(defval = 0.17, title = "", minval = -100, step = 0.01, inline="Annual Return On Equity", group = "Fundamental")
+    var float roeReturnBelow = input.float(defval = 0.10, title = "▲ - ▼", minval = 0, step = 0.01, inline="Annual Return On Equity", group = "Fundamental")
 
     float annualRoe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY", ignore_invalid_symbol = true) / 100
 
-    string annualRoeText = "ROE " + str.tostring(na(annualRoe) ? " -" : str.format("{0, number, #.##%}", annualRoe))
+    string annualRoeText = "ROE " + str.tostring(na(annualRoe) ? " -" : str.format("{0, number, 0.00%}", annualRoe))
     color annualRoeColor = (annualRoe >= roeReturnAbove) ? colorIndAbove : (annualRoe <= roeReturnBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = annualRoeText, indColor = annualRoeColor, indTooltip = "The amount of net income returned as a percentage of shareholders equity. Return on equity measures a corporation's profitability by revealing how much profit a company generates with the money shareholders have invested.")
 
 // Market Capitalization
+var bool showMarketCapitalization = input.bool(defval = true, title = "CAP", group = "Fundamental")
 getMarketCapitalization() =>
     float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ", ignore_invalid_symbol = true)
     float mktCap = tso * close
     
     string mktCapValue = switch
-        mktCap > TRILLION => str.format("{0, number, $#.##}T", math.round((mktCap / TRILLION), 1))
-        mktCap > BILLION => str.format("{0, number, $#.##}B", math.round((mktCap / BILLION), 1))
-        mktCap > MILLION => str.format("{0, number, $#.##}M", math.round((mktCap / MILLION), 1))
+        mktCap > TRILLION => str.format("{0, number, $0.0}T", math.round((mktCap / TRILLION), 1))
+        mktCap > BILLION => str.format("{0, number, $0.0}B", math.round((mktCap / BILLION), 1))
+        mktCap > MILLION => str.format("{0, number, $0.0}M", math.round((mktCap / MILLION), 1))
         => " -"
     string mktCapText = "CAP " + mktCapValue
     color mktCapColor = colorIndNeutral
@@ -163,24 +172,27 @@ getMarketCapitalization() =>
     indicatorObject.new(indText = mktCapText, indColor = mktCapColor, indTooltip = "Total market value of company. Calculated by multiplying shares outstanding by the stock price.")
 
 // Technical Performance
+var bool showTechIndicators = input.bool(defval = true, title = "Show Technical Performance", group = "Technical")
 
 // Average Daily Range (ADR) %
+var bool showTechAdr = input.bool(defval = true, title = "ADR", tooltip = "ABOVE and BELOW expectations in %", inline = "Adr Strength", group = "Technical")
 getTechAdr() =>
-    var int periodRange = input.int(defval = 20, title = "ADR Period Range (Days)", minval = 0, step = 1, group = "Technical")
-    var float adrAbove = input.float(defval = 0.15, title = "ADR ▲ - ▼ (%)", minval = 0, step = 0.01, inline="Adr Strength", group = "Technical")
-    var float adrBelow = input.float(defval = 0.04, title = "-", minval = 0, step = 0.01, inline="Adr Strength", group = "Technical")
+    var int periodRange = input.int(defval = 20, title = "", minval = 0, step = 1, inline="Adr Strength", group = "Technical")
+    var float adrAbove = input.float(defval = 0.15, title = "Days", minval = 0, step = 0.01, inline="Adr Strength", group = "Technical")
+    var float adrBelow = input.float(defval = 0.04, title = "▲ - ▼", minval = 0, step = 0.01, inline="Adr Strength", group = "Technical")
 
     float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma((high / low), periodRange), ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
     float adrRounded = math.round(adrTicker - 1, 4)
     
-    string adrText = "ADR " + str.tostring(na(adrRounded) ? " -" : str.format("{0, number, #.##%}", adrRounded))
+    string adrText = "ADR " + str.tostring(na(adrRounded) ? " -" : str.format("{0, number, 0.00%}", adrRounded))
     color adrColor = (adrRounded >= adrAbove) ? colorIndAbove : (adrRounded <= adrBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = adrText, indColor = adrColor, indTooltip = "Average Daily Range (ADR) is a technical indicator used to measure volatility in an asset. It calculates the average difference between the highest and lowest price over a time interval.")
 
 // Average True Range (ATR) $
+var bool showTechAtr = input.bool(defval = true, title = "ATR", tooltip = "ATR range in DAYS", inline = "Atr Range", group = "Technical")
 getTechAtr() =>
-    var int periodRange = input.int(defval = 20, title = "ATR Period Range (Days)", minval = 0, step = 1, group = "Technical")
+    var int periodRange = input.int(defval = 20, title = "", minval = 0, step = 1, inline = "Atr Range", group = "Technical")
     
     float atrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.atr(periodRange), ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
     float atrRounded = math.round(atrTicker, 2)
@@ -191,50 +203,68 @@ getTechAtr() =>
     indicatorObject.new(indText = atrText, indColor = atrColor, indTooltip = "Average True Range (ATR) is the average of true ranges over the specified period. ATR measures volatility, taking into account any gaps in the price movement.")
 
 // % Off 52-Week High
+var bool showTechHigh52Weeks = input.bool(defval = true, title = "H52", tooltip = "ABOVE and BELOW expectations in %", inline = "% Off 52-Week High", group = "Technical")
 getTechHigh52Weeks() =>
-    var float high52WeeksAbove = input.float(defval = 0.1, title = "H52 ▲ - ▼ (%)", minval = 0, step = 0.1, inline="% Off 52-Week High", group = "Technical")
-    var float high52WeeksBelow = input.float(defval = -0.1, title = "-", minval = -10, step = 0.1, inline="% Off 52-Week High", group = "Technical")
+    var float high52WeeksAbove = input.float(defval = 0.1, title = "", minval = 0, step = 0.1, inline="% Off 52-Week High", group = "Technical")
+    var float high52WeeksBelow = input.float(defval = -0.1, title = "▲ - ▼", minval = -10, step = 0.1, inline="% Off 52-Week High", group = "Technical")
 
     float high52Weeks = request.security(symbol = syminfo.tickerid, timeframe = "W", expression = ta.highest(high, 52), ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
     float pctOffHigh = (close - high52Weeks) / high52Weeks
 
-    string pctOffHighText = "H52 " + str.tostring(na(pctOffHigh) ? " -" : str.format("{0, number, #.##%}", pctOffHigh))
+    string pctOffHighText = "H52 " + str.tostring(na(pctOffHigh) ? " -" : str.format("{0, number, 0.00%}", pctOffHigh))
     color pctOffHighColor = (pctOffHigh >= high52WeeksBelow and pctOffHigh <= high52WeeksAbove) ? colorIndAbove : colorIndNeutral
 
     indicatorObject.new(indText = pctOffHighText, indColor = pctOffHighColor, indTooltip = "% Off 52-Week High - Expressed as a percentage, it tells you how far a stock is from its 52-week price high.")
 
 // Relative Price Strength (RPS)
+var bool showTechRps = input.bool(defval = true, title = "RPS", tooltip = "ABOVE and BELOW expectations in %", inline="Relative Price Strength", group = "Technical")
 getTechRps() =>
-    var int periodRange = input.int(defval = 20, title = "RPS Period Range (Days)", minval = 0, step = 1, group = "Technical")
-    var string benchmarkIndex = input.symbol(defval = "SPY", title = "RPS Base Index", group = "Technical")
-
-    var float volumeAvgAbove = input.float(defval = 1.2, title = "RPS ▲ - ▼", minval = 0, step = 0.1, inline="Relative Price Strength", group = "Technical")
-    var float volumeAvgBelow = input.float(defval = 0.8, title = "-", minval = 0, step = 1000, inline="Relative Price Strength", group = "Technical")
+    var float volumeAvgAbove = input.float(defval = 1.2, title = "", minval = 0, step = 0.1, inline="Relative Price Strength", group = "Technical")
+    var float volumeAvgBelow = input.float(defval = 0.8, title = "▲ - ▼", minval = 0, step = 1000, inline="Relative Price Strength", group = "Technical")
+    
+    var int periodRange = input.int(defval = 20, title = "________", minval = 0, step = 1, inline="Relative Price Strength 2", group = "Technical")
+    var string benchmarkIndex = input.symbol(defval = "SPY", title = "Days", tooltip = "RPS Base Index", inline="Relative Price Strength 2", group = "Technical")
 
     float rsiTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.rsi(close, periodRange), ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
     float rsiIndex = request.security(symbol = benchmarkIndex, timeframe = "D", expression = ta.rsi(close, periodRange), ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
     float rpsRounded = math.round(rsiTicker / rsiIndex, 4)
 
-    string rpsText = "RPS " + str.tostring(na(rpsRounded) ? " -" : str.format("{0, number, #.##}", rpsRounded))
+    string rpsText = "RPS " + str.tostring(na(rpsRounded) ? " -" : str.format("{0, number, 0.00}", rpsRounded))
     color rpsColor = (rpsRounded >= volumeAvgAbove) ? colorIndAbove : (rpsRounded <= volumeAvgBelow) ? colorIndBelow : colorIndNeutral
 
     indicatorObject.new(indText = rpsText, indColor = rpsColor, indTooltip = "Relative price strength (RPS), also known as relative strength, is the ratio between the price trend of a stock price compared to the price trend of the market.")
 
-// Only show indicator at daily, weekly or monthly timeframe
-if (timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly)
-    indicatorObject[] fundIndicatorsArray = array.from(getEpsYrQtGrowth(), getEpsQtrGrowth(), getReturnOnEquity(), getSalesYrQtGrowth(), getSalesQtrGrowth(), getMarketCapitalization())
-    indicatorObject[] techIndicatorsArray = array.from(getTechAdr(), getTechAtr(), getTechHigh52Weeks(), getTechRps())
+indicatorObject[] fundIndArray = (showFundIndicators) ? array.from(getEpsYrQtGrowth(), getEpsQtrGrowth(), getReturnOnEquity(), getSalesYrQtGrowth(), getSalesQtrGrowth(), getMarketCapitalization()) : array.new<indicatorObject>()
+indicatorObject[] techIndArray = (showTechIndicators) ? array.from(getTechAdr(), getTechAtr(), getTechHigh52Weeks(), getTechRps()) : array.new<indicatorObject>()
 
-    // Indicators Table
-    if (barstate.islast)
-        var perfTable = table.new(position = tablePosition, columns = TABLE_COLUMNS + 1, rows = TABLE_ROWS + 1, border_width = 2, border_color = colorBorder, frame_width = 2, frame_color = colorFrame)
+int fundIndArrayLength = array.size(fundIndArray)
+int techIndArrayLength = array.size(techIndArray)
 
-        // Fundamental Performance
-        table.cell(table_id = perfTable, column = 0, row = 0, bgcolor = colorBackground, text = str.upper("Fundamental Performance"), text_color = colorText, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(table_id = perfTable, start_column = 0, start_row = 0, end_column = array.get(FUND_TABLE_COLUMNS, 1), end_row = 0)
-        createTableCells(tableId = perfTable, numRows = TABLE_ROWS, startCol = array.get(FUND_TABLE_COLUMNS, 0), endCol = array.get(FUND_TABLE_COLUMNS, 1), indArray = fundIndicatorsArray)
+int tableRows = (showFundIndicators and showTechIndicators) ? 2 : 1
+int tableColumns = (fundIndArrayLength + techIndArrayLength) / tableRows
 
-        // Technical Performance
-        table.cell(table_id = perfTable, column = 3, row = 0, bgcolor = colorBackground, text = str.upper("Technical Performance"), text_color = colorText, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(table_id = perfTable, start_column = 3, start_row = 0, end_column = array.get(TECH_TABLE_COLUMNS, 1), end_row = 0)
-        createTableCells(tableId = perfTable, numRows = TABLE_ROWS, startCol = array.get(TECH_TABLE_COLUMNS, 0), endCol = array.get(TECH_TABLE_COLUMNS, 1), indArray = techIndicatorsArray)
+int fundTableColStart = 0
+int fundTableColEnd = (fundIndArrayLength / tableRows) - 1
+
+int techTableColStart = (showFundIndicators and showTechIndicators) ? fundTableColEnd + 1 : 0
+int techTableColEnd = tableColumns - 1
+
+// Indicators Table
+if (barstate.islast)
+    var perfTable = table.new(position = tablePosition, columns = tableColumns + 1, rows = tableRows + 1, border_width = 2, border_color = colorBorder, frame_width = 2, frame_color = colorFrame)
+
+    // Fundamental Performance
+    if (showFundIndicators)
+        // Title
+        if (showTableTitles)
+            table.cell(table_id = perfTable, column = 0, row = 0, bgcolor = colorBackground, text = str.upper("Fundamental Performance"), text_color = colorText, text_halign = text.align_center, text_size = size.small)
+            table.merge_cells(table_id = perfTable, start_column = fundTableColStart, start_row = 0, end_column = fundTableColEnd, end_row = 0)
+        createTableCells(tableId = perfTable, numRows = tableRows, startCol = fundTableColStart, endCol = fundTableColEnd, indArray = fundIndArray)
+
+    // Technical Performance
+    if (showTechIndicators)
+        // Title
+        if (showTableTitles)
+            table.cell(table_id = perfTable, column = techTableColStart, row = 0, bgcolor = colorBackground, text = str.upper("Technical Performance"), text_color = colorText, text_halign = text.align_center, text_size = size.small)
+            table.merge_cells(table_id = perfTable, start_column = techTableColStart, start_row = 0, end_column = techTableColEnd, end_row = 0)
+        createTableCells(tableId = perfTable, numRows = tableRows, startCol = techTableColStart, endCol = techTableColEnd, indArray = techIndArray)
