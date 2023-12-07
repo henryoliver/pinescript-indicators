@@ -8,7 +8,7 @@
 // © henry_oliver
 
 //@version=5
-indicator(title = "Fundamental & Technical Performance Indicators", shorttitle = "Fundamental & Technical", overlay = true)
+indicator(title = "Performance Indicator", shorttitle = "Perf Ind", overlay = true)
 
 // DEBUGGER -----
 debug(label, value) =>
@@ -23,6 +23,10 @@ type indicatorObject
     string indText
     color indColor
     string indTooltip
+
+type indicatorVisibilityObject
+    bool isVisible
+    indicatorObject indicator 
 
 // General Style
 var bool showTableTitles = input.bool(defval = true, title = "Show Table Titles", group = "Table")
@@ -234,13 +238,26 @@ getTechRps() =>
 
     indicatorObject.new(indText = rpsText, indColor = rpsColor, indTooltip = "Relative price strength (RPS), also known as relative strength, is the ratio between the price trend of a stock price compared to the price trend of the market.")
 
-indicatorObject[] fundIndArray = (showFundIndicators) ? array.from(getEpsYrQtGrowth(), getEpsQtrGrowth(), getReturnOnEquity(), getSalesYrQtGrowth(), getSalesQtrGrowth(), getMarketCapitalization()) : array.new<indicatorObject>()
-indicatorObject[] techIndArray = (showTechIndicators) ? array.from(getTechAdr(), getTechAtr(), getTechHigh52Weeks(), getTechRps()) : array.new<indicatorObject>()
+indicatorVisibilityObject[] fundIndVisibilityArray = (showFundIndicators) ? array.from(indicatorVisibilityObject.new(isVisible = showEpsYrQtGrowth, indicator = getEpsYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showEpsQtrGrowth, indicator = getEpsQtrGrowth()), indicatorVisibilityObject.new(isVisible = showSalesYrQtGrowth, indicator = getSalesYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showSalesQtrGrowth, indicator = getSalesQtrGrowth()), indicatorVisibilityObject.new(isVisible = showReturnOnEquity, indicator = getReturnOnEquity()), indicatorVisibilityObject.new(isVisible = showMarketCapitalization, indicator = getMarketCapitalization())) : array.new<indicatorVisibilityObject>(0)
+indicatorObject[] fundIndArray = array.new<indicatorObject>(0)
+for fundIndObject in fundIndVisibilityArray
+    if (fundIndObject.isVisible)
+        array.push(fundIndArray, fundIndObject.indicator)
+if (array.size(fundIndArray) == 0)
+    showFundIndicators := false
+
+indicatorVisibilityObject[] techIndVisibilityArray = (showTechIndicators) ? array.from(indicatorVisibilityObject.new(isVisible = showTechAdr, indicator = getTechAdr()), indicatorVisibilityObject.new(isVisible = showTechAtr, indicator = getTechAtr()), indicatorVisibilityObject.new(isVisible = showTechHigh52Weeks, indicator = getTechHigh52Weeks()), indicatorVisibilityObject.new(isVisible = showTechRps, indicator = getTechRps())) : array.new<indicatorVisibilityObject>(0)
+indicatorObject[] techIndArray = array.new<indicatorObject>(0)
+for techIndObject in techIndVisibilityArray
+    if (techIndObject.isVisible)
+        array.push(techIndArray, techIndObject.indicator)
+if (array.size(techIndArray) == 0)
+    showTechIndicators := false
 
 int fundIndArrayLength = array.size(fundIndArray)
 int techIndArrayLength = array.size(techIndArray)
 
-int tableRows = (showFundIndicators and showTechIndicators) ? 2 : 1
+int tableRows = 1
 int tableColumns = (fundIndArrayLength + techIndArrayLength) / tableRows
 
 int fundTableColStart = 0
