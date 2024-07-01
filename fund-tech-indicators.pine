@@ -1,22 +1,10 @@
-//       __  _________   ________  __
-//      / / / / ____/ | / / __ \ \/ /   Henry Oliver
-//     / /_/ / __/ /  |/ / /_/ /\  /    https://github.com/henryoliver
-//    / __  / /___/ /|  / _, _/ / /     https://twitter.com/henry_s_oliver
-//   /_/ /_/_____/_/ |_/_/ |_| /_/
-//
-// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © henry_oliver
-
 //@version=5
-indicator(title = "Performance Indicator", shorttitle = "Perf Ind", overlay = true)
+indicator(title = "Performance Indicators", shorttitle = "Performance Indicators", overlay = true)
 
-// DEBUGGER -----
-debug(label, value) =>
-    var debugTable = table.new(position = position.bottom_center, columns = 100, rows = 1, frame_width = 20, frame_color = color.gray, border_width = 0, bgcolor = color.white)
-
-    table.cell(table_id = debugTable, column = 0, row = 0, width = 20, height = 10, text = str.tostring(label), text_color = color.black, text_size = size.huge)
-    table.cell(table_id = debugTable, column = 1, row = 0, width = 70, height = 10, text = str.tostring(value), text_color = color.black, text_size = size.normal)
-// DEBUGGER -----/
+// Constants
+const float MILLION = math.pow(10, 6)
+const float BILLION = math.pow(10, 9)
+const float TRILLION = math.pow(10, 12)
 
 // Types
 type indicatorObject
@@ -29,9 +17,12 @@ type indicatorVisibilityObject
     indicatorObject indicator 
 
 // General Style
-var bool showTableTitles = input.bool(defval = true, title = "Show Table Titles", group = "Table")
-var string tablePosition = input.string(defval = position.top_right, title='Table Position', options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
-var string tableSize = input.string(defval = size.normal, title='Table Size', options=[size.tiny, size.small, size.normal, size.large], group="Table")
+var bool showTableTitles = input.bool(defval = true, title = "Show Titles", group = "Indicator Table")
+var bool showFundIndicators = input.bool(defval = true, title = "Show Fundamental", group = "Indicator Table")
+var bool showTechIndicators = input.bool(defval = true, title = "Show Technical", group = "Indicator Table")
+var int tableNumOfRows = input.int(defval = 1, title='Number of Rows', options=[1, 2, 3], group="Indicator Table")
+var string tablePosition = input.string(defval = position.top_right, title='Position', options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Indicator Table")
+var string tableSize = input.string(defval = size.normal, title='Size', options=[size.tiny, size.small, size.normal, size.large], group="Indicator Table")
 
 var color colorFrame = input.color(defval = color.new(#4C566A, 40), title = "Frame Color", group = "Colors")
 var color colorBackground = input.color(defval = color.new(#4C566A, 40), title = "Background Color", group = "Colors")
@@ -41,11 +32,6 @@ var color colorText = input.color(defval = color.new(#ECEFF4, 0), title = "Text 
 var color colorIndAbove = input.color(defval = color.new(#A3BE8C, 0), title = "Indicator Above Color", group = "Colors")
 var color colorIndBelow = input.color(defval = color.new(#BF616A, 0),title = "Indicator Below Color", group = "Colors")
 var color colorIndNeutral = input.color(defval = color.new(#ECEFF4, 0), title = "Indicator Neutral Color", group = "Colors")
-
-// Constants
-var float MILLION = math.pow(10, 6)
-var float BILLION = math.pow(10, 9)
-var float TRILLION = math.pow(10, 12)
 
 // Global Variables
 float currEpsActual = request.earnings(ticker = syminfo.tickerid, field = earnings.actual, ignore_invalid_symbol = true, lookahead = barmerge.lookahead_on)
@@ -68,7 +54,6 @@ createTableCells(tableId, numRows, startCol, endCol, indArray) =>
             currIndex += 1
 
 // Fundamental Performance
-var bool showFundIndicators = input.bool(defval = true, title = "Show Fundamental Performance", group = "Fundamental")
 
 // EPS Year Over Year % Growth
 var bool showEpsYrQtGrowth = input.bool(defval = true, title = "EPS(YY)", tooltip = "ABOVE and BELOW expectations in %", inline = "EPS Year Over Year % Growth", group = "Fundamental")
@@ -165,18 +150,32 @@ getMarketCapitalization() =>
     float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ", ignore_invalid_symbol = true)
     float mktCap = tso * close
     
-    string mktCapValue = switch
+    string mktCapFormated = switch
         mktCap > TRILLION => str.format("{0, number, $0.0}T", math.round((mktCap / TRILLION), 1))
         mktCap > BILLION => str.format("{0, number, $0.0}B", math.round((mktCap / BILLION), 1))
         mktCap > MILLION => str.format("{0, number, $0.0}M", math.round((mktCap / MILLION), 1))
         => " -"
-    string mktCapText = "CAP " + mktCapValue
+    string mktCapText = "CAP " + mktCapFormated
     color mktCapColor = colorIndNeutral
 
     indicatorObject.new(indText = mktCapText, indColor = mktCapColor, indTooltip = "Total market value of company. Calculated by multiplying shares outstanding by the stock price.")
 
+// Float Shares Outstanding
+var bool showFloatSharesOutstanding = input.bool(defval = true, title = "FSO", group = "Fundamental")
+getFloatSharesOutstanding() =>
+    float fsoValue = request.financial(symbol = syminfo.tickerid, financial_id = "FLOAT_SHARES_OUTSTANDING", period = "FY", ignore_invalid_symbol = true)
+
+    string fsoFormated = switch
+        fsoValue > TRILLION => str.format("{0, number, 0.00}T", math.round((fsoValue / TRILLION), 2))
+        fsoValue > BILLION => str.format("{0, number, 0.00}B", math.round((fsoValue / BILLION), 2))
+        fsoValue > MILLION => str.format("{0, number, 0.00}M", math.round((fsoValue / MILLION), 2))
+        => " -"
+    string fsoText = "FSO " + fsoFormated
+    color fsoColor = colorIndNeutral
+
+    indicatorObject.new(indText = fsoText, indColor = fsoColor, indTooltip = "Total number of shares that a company has available for the public to trade on the open market.")
+
 // Technical Performance
-var bool showTechIndicators = input.bool(defval = true, title = "Show Technical Performance", group = "Technical")
 
 // Average Daily Range (ADR) %
 var bool showTechAdr = input.bool(defval = true, title = "ADR", tooltip = "ABOVE and BELOW expectations in %", inline = "Adr Strength", group = "Technical")
@@ -238,7 +237,7 @@ getTechRps() =>
 
     indicatorObject.new(indText = rpsText, indColor = rpsColor, indTooltip = "Relative price strength (RPS), also known as relative strength, is the ratio between the price trend of a stock price compared to the price trend of the market.")
 
-indicatorVisibilityObject[] fundIndVisibilityArray = (showFundIndicators) ? array.from(indicatorVisibilityObject.new(isVisible = showEpsYrQtGrowth, indicator = getEpsYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showEpsQtrGrowth, indicator = getEpsQtrGrowth()), indicatorVisibilityObject.new(isVisible = showSalesYrQtGrowth, indicator = getSalesYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showSalesQtrGrowth, indicator = getSalesQtrGrowth()), indicatorVisibilityObject.new(isVisible = showReturnOnEquity, indicator = getReturnOnEquity()), indicatorVisibilityObject.new(isVisible = showMarketCapitalization, indicator = getMarketCapitalization())) : array.new<indicatorVisibilityObject>(0)
+indicatorVisibilityObject[] fundIndVisibilityArray = (showFundIndicators) ? array.from(indicatorVisibilityObject.new(isVisible = showEpsYrQtGrowth, indicator = getEpsYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showEpsQtrGrowth, indicator = getEpsQtrGrowth()), indicatorVisibilityObject.new(isVisible = showSalesYrQtGrowth, indicator = getSalesYrQtGrowth()), indicatorVisibilityObject.new(isVisible = showSalesQtrGrowth, indicator = getSalesQtrGrowth()), indicatorVisibilityObject.new(isVisible = showReturnOnEquity, indicator = getReturnOnEquity()), indicatorVisibilityObject.new(isVisible = showMarketCapitalization, indicator = getMarketCapitalization()), indicatorVisibilityObject.new(isVisible = showFloatSharesOutstanding, indicator = getFloatSharesOutstanding())) : array.new<indicatorVisibilityObject>(0)
 indicatorObject[] fundIndArray = array.new<indicatorObject>(0)
 for fundIndObject in fundIndVisibilityArray
     if (fundIndObject.isVisible)
@@ -257,7 +256,7 @@ if (array.size(techIndArray) == 0)
 int fundIndArrayLength = array.size(fundIndArray)
 int techIndArrayLength = array.size(techIndArray)
 
-int tableRows = 1
+int tableRows = tableNumOfRows
 int tableColumns = (fundIndArrayLength + techIndArrayLength) / tableRows
 
 int fundTableColStart = 0

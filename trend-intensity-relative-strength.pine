@@ -1,14 +1,5 @@
-//       __  _________   ________  __
-//      / / / / ____/ | / / __ \ \/ /   Henry Oliver
-//     / /_/ / __/ /  |/ / /_/ /\  /    https://github.com/henryoliver
-//    / __  / /___/ /|  / _, _/ / /     https://twitter.com/henry_s_oliver
-//   /_/ /_/_____/_/ |_/_/ |_| /_/
-//
-// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © henry_oliver
-
 //@version=5
-indicator(title = "Trend Intensity", shorttitle = "Trend Intensity", overlay = false)
+indicator(title = "Relative Strength + Trend Intensity 65 + Breakout/Breakdown + 52 Weeks High/Low Indicator", shorttitle = "Trend Intensity Indicator", overlay = false)
 
 // Constants
 const color COLOR_POLAR_NIGHT_NORD2 = color.new(#434C5E, 0)
