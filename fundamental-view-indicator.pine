@@ -1,0 +1,285 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true, dynamic_requests = false, behind_chart = false)
+
+// Constants
+const float MILLION = math.pow(10, 6)
+const float BILLION = math.pow(10, 9)
+const float TRILLION = math.pow(10, 12)
+
+// Nord Theme Color Constants
+// Polar Night
+const color NORD0 = #2E3440  // Dark background
+const color NORD1 = #3B4252  // Elevated UI elements
+const color NORD2 = #434C5E  // Selection/highlighting
+const color NORD3 = #4C566A  // Comments/subtle elements
+
+// Snow Storm  
+const color NORD4 = #D8DEE9  // Variables/constants
+const color NORD5 = #E5E9F0  // Subtle UI text
+const color NORD6 = #ECEFF4  // Plain text/brightest
+
+// Frost
+const color NORD7 = #8FBCBB  // Classes/types
+const color NORD8 = #88C0D0  // Primary accent/functions
+const color NORD9 = #81A1C1  // Keywords/operators
+const color NORD10 = #5E81AC // Pragmas/deep accent
+
+// Aurora
+const color NORD11 = #BF616A // Error states/red
+const color NORD12 = #D08770 // Advanced functionality/orange
+const color NORD13 = #EBCB8B // Warning states/yellow
+const color NORD14 = #A3BE8C // Success states/green
+const color NORD15 = #B48EAD // Uncommon functionality/purple
+
+// General Style
+// Table
+var string tablePosition = input.string(defval = position.bottom_left, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
+var color tableBackgroundColor = input.color(defval = color.new(NORD3, 10), title = "Background Color", group = "Table")
+
+var int tableFrameSize = input.int(defval = 8, title = "Frame Size", group="Table")
+var color tableFrameColor = input.color(defval = color.new(NORD3, 10), title = "Frame Color", group = "Table")
+
+var int tableBorderSize = input.int(defval = 2, title = "Border Size", group="Table")
+var color tableBorderColor = input.color(defval = color.new(NORD3, 20), title = "Border Color", group = "Table")
+
+// Label
+var color labelColor = input.color(defval = color.new(NORD4, 20), title = "Color", group = "Label")
+var int labelSize = input.int(defval = 12, title = "Label Size", group="Label")
+var string labelFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Label")
+var string labelHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Label")
+var string labelValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Label")
+
+// Value
+var color valueColor = input.color(defval = color.new(NORD4, 20), title = "Color", group = "Value")
+var int valueSize = input.int(defval = 12, title = "Value Size", group="Value")
+var string valueFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Value")
+var string valueHalign = input.string(defval = text.align_right, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Value")
+var string valueValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Value")
+
+// Strength
+var color aboveColor = input.color(defval = color.new(NORD8, 0), title = "Above Color", group = "Strength")
+var color belowColor = input.color(defval = color.new(NORD4, 40),title = "Below Color", group = "Strength")
+
+// Fundamental Indicators
+
+// Market Capitalization
+var bool mktCapVisible = input.bool(defval = true, title = "Visible", group = "Market Capitalization")
+
+float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
+float mktCap = na
+if not na(tso) and not na(close)
+    mktCap := tso * close
+
+string mktCapFormatted = switch
+    na(mktCap) => "-"
+    mktCap >= TRILLION => str.format("${0, number, 0.0}T", mktCap / TRILLION)
+    mktCap >= BILLION => str.format("${0, number, 0.0}B", mktCap / BILLION) 
+
+    mktCap >= MILLION => str.format("${0, number, 0.0}M", mktCap / MILLION)
+    => str.format("${0, number, 0}", mktCap)
+
+string mktCapLabel = "Market Cap"
+color mktCapLabelColor = labelColor
+string mktCapValueText = mktCapFormatted
+color mktCapValueTextColor = valueColor
+string mktCapTooltip = "Total dollar value of outstanding shares"
+
+// Annual Return On Equity
+var bool annualRoeVisible = input.bool(defval = true, title = "Visible", group = "Annual ROE")
+var float annualRoeAbove = input.float(defval = 0.17, title = "Strong", minval = 0.0, step = 0.01, inline = "AnnualRoe Strength", group = "Annual ROE")
+var float annualRoeBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥17%) and BELOW (weak <10%) thresholds per CANSLIM", inline = "AnnualRoe Strength", group = "Annual ROE")
+
+float annualRoe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY")
+float annualRoeDecimal = na
+if not na(annualRoe)
+    annualRoeDecimal := annualRoe / 100
+
+string annualRoeLabel = "Annual ROE"
+color annualRoeLabelColor = labelColor
+string annualRoeValueText = str.tostring(na(annualRoeDecimal) ? "-" : str.format("{0, number, 0.0%}", annualRoeDecimal))
+color annualRoeValueTextColor = na(annualRoeDecimal) ? valueColor : (annualRoeDecimal >= annualRoeAbove) ? aboveColor : (annualRoeDecimal <= annualRoeBelow) ? belowColor : valueColor
+string annualRoeTooltip = "How efficiently company uses equity to generate profits"
+
+// EPS % Change Last Quarter
+var bool epsLastQtrVisible = input.bool(defval = true, title = "Visible", group = "EPS % Chg Last Quarter")
+var float epsLastQtrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.01, step = 0.01, inline = "EpsLastQtr Strength", group = "EPS % Chg Last Quarter")
+var float epsLastQtrBelow = input.float(defval = 0.0, title = "▲ - ▼ Decline", minval = -1.0, step = 0.01, tooltip = "ABOVE (strong growth ≥25%) and BELOW (decline <0%) thresholds", inline = "EpsLastQtr Strength", group = "EPS % Chg Last Quarter")
+
+float epsQuarterlyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC_ONE_YEAR_GROWTH", period = "FQ")
+bool isEpsQuarterlyEvent = ta.change(epsQuarterlyGrowth) != 0 and not na(epsQuarterlyGrowth)
+float currentEpsQtrGrowth = ta.valuewhen(isEpsQuarterlyEvent, epsQuarterlyGrowth, 0)
+
+float epsLastQtrGrowth = na
+if not na(currentEpsQtrGrowth)
+    epsLastQtrGrowth := currentEpsQtrGrowth / 100
+
+
+string epsLastQtrLabel = "EPS % Chg (Last Qtr)"
+color epsLastQtrLabelColor = labelColor
+string epsLastQtrValueText = str.tostring(na(epsLastQtrGrowth) ? "-" : str.format("{0, number, 0.0%}", epsLastQtrGrowth))
+color epsLastQtrValueTextColor = na(epsLastQtrGrowth) ? valueColor : (epsLastQtrGrowth >= epsLastQtrAbove) ? aboveColor : (epsLastQtrGrowth < epsLastQtrBelow) ? belowColor : valueColor
+string epsLastQtrTooltip = "Year-over-year earnings growth for most recent quarter"
+
+// 3-Year EPS Growth Rate
+var bool eps3YrVisible = input.bool(defval = true, title = "Visible", group = "3-Year EPS Growth")
+var float eps3YrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "Eps3Yr Strength", group = "3-Year EPS Growth")
+var float eps3YrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "Eps3Yr Strength", group = "3-Year EPS Growth")
+
+// Use quarterly EPS data for more current 3-year calculation
+float epsQuarterly = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC", period = "FQ")
+bool isEpsQuarterlyBasicEvent = ta.change(epsQuarterly) != 0 and not na(epsQuarterly)
+
+// Get current quarter EPS and EPS from 12 quarters ago (3 years)
+float currentQuarterEps = ta.valuewhen(isEpsQuarterlyBasicEvent, epsQuarterly, 0)
+float twelveQuartersAgoEps = ta.valuewhen(isEpsQuarterlyBasicEvent, epsQuarterly, 12)
+
+float eps3YrGrowth = na
+if not na(currentQuarterEps) and not na(twelveQuartersAgoEps) and twelveQuartersAgoEps > 0 and currentQuarterEps > 0
+    eps3YrGrowth := math.pow(currentQuarterEps / twelveQuartersAgoEps, 1.0/3.0) - 1.0
+
+string eps3YrLabel = "3-Yr EPS Growth"
+color eps3YrLabelColor = labelColor
+string eps3YrValueText = str.tostring(na(eps3YrGrowth) ? "-" : str.format("{0, number, 0.0%}", eps3YrGrowth))
+color eps3YrValueTextColor = na(eps3YrGrowth) ? valueColor : (eps3YrGrowth >= eps3YrAbove) ? aboveColor : (eps3YrGrowth <= eps3YrBelow) ? belowColor : valueColor
+string eps3YrTooltip = "Average annual EPS growth over past 3 years"
+
+// Sales % Chg Last Quarter
+var bool salesLastQtrVisible = input.bool(defval = true, title = "Visible", group = "Sales % Chg Last Quarter")
+var float salesLastQtrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "SalesLastQtr Strength", group = "Sales % Chg Last Quarter")
+var float salesLastQtrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "SalesLastQtr Strength", group = "Sales % Chg Last Quarter")
+
+float salesQuarterlyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "REVENUE_ONE_YEAR_GROWTH", period = "FQ")
+bool isSalesQuarterlyEvent = ta.change(salesQuarterlyGrowth) != 0 and not na(salesQuarterlyGrowth)
+float currentSalesQtrGrowth = ta.valuewhen(isSalesQuarterlyEvent, salesQuarterlyGrowth, 0)
+
+float salesLastQtrGrowth = na
+if not na(currentSalesQtrGrowth)
+    salesLastQtrGrowth := currentSalesQtrGrowth / 100
+
+string salesLastQtrLabel = "Sales % Chg (Last Qtr)"
+color salesLastQtrLabelColor = labelColor
+string salesLastQtrValueText = str.tostring(na(salesLastQtrGrowth) ? "-" : str.format("{0, number, 0.0%}", salesLastQtrGrowth))
+color salesLastQtrValueTextColor = na(salesLastQtrGrowth) ? valueColor : (salesLastQtrGrowth >= salesLastQtrAbove) ? aboveColor : (salesLastQtrGrowth <= salesLastQtrBelow) ? belowColor : valueColor
+string salesLastQtrTooltip = "Year-over-year revenue growth for most recent quarter"
+
+// 3-Year Sales Growth Rate
+var bool sales3YrVisible = input.bool(defval = true, title = "Visible", group = "3-Year Sales Growth")
+var float sales3YrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "Sales3Yr Strength", group = "3-Year Sales Growth")
+var float sales3YrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "Sales3Yr Strength", group = "3-Year Sales Growth")
+
+// Use quarterly sales data for more current 3-year calculation
+float salesQuarterly = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_REVENUE", period = "FQ")
+bool isSalesQuarterlyBasicEvent = ta.change(salesQuarterly) != 0 and not na(salesQuarterly)
+
+// Get current quarter sales and sales from 12 quarters ago (3 years)
+float currentQuarterSales = ta.valuewhen(isSalesQuarterlyBasicEvent, salesQuarterly, 0)
+float twelveQuartersAgoSales = ta.valuewhen(isSalesQuarterlyBasicEvent, salesQuarterly, 12)
+
+float sales3YrGrowth = na
+if not na(currentQuarterSales) and not na(twelveQuartersAgoSales) and twelveQuartersAgoSales > 0 and currentQuarterSales > 0
+    sales3YrGrowth := math.pow(currentQuarterSales / twelveQuartersAgoSales, 1.0/3.0) - 1.0
+
+string sales3YrLabel = "3-Yr Sales Growth"
+color sales3YrLabelColor = labelColor
+string sales3YrValueText = str.tostring(na(sales3YrGrowth) ? "-" : str.format("{0, number, 0.0%}", sales3YrGrowth))
+color sales3YrValueTextColor = na(sales3YrGrowth) ? valueColor : (sales3YrGrowth >= sales3YrAbove) ? aboveColor : (sales3YrGrowth <= sales3YrBelow) ? belowColor : valueColor
+string sales3YrTooltip = "Average annual sales growth over past 3 years"
+
+// IPO
+var bool ipoVisible = input.bool(defval = true, title = "Visible", group = "IPO Date")
+var int ipoAbove = input.int(defval = 10, title = "Strength (Years)", minval = 1, maxval = 50, step = 1, tooltip = "IPO age below this threshold shows in strength color", group = "IPO Date")
+
+var string ipoDate = ""
+var int ipoYear = na
+var int ipoMonth = na
+var int ipoAgeYears = na
+
+if barstate.isfirst
+    ipoYear := year
+    ipoMonth := month
+    monthName = switch ipoMonth
+        1 => "Jan"
+        2 => "Feb" 
+        3 => "Mar"
+        4 => "Apr"
+        5 => "May"
+        6 => "Jun"
+        7 => "Jul"
+        8 => "Aug"
+        9 => "Sep"
+        10 => "Oct"
+        11 => "Nov"
+        12 => "Dec"
+        => "N/A"
+    ipoDate := str.format("{0} {1, number, 0}", monthName, ipoYear)
+
+if not na(ipoYear)
+    ipoAgeYears := year(timenow) - ipoYear
+
+string ipoLabel = "IPO"
+color ipoLabelColor = labelColor
+string ipoValueText = ipoDate
+color ipoValueTextColor = (not na(ipoAgeYears) and ipoAgeYears < ipoAbove) ? aboveColor : valueColor
+string ipoTooltip = "When company went public and current age"
+
+// Sector
+var bool sectorVisible = input.bool(defval = true, title = "Visible", group = "Sector")
+
+string sectorLabel = "Sector"
+color sectorLabelColor = labelColor
+string sectorValueText = na(syminfo.sector) ? "N/A" : syminfo.sector
+color sectorValueTextColor = valueColor
+string sectorTooltip = "Business sector classification"
+
+// Industry  
+var bool industryVisible = input.bool(defval = true, title = "Visible", group = "Industry")
+
+string industryLabel = "Industry"
+color industryLabelColor = labelColor
+string industryValueText = na(syminfo.industry) ? "N/A" : syminfo.industry
+color industryValueTextColor = valueColor
+string industryTooltip = "Specific industry classification"
+
+// Indicators Table
+if (barstate.islast)
+    var fundTable = table.new(position = tablePosition, columns = 2, rows = 9, border_width = tableBorderSize, border_color = tableBorderColor, frame_width = tableFrameSize, frame_color = tableFrameColor, force_overlay = true)
+
+    if (mktCapVisible)
+        table.cell(table_id = fundTable, column = 0, row = 0, text = mktCapLabel, text_color = mktCapLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = mktCapTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 0, text = mktCapValueText, text_color = mktCapValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (annualRoeVisible)
+        table.cell(table_id = fundTable, column = 0, row = 1, text = annualRoeLabel, text_color = annualRoeLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = annualRoeTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 1, text = annualRoeValueText, text_color = annualRoeValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (epsLastQtrVisible)
+        table.cell(table_id = fundTable, column = 0, row = 2, text = epsLastQtrLabel, text_color = epsLastQtrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = epsLastQtrTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 2, text = epsLastQtrValueText, text_color = epsLastQtrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (eps3YrVisible)
+        table.cell(table_id = fundTable, column = 0, row = 3, text = eps3YrLabel, text_color = eps3YrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = eps3YrTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 3, text = eps3YrValueText, text_color = eps3YrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (salesLastQtrVisible)
+        table.cell(table_id = fundTable, column = 0, row = 4, text = salesLastQtrLabel, text_color = salesLastQtrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = salesLastQtrTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 4, text = salesLastQtrValueText, text_color = salesLastQtrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (sales3YrVisible)
+        table.cell(table_id = fundTable, column = 0, row = 5, text = sales3YrLabel, text_color = sales3YrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = sales3YrTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 5, text = sales3YrValueText, text_color = sales3YrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (ipoVisible)
+        table.cell(table_id = fundTable, column = 0, row = 6, text = ipoLabel, text_color = ipoLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = ipoTooltip, text_font_family = labelFontFamily)
+
+        table.cell(table_id = fundTable, column = 1, row = 6, text = ipoValueText, text_color = ipoValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (sectorVisible)
+        table.cell(table_id = fundTable, column = 0, row = 7, text = sectorLabel, text_color = sectorLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = sectorTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 7, text = sectorValueText, text_color = sectorValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+
+    if (industryVisible)
+        table.cell(table_id = fundTable, column = 0, row = 8, text = industryLabel, text_color = industryLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = industryTooltip, text_font_family = labelFontFamily)
+        table.cell(table_id = fundTable, column = 1, row = 8, text = industryValueText, text_color = industryValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
