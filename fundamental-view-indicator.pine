@@ -2,207 +2,83 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true, dynamic_requests = false, behind_chart = false)
+indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true)
 
-// Constants
-const float MILLION = math.pow(10, 6)
-const float BILLION = math.pow(10, 9)
-const float TRILLION = math.pow(10, 12)
-
-// Nord Theme Color Constants
-// Polar Night
-const color NORD0 = #2E3440  // Dark background
-const color NORD1 = #3B4252  // Elevated UI elements
-const color NORD2 = #434C5E  // Selection/highlighting
-const color NORD3 = #4C566A  // Comments/subtle elements
-
-// Snow Storm  
-const color NORD4 = #D8DEE9  // Variables/constants
-const color NORD5 = #E5E9F0  // Subtle UI text
-const color NORD6 = #ECEFF4  // Plain text/brightest
-
-// Frost
-const color NORD7 = #8FBCBB  // Classes/types
-const color NORD8 = #88C0D0  // Primary accent/functions
-const color NORD9 = #81A1C1  // Keywords/operators
-const color NORD10 = #5E81AC // Pragmas/deep accent
-
-// Aurora
-const color NORD11 = #BF616A // Error states/red
-const color NORD12 = #D08770 // Advanced functionality/orange
-const color NORD13 = #EBCB8B // Warning states/yellow
-const color NORD14 = #A3BE8C // Success states/green
-const color NORD15 = #B48EAD // Uncommon functionality/purple
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
 
 // General Style
 // Table
-var string tablePosition = input.string(defval = position.bottom_left, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
-var color tableBackgroundColor = input.color(defval = color.new(NORD3, 10), title = "Background Color", group = "Table")
+var string tablePosition = input.string(defval = position.bottom_right, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
+var color tableBackgroundColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Background Color", group = "Table")
 
-var int tableFrameSize = input.int(defval = 8, title = "Frame Size", group="Table")
-var color tableFrameColor = input.color(defval = color.new(NORD3, 10), title = "Frame Color", group = "Table")
+var int tableFrameSize = input.int(defval = 6, title = "Frame Size", group="Table")
+var color tableFrameColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Frame Color", group = "Table")
 
 var int tableBorderSize = input.int(defval = 2, title = "Border Size", group="Table")
-var color tableBorderColor = input.color(defval = color.new(NORD3, 20), title = "Border Color", group = "Table")
+var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Border Color", group = "Table")
 
 // Label
-var color labelColor = input.color(defval = color.new(NORD4, 20), title = "Color", group = "Label")
-var int labelSize = input.int(defval = 12, title = "Label Size", group="Label")
+var color labelColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Label")
+var int labelSize = input.int(defval = 14, title = "Label Size", minval = 8, maxval = 32, group = "Label")
 var string labelFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Label")
 var string labelHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Label")
 var string labelValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Label")
 
 // Value
-var color valueColor = input.color(defval = color.new(NORD4, 20), title = "Color", group = "Value")
-var int valueSize = input.int(defval = 12, title = "Value Size", group="Value")
+var color valueColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Value")
+var int valueSize = input.int(defval = 14, title = "Value Size", minval = 8, maxval = 32, group = "Value")
 var string valueFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Value")
 var string valueHalign = input.string(defval = text.align_right, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Value")
 var string valueValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Value")
 
 // Strength
-var color aboveColor = input.color(defval = color.new(NORD8, 0), title = "Above Color", group = "Strength")
-var color belowColor = input.color(defval = color.new(NORD4, 40),title = "Below Color", group = "Strength")
+var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = "Strength")
+var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = "Strength")
 
-// Fundamental Indicators
+// Constants
+const float MILLION = 1000000.0
+const float BILLION = 1000000000.0
 
-// Market Capitalization
-var bool mktCapVisible = input.bool(defval = true, title = "Visible", group = "Market Capitalization")
+// Fetch company data
+string ticker = syminfo.ticker
+string description = syminfo.description
+string sector = syminfo.sector
+string industry = syminfo.industry
 
-float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
-float mktCap = na
-if not na(tso) and not na(close)
-    mktCap := tso * close
+// Market data
+float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")[1]
+float mktCap = na(tso) or na(close[1]) ? na : tso * close[1]
+string mktCapStr = na(mktCap) ? "N/A" : mktCap >= BILLION ? str.format(format = "{0}B", arg0 = math.round(number = mktCap/BILLION, precision = 1)) : str.format(format = "{0}M", arg0 = math.round(number = mktCap/MILLION, precision = 1))
 
-string mktCapFormatted = switch
-    na(mktCap) => "-"
-    mktCap >= TRILLION => str.format("${0, number, 0.0}T", mktCap / TRILLION)
-    mktCap >= BILLION => str.format("${0, number, 0.0}B", mktCap / BILLION) 
+float roe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY")[1]
+string roeStr = na(roe) ? "N/A" : str.format(format = "{0}%", arg0 = math.round(number = roe, precision = 1))
 
-    mktCap >= MILLION => str.format("${0, number, 0.0}M", mktCap / MILLION)
-    => str.format("${0, number, 0}", mktCap)
+float floatShares = request.financial(symbol = syminfo.tickerid, financial_id = "FLOAT_SHARES_OUTSTANDING", period = "FY")[1]
+string floatStr = na(floatShares) ? "N/A" : floatShares >= BILLION ? str.format("{0}B", math.round(floatShares/BILLION, 1)) : str.format("{0}M", math.round(floatShares/MILLION, 1))
 
-string mktCapLabel = "Market Cap"
-color mktCapLabelColor = labelColor
-string mktCapValueText = mktCapFormatted
-color mktCapValueTextColor = valueColor
-string mktCapTooltip = "Total dollar value of outstanding shares"
-
-// Annual Return On Equity
-var bool annualRoeVisible = input.bool(defval = true, title = "Visible", group = "Annual ROE")
-var float annualRoeAbove = input.float(defval = 0.17, title = "Strong", minval = 0.0, step = 0.01, inline = "AnnualRoe Strength", group = "Annual ROE")
-var float annualRoeBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥17%) and BELOW (weak <10%) thresholds per CANSLIM", inline = "AnnualRoe Strength", group = "Annual ROE")
-
-float annualRoe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY")
-float annualRoeDecimal = na
-if not na(annualRoe)
-    annualRoeDecimal := annualRoe / 100
-
-string annualRoeLabel = "Annual ROE"
-color annualRoeLabelColor = labelColor
-string annualRoeValueText = str.tostring(na(annualRoeDecimal) ? "-" : str.format("{0, number, 0.0%}", annualRoeDecimal))
-color annualRoeValueTextColor = na(annualRoeDecimal) ? valueColor : (annualRoeDecimal >= annualRoeAbove) ? aboveColor : (annualRoeDecimal <= annualRoeBelow) ? belowColor : valueColor
-string annualRoeTooltip = "How efficiently company uses equity to generate profits"
-
-// EPS % Change Last Quarter
-var bool epsLastQtrVisible = input.bool(defval = true, title = "Visible", group = "EPS % Chg Last Quarter")
-var float epsLastQtrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.01, step = 0.01, inline = "EpsLastQtr Strength", group = "EPS % Chg Last Quarter")
-var float epsLastQtrBelow = input.float(defval = 0.0, title = "▲ - ▼ Decline", minval = -1.0, step = 0.01, tooltip = "ABOVE (strong growth ≥25%) and BELOW (decline <0%) thresholds", inline = "EpsLastQtr Strength", group = "EPS % Chg Last Quarter")
-
-float epsQuarterlyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC_ONE_YEAR_GROWTH", period = "FQ")
-bool isEpsQuarterlyEvent = ta.change(epsQuarterlyGrowth) != 0 and not na(epsQuarterlyGrowth)
-float currentEpsQtrGrowth = ta.valuewhen(isEpsQuarterlyEvent, epsQuarterlyGrowth, 0)
-
-float epsLastQtrGrowth = na
-if not na(currentEpsQtrGrowth)
-    epsLastQtrGrowth := currentEpsQtrGrowth / 100
-
-
-string epsLastQtrLabel = "EPS % Chg (Last Qtr)"
-color epsLastQtrLabelColor = labelColor
-string epsLastQtrValueText = str.tostring(na(epsLastQtrGrowth) ? "-" : str.format("{0, number, 0.0%}", epsLastQtrGrowth))
-color epsLastQtrValueTextColor = na(epsLastQtrGrowth) ? valueColor : (epsLastQtrGrowth >= epsLastQtrAbove) ? aboveColor : (epsLastQtrGrowth < epsLastQtrBelow) ? belowColor : valueColor
-string epsLastQtrTooltip = "Year-over-year earnings growth for most recent quarter"
-
-// 3-Year EPS Growth Rate
-var bool eps3YrVisible = input.bool(defval = true, title = "Visible", group = "3-Year EPS Growth")
-var float eps3YrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "Eps3Yr Strength", group = "3-Year EPS Growth")
-var float eps3YrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "Eps3Yr Strength", group = "3-Year EPS Growth")
-
-// Use quarterly EPS data for more current 3-year calculation
-float epsQuarterly = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC", period = "FQ")
-bool isEpsQuarterlyBasicEvent = ta.change(epsQuarterly) != 0 and not na(epsQuarterly)
-
-// Get current quarter EPS and EPS from 12 quarters ago (3 years)
-float currentQuarterEps = ta.valuewhen(isEpsQuarterlyBasicEvent, epsQuarterly, 0)
-float twelveQuartersAgoEps = ta.valuewhen(isEpsQuarterlyBasicEvent, epsQuarterly, 12)
-
-float eps3YrGrowth = na
-if not na(currentQuarterEps) and not na(twelveQuartersAgoEps) and twelveQuartersAgoEps > 0 and currentQuarterEps > 0
-    eps3YrGrowth := math.pow(currentQuarterEps / twelveQuartersAgoEps, 1.0/3.0) - 1.0
-
-string eps3YrLabel = "3-Yr EPS Growth"
-color eps3YrLabelColor = labelColor
-string eps3YrValueText = str.tostring(na(eps3YrGrowth) ? "-" : str.format("{0, number, 0.0%}", eps3YrGrowth))
-color eps3YrValueTextColor = na(eps3YrGrowth) ? valueColor : (eps3YrGrowth >= eps3YrAbove) ? aboveColor : (eps3YrGrowth <= eps3YrBelow) ? belowColor : valueColor
-string eps3YrTooltip = "Average annual EPS growth over past 3 years"
-
-// Sales % Chg Last Quarter
-var bool salesLastQtrVisible = input.bool(defval = true, title = "Visible", group = "Sales % Chg Last Quarter")
-var float salesLastQtrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "SalesLastQtr Strength", group = "Sales % Chg Last Quarter")
-var float salesLastQtrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "SalesLastQtr Strength", group = "Sales % Chg Last Quarter")
-
-float salesQuarterlyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "REVENUE_ONE_YEAR_GROWTH", period = "FQ")
-bool isSalesQuarterlyEvent = ta.change(salesQuarterlyGrowth) != 0 and not na(salesQuarterlyGrowth)
-float currentSalesQtrGrowth = ta.valuewhen(isSalesQuarterlyEvent, salesQuarterlyGrowth, 0)
-
-float salesLastQtrGrowth = na
-if not na(currentSalesQtrGrowth)
-    salesLastQtrGrowth := currentSalesQtrGrowth / 100
-
-string salesLastQtrLabel = "Sales % Chg (Last Qtr)"
-color salesLastQtrLabelColor = labelColor
-string salesLastQtrValueText = str.tostring(na(salesLastQtrGrowth) ? "-" : str.format("{0, number, 0.0%}", salesLastQtrGrowth))
-color salesLastQtrValueTextColor = na(salesLastQtrGrowth) ? valueColor : (salesLastQtrGrowth >= salesLastQtrAbove) ? aboveColor : (salesLastQtrGrowth <= salesLastQtrBelow) ? belowColor : valueColor
-string salesLastQtrTooltip = "Year-over-year revenue growth for most recent quarter"
-
-// 3-Year Sales Growth Rate
-var bool sales3YrVisible = input.bool(defval = true, title = "Visible", group = "3-Year Sales Growth")
-var float sales3YrAbove = input.float(defval = 0.25, title = "Strong Growth", minval = 0.0, step = 0.01, inline = "Sales3Yr Strength", group = "3-Year Sales Growth")
-var float sales3YrBelow = input.float(defval = 0.10, title = "▲ - ▼ Weak Growth", minval = 0, step = 0.01, tooltip = "ABOVE (strong ≥25% per CANSLIM) and BELOW (weak <10%) growth thresholds", inline = "Sales3Yr Strength", group = "3-Year Sales Growth")
-
-// Use quarterly sales data for more current 3-year calculation
-float salesQuarterly = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_REVENUE", period = "FQ")
-bool isSalesQuarterlyBasicEvent = ta.change(salesQuarterly) != 0 and not na(salesQuarterly)
-
-// Get current quarter sales and sales from 12 quarters ago (3 years)
-float currentQuarterSales = ta.valuewhen(isSalesQuarterlyBasicEvent, salesQuarterly, 0)
-float twelveQuartersAgoSales = ta.valuewhen(isSalesQuarterlyBasicEvent, salesQuarterly, 12)
-
-float sales3YrGrowth = na
-if not na(currentQuarterSales) and not na(twelveQuartersAgoSales) and twelveQuartersAgoSales > 0 and currentQuarterSales > 0
-    sales3YrGrowth := math.pow(currentQuarterSales / twelveQuartersAgoSales, 1.0/3.0) - 1.0
-
-string sales3YrLabel = "3-Yr Sales Growth"
-color sales3YrLabelColor = labelColor
-string sales3YrValueText = str.tostring(na(sales3YrGrowth) ? "-" : str.format("{0, number, 0.0%}", sales3YrGrowth))
-color sales3YrValueTextColor = na(sales3YrGrowth) ? valueColor : (sales3YrGrowth >= sales3YrAbove) ? aboveColor : (sales3YrGrowth <= sales3YrBelow) ? belowColor : valueColor
-string sales3YrTooltip = "Average annual sales growth over past 3 years"
-
-// IPO
-var bool ipoVisible = input.bool(defval = true, title = "Visible", group = "IPO Date")
-var int ipoAbove = input.int(defval = 10, title = "Strength (Years)", minval = 1, maxval = 50, step = 1, tooltip = "IPO age below this threshold shows in strength color", group = "IPO Date")
-
-var string ipoDate = ""
-var int ipoYear = na
-var int ipoMonth = na
-var int ipoAgeYears = na
-
-if barstate.isfirst
-    ipoYear := year
-    ipoMonth := month
-    monthName = switch ipoMonth
+// IPO Date
+var string ipoDate = "N/A"
+if barstate.isfirst and not na(year) and not na(month) and not na(dayofmonth)
+    string monthName = switch month
         1 => "Jan"
-        2 => "Feb" 
+        2 => "Feb"
         3 => "Mar"
         4 => "Apr"
         5 => "May"
@@ -214,72 +90,414 @@ if barstate.isfirst
         11 => "Nov"
         12 => "Dec"
         => "N/A"
-    ipoDate := str.format("{0} {1, number, 0}", monthName, ipoYear)
+    ipoDate := str.format("{0} {1}, {2}", monthName, dayofmonth, year)
 
-if not na(ipoYear)
-    ipoAgeYears := year(timenow) - ipoYear
+// Analyst Recommendations
+string lastRecommDate = na(syminfo.recommendations_date) ? "N/A" : str.format_time(syminfo.recommendations_date, "MM/dd/yyyy")
+string totalRecomm = na(syminfo.recommendations_total) ? "0" : str.tostring(syminfo.recommendations_total)
+string strongBuy = na(syminfo.recommendations_buy_strong) ? "0" : str.tostring(syminfo.recommendations_buy_strong)
+string buy = na(syminfo.recommendations_buy) ? "0" : str.tostring(syminfo.recommendations_buy)
+string hold = na(syminfo.recommendations_hold) ? "0" : str.tostring(syminfo.recommendations_hold)
+string sell = na(syminfo.recommendations_sell) ? "0" : str.tostring(syminfo.recommendations_sell)
+string strongSell = na(syminfo.recommendations_sell_strong) ? "0" : str.tostring(syminfo.recommendations_sell_strong)
 
-string ipoLabel = "IPO"
-color ipoLabelColor = labelColor
-string ipoValueText = ipoDate
-color ipoValueTextColor = (not na(ipoAgeYears) and ipoAgeYears < ipoAbove) ? aboveColor : valueColor
-string ipoTooltip = "When company went public and current age"
+// Price Targets
+string lastPriceTargetDate = na(syminfo.target_price_date) ? "N/A" : str.format_time(syminfo.target_price_date, "MM/dd/yyyy")
+string totalPriceTargets = na(syminfo.target_price_estimates) ? "0" : str.tostring(syminfo.target_price_estimates)
+string avgPrice = na(syminfo.target_price_average) ? "$0" : str.format("${0}", math.round(syminfo.target_price_average, 2))
+string highPrice = na(syminfo.target_price_high) ? "$0" : str.format("${0}", math.round(syminfo.target_price_high, 2))
+string medianPrice = na(syminfo.target_price_median) ? "$0" : str.format("${0}", math.round(syminfo.target_price_median, 2))
+string lowPrice = na(syminfo.target_price_low) ? "$0" : str.format("${0}", math.round(syminfo.target_price_low, 2))
 
-// Sector
-var bool sectorVisible = input.bool(defval = true, title = "Visible", group = "Sector")
+// Quarterly EPS Data using request.earnings - better method
+float currEpsActual = request.earnings(ticker = syminfo.tickerid, field = earnings.actual, ignore_invalid_symbol = true)
+float currEpsEstimate = request.earnings(ticker = syminfo.tickerid, field = earnings.estimate, ignore_invalid_symbol = true)
+int currEpsTime = request.earnings(ticker = syminfo.tickerid, field = earnings.time, ignore_invalid_symbol = true)
 
-string sectorLabel = "Sector"
-color sectorLabelColor = labelColor
-string sectorValueText = na(syminfo.sector) ? "N/A" : syminfo.sector
-color sectorValueTextColor = valueColor
-string sectorTooltip = "Business sector classification"
+bool isEpsEvent = ta.change(currEpsActual) != 0 and not na(currEpsActual)
 
-// Industry  
-var bool industryVisible = input.bool(defval = true, title = "Visible", group = "Industry")
+// Get historical EPS using ta.valuewhen based on earnings events
+float epsQ0 = ta.valuewhen(isEpsEvent, currEpsActual, 0)
+float epsQ1 = ta.valuewhen(isEpsEvent, currEpsActual, 1)
+float epsQ2 = ta.valuewhen(isEpsEvent, currEpsActual, 2)
+float epsQ3 = ta.valuewhen(isEpsEvent, currEpsActual, 3)
+float epsQ4 = ta.valuewhen(isEpsEvent, currEpsActual, 4)
+float epsQ5 = ta.valuewhen(isEpsEvent, currEpsActual, 5)
 
-string industryLabel = "Industry"
-color industryLabelColor = labelColor
-string industryValueText = na(syminfo.industry) ? "N/A" : syminfo.industry
-color industryValueTextColor = valueColor
-string industryTooltip = "Specific industry classification"
+// Get historical earnings dates
+int epsTime0 = ta.valuewhen(isEpsEvent, currEpsTime, 0)
+int epsTime1 = ta.valuewhen(isEpsEvent, currEpsTime, 1)
+int epsTime2 = ta.valuewhen(isEpsEvent, currEpsTime, 2)
+int epsTime3 = ta.valuewhen(isEpsEvent, currEpsTime, 3)
+int epsTime4 = ta.valuewhen(isEpsEvent, currEpsTime, 4)
+int epsTime5 = ta.valuewhen(isEpsEvent, currEpsTime, 5)
 
-// Indicators Table
-if (barstate.islast)
-    var fundTable = table.new(position = tablePosition, columns = 2, rows = 9, border_width = tableBorderSize, border_color = tableBorderColor, frame_width = tableFrameSize, frame_color = tableFrameColor, force_overlay = true)
+// Get historical EPS Estimates
+float epsEst0 = ta.valuewhen(isEpsEvent, currEpsEstimate, 0)
+float epsEst1 = ta.valuewhen(isEpsEvent, currEpsEstimate, 1)
+float epsEst2 = ta.valuewhen(isEpsEvent, currEpsEstimate, 2)
+float epsEst3 = ta.valuewhen(isEpsEvent, currEpsEstimate, 3)
+float epsEst4 = ta.valuewhen(isEpsEvent, currEpsEstimate, 4)
+float epsEst5 = ta.valuewhen(isEpsEvent, currEpsEstimate, 5)
+float epsEst6 = ta.valuewhen(isEpsEvent, currEpsEstimate, 6)
 
-    if (mktCapVisible)
-        table.cell(table_id = fundTable, column = 0, row = 0, text = mktCapLabel, text_color = mktCapLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = mktCapTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 0, text = mktCapValueText, text_color = mktCapValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+// Calculate EPS YoY Growth for each quarter
+float epsYoy0 = na
+if not na(epsQ0) and not na(epsQ4) and epsQ4 != 0
+    epsYoy0 := ((epsQ0 - epsQ4) / math.abs(epsQ4)) * 100
 
-    if (annualRoeVisible)
-        table.cell(table_id = fundTable, column = 0, row = 1, text = annualRoeLabel, text_color = annualRoeLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = annualRoeTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 1, text = annualRoeValueText, text_color = annualRoeValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+float epsYoy1 = na
+if not na(epsQ1) and not na(epsQ5) and epsQ5 != 0
+    epsYoy1 := ((epsQ1 - epsQ5) / math.abs(epsQ5)) * 100
 
-    if (epsLastQtrVisible)
-        table.cell(table_id = fundTable, column = 0, row = 2, text = epsLastQtrLabel, text_color = epsLastQtrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = epsLastQtrTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 2, text = epsLastQtrValueText, text_color = epsLastQtrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+float epsYoy2 = na
+if not na(epsQ2) and not na(epsQ6) and epsQ6 != 0
+    epsYoy2 := ((epsQ2 - epsQ6) / math.abs(epsQ6)) * 100
 
-    if (eps3YrVisible)
-        table.cell(table_id = fundTable, column = 0, row = 3, text = eps3YrLabel, text_color = eps3YrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = eps3YrTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 3, text = eps3YrValueText, text_color = eps3YrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+float epsYoy3 = na
+float epsQ7 = ta.valuewhen(isEpsEvent, currEpsActual, 7)
+if not na(epsQ3) and not na(epsQ7) and epsQ7 != 0
+    epsYoy3 := ((epsQ3 - epsQ7) / math.abs(epsQ7)) * 100
 
-    if (salesLastQtrVisible)
-        table.cell(table_id = fundTable, column = 0, row = 4, text = salesLastQtrLabel, text_color = salesLastQtrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = salesLastQtrTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 4, text = salesLastQtrValueText, text_color = salesLastQtrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+float epsYoy4 = na
+float epsQ8 = ta.valuewhen(isEpsEvent, currEpsActual, 8)
+if not na(epsQ4) and not na(epsQ8) and epsQ8 != 0
+    epsYoy4 := ((epsQ4 - epsQ8) / math.abs(epsQ8)) * 100
 
-    if (sales3YrVisible)
-        table.cell(table_id = fundTable, column = 0, row = 5, text = sales3YrLabel, text_color = sales3YrLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = sales3YrTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 5, text = sales3YrValueText, text_color = sales3YrValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+float epsYoy5 = na
+float epsQ9 = ta.valuewhen(isEpsEvent, currEpsActual, 9)
+if not na(epsQ5) and not na(epsQ9) and epsQ9 != 0
+    epsYoy5 := ((epsQ5 - epsQ9) / math.abs(epsQ9)) * 100
 
-    if (ipoVisible)
-        table.cell(table_id = fundTable, column = 0, row = 6, text = ipoLabel, text_color = ipoLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = ipoTooltip, text_font_family = labelFontFamily)
+float epsYoy6 = na
+float epsQ10 = ta.valuewhen(isEpsEvent, currEpsActual, 10)
+if not na(epsQ6) and not na(epsQ10) and epsQ10 != 0
+    epsYoy6 := ((epsQ6 - epsQ10) / math.abs(epsQ10)) * 100
 
-        table.cell(table_id = fundTable, column = 1, row = 6, text = ipoValueText, text_color = ipoValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+// Get next quarter estimate (for NEXT QTR row)
+float epsEstimate = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_ESTIMATE", period = "FQ")
+float epsYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC_ONE_YEAR_GROWTH", period = "FQ")
 
-    if (sectorVisible)
-        table.cell(table_id = fundTable, column = 0, row = 7, text = sectorLabel, text_color = sectorLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = sectorTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 7, text = sectorValueText, text_color = sectorValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+// Quarterly Revenue Data using request.financial synced with EPS events
+float currRevenueActual = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_REVENUE", period = "FQ", ignore_invalid_symbol = true)
+float currRevenueEstimate = request.financial(symbol = syminfo.tickerid, financial_id = "SALES_ESTIMATES", period = "FQ", ignore_invalid_symbol = true)
 
-    if (industryVisible)
-        table.cell(table_id = fundTable, column = 0, row = 8, text = industryLabel, text_color = industryLabelColor, text_halign = labelHalign, text_valign = labelValign, text_size = labelSize, bgcolor = tableBackgroundColor, tooltip = industryTooltip, text_font_family = labelFontFamily)
-        table.cell(table_id = fundTable, column = 1, row = 8, text = industryValueText, text_color = industryValueTextColor, text_halign = valueHalign, text_valign = valueValign, text_size = valueSize, bgcolor = tableBackgroundColor, text_font_family = valueFontFamily)
+// Get historical Revenue using ta.valuewhen based on EPS earnings events (they sync together)
+float revenueQ0 = ta.valuewhen(isEpsEvent, currRevenueActual, 0)
+float revenueQ1 = ta.valuewhen(isEpsEvent, currRevenueActual, 1)
+float revenueQ2 = ta.valuewhen(isEpsEvent, currRevenueActual, 2)
+float revenueQ3 = ta.valuewhen(isEpsEvent, currRevenueActual, 3)
+float revenueQ4 = ta.valuewhen(isEpsEvent, currRevenueActual, 4)
+float revenueQ5 = ta.valuewhen(isEpsEvent, currRevenueActual, 5)
+float revenueQ6 = ta.valuewhen(isEpsEvent, currRevenueActual, 6)
+
+// Get historical Revenue Estimates
+
+float revenueEst0 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 0)
+float revenueEst1 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 1)
+float revenueEst2 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 2)
+float revenueEst3 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 3)
+float revenueEst4 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 4)
+float revenueEst5 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 5)
+float revenueEst6 = ta.valuewhen(isEpsEvent, currRevenueEstimate, 6)
+
+// Calculate Revenue YoY Growth for each quarter
+float revenueYoy0 = na
+if not na(revenueQ0) and not na(revenueQ4) and revenueQ4 != 0
+    revenueYoy0 := ((revenueQ0 - revenueQ4) / math.abs(revenueQ4)) * 100
+
+float revenueYoy1 = na
+if not na(revenueQ1) and not na(revenueQ5) and revenueQ5 != 0
+    revenueYoy1 := ((revenueQ1 - revenueQ5) / math.abs(revenueQ5)) * 100
+
+float revenueYoy2 = na
+if not na(revenueQ2) and not na(revenueQ6) and revenueQ6 != 0
+    revenueYoy2 := ((revenueQ2 - revenueQ6) / math.abs(revenueQ6)) * 100
+
+float revenueYoy3 = na
+float revenueQ7 = ta.valuewhen(isEpsEvent, currRevenueActual, 7)
+if not na(revenueQ3) and not na(revenueQ7) and revenueQ7 != 0
+    revenueYoy3 := ((revenueQ3 - revenueQ7) / math.abs(revenueQ7)) * 100
+
+float revenueYoy4 = na
+float revenueQ8 = ta.valuewhen(isEpsEvent, currRevenueActual, 8)
+if not na(revenueQ4) and not na(revenueQ8) and revenueQ8 != 0
+    revenueYoy4 := ((revenueQ4 - revenueQ8) / math.abs(revenueQ8)) * 100
+
+float revenueYoy5 = na
+float revenueQ9 = ta.valuewhen(isEpsEvent, currRevenueActual, 9)
+if not na(revenueQ5) and not na(revenueQ9) and revenueQ9 != 0
+    revenueYoy5 := ((revenueQ5 - revenueQ9) / math.abs(revenueQ9)) * 100
+
+float revenueYoy6 = na
+float revenueQ10 = ta.valuewhen(isEpsEvent, currRevenueActual, 10)
+if not na(revenueQ6) and not na(revenueQ10) and revenueQ10 != 0
+    revenueYoy6 := ((revenueQ6 - revenueQ10) / math.abs(revenueQ10)) * 100
+
+// Get next quarter estimate (for NEXT QTR row)
+float revenueEstimate = currRevenueEstimate
+float revenueYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "REVENUE_ONE_YEAR_GROWTH", period = "FQ")
+
+// Helper function to get earnings date string
+f_getEarningsDateString(int timestamp) =>
+    if na(timestamp)
+        "N/A"
+    else
+        string monthName = switch month(timestamp)
+            1 => "Jan"
+            2 => "Feb"
+            3 => "Mar"
+            4 => "Apr"
+            5 => "May"
+            6 => "Jun"
+            7 => "Jul"
+            8 => "Aug"
+            9 => "Sep"
+            10 => "Oct"
+            11 => "Nov"
+            12 => "Dec"
+            => "N/A"
+        str.format("{0} {1}", monthName, year(timestamp))
+
+// Helper function to create label cell
+f_labelCell(table t, int col, int row, string txt) =>
+    table.cell(table_id = t, column = col, row = row, text = txt, text_color = labelColor, text_size = labelSize, text_halign = labelHalign, text_valign = labelValign, text_font_family = labelFontFamily, bgcolor = tableBackgroundColor)
+
+// Helper function to create value cell
+f_valueCell(table t, int col, int row, string txt) =>
+    table.cell(table_id = t, column = col, row = row, text = txt, text_color = valueColor, text_size = valueSize, text_halign = valueHalign, text_valign = valueValign, text_font_family = valueFontFamily, bgcolor = tableBackgroundColor)
+
+// Helper function to create empty cell
+f_emptyCell(table t, int col, int row) =>
+    table.cell(table_id = t, column = col, row = row, text = "", bgcolor = tableBackgroundColor)
+
+// Create table
+if barstate.islastconfirmedhistory
+    var table fundTable = table.new(position = tablePosition, columns = 9, rows = 28, border_width = tableBorderSize, border_color = tableBorderColor, frame_width = tableFrameSize, frame_color = tableFrameColor)
+    
+    // Row 0: Ticker
+    f_labelCell(fundTable, 0, 0, "Ticker")
+    f_valueCell(fundTable, 1, 0, ticker)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 0)
+    
+    // Row 1: Description
+    f_labelCell(fundTable, 0, 1, "Description")
+    f_valueCell(fundTable, 1, 1, description)
+
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 1)
+    
+
+    // Row 2: Sector
+    f_labelCell(fundTable, 0, 2, "Sector")
+    f_valueCell(fundTable, 1, 2, sector)
+    for i = 2 to 8
+
+        f_emptyCell(fundTable, i, 2)
+    
+    // Row 3: Industry
+    f_labelCell(fundTable, 0, 3, "Industry")
+    f_valueCell(fundTable, 1, 3, industry)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 3)
+    
+    // Row 4: IPO
+    f_labelCell(fundTable, 0, 4, "IPO")
+    f_valueCell(fundTable, 1, 4, ipoDate)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 4)
+    
+    // Row 5: Spacer
+    for i = 0 to 8
+        f_emptyCell(fundTable, i, 5)
+    
+    // Row 6: Mkt Cap
+    f_labelCell(fundTable, 0, 6, "Mkt Cap")
+    f_valueCell(fundTable, 1, 6, mktCapStr)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 6)
+    
+    // Row 7: ROE
+    f_labelCell(fundTable, 0, 7, "Roe")
+    f_valueCell(fundTable, 1, 7, roeStr)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 7)
+    
+    // Row 8: Float
+    f_labelCell(fundTable, 0, 8, "Float")
+    f_valueCell(fundTable, 1, 8, floatStr)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 8)
+    
+    // Row 9: Spacer
+    for i = 0 to 8
+        f_emptyCell(fundTable, i, 9)
+    
+    // Row 10: Analyst Recommendations Header
+    f_labelCell(fundTable, 0, 10, "Analysts")
+    f_labelCell(fundTable, 1, 10, "Recomendations")
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 10)
+    
+    // Row 11: Last/Total
+    f_labelCell(fundTable, 0, 11, "Last")
+    f_valueCell(fundTable, 1, 11, lastRecommDate)
+    f_labelCell(fundTable, 2, 11, "Total")
+    f_valueCell(fundTable, 3, 11, totalRecomm)
+    for i = 4 to 8
+        f_emptyCell(fundTable, i, 11)
+    
+    // Row 12: Strong Buy/Buy
+    f_labelCell(fundTable, 0, 12, "Strong Buy")
+    f_valueCell(fundTable, 1, 12, strongBuy)
+    f_labelCell(fundTable, 2, 12, "Buy")
+    f_valueCell(fundTable, 3, 12, buy)
+    for i = 4 to 8
+        f_emptyCell(fundTable, i, 12)
+    
+    // Row 13: Hold
+    f_labelCell(fundTable, 0, 13, "Hold")
+    f_valueCell(fundTable, 1, 13, hold)
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 13)
+    
+    // Row 14: Sell/Strong Sell
+    f_labelCell(fundTable, 0, 14, "Sell")
+    f_valueCell(fundTable, 1, 14, sell)
+    f_labelCell(fundTable, 2, 14, "Strong Sell")
+
+    f_valueCell(fundTable, 3, 14, strongSell)
+    for i = 4 to 8
+        f_emptyCell(fundTable, i, 14)
+    
+    // Row 15: Price Target Header
+    f_labelCell(fundTable, 0, 15, "Analysts")
+    f_labelCell(fundTable, 1, 15, "Price Target")
+    for i = 2 to 8
+        f_emptyCell(fundTable, i, 15)
+    
+    // Row 16: Last/Total/Price Target Average
+    f_labelCell(fundTable, 0, 16, "Last")
+    f_valueCell(fundTable, 1, 16, lastPriceTargetDate)
+    f_labelCell(fundTable, 2, 16, "Total")
+    f_valueCell(fundTable, 3, 16, totalPriceTargets)
+    f_labelCell(fundTable, 4, 16, "Price Target Average")
+    f_valueCell(fundTable, 5, 16, avgPrice)
+    for i = 6 to 8
+        f_emptyCell(fundTable, i, 16)
+    
+    // Row 17: Highest/Median/Lowest Price
+    f_labelCell(fundTable, 0, 17, "Highest Price")
+    f_valueCell(fundTable, 1, 17, highPrice)
+    f_labelCell(fundTable, 2, 17, "Median Price")
+    f_valueCell(fundTable, 3, 17, medianPrice)
+    f_labelCell(fundTable, 4, 17, "Lowest Price")
+    f_valueCell(fundTable, 5, 17, lowPrice)
+    for i = 6 to 8
+        f_emptyCell(fundTable, i, 17)
+    
+    // Row 18: Spacer
+    for i = 0 to 8
+        f_emptyCell(fundTable, i, 18)
+    
+    // Row 19: EPS and Revenue headers (merged cells)
+    f_emptyCell(fundTable, 0, 19)
+    table.merge_cells(table_id = fundTable, start_column = 1, start_row = 19, end_column = 4, end_row = 19)
+    table.cell_set_text(table_id = fundTable, column = 1, row = 19, text = "EPS")
+    table.cell_set_text_color(table_id = fundTable, column = 1, row = 19, text_color = labelColor)
+    table.cell_set_text_size(table_id = fundTable, column = 1, row = 19, text_size = labelSize)
+    table.cell_set_text_halign(table_id = fundTable, column = 1, row = 19, text_halign = text.align_center)
+    table.cell_set_bgcolor(table_id = fundTable, column = 1, row = 19, bgcolor = tableBackgroundColor)
+    table.merge_cells(table_id = fundTable, start_column = 5, start_row = 19, end_column = 8, end_row = 19)
+    table.cell_set_text(table_id = fundTable, column = 5, row = 19, text = "Revenue")
+    table.cell_set_text_color(table_id = fundTable, column = 5, row = 19, text_color = labelColor)
+    table.cell_set_text_size(table_id = fundTable, column = 5, row = 19, text_size = labelSize)
+    table.cell_set_text_halign(table_id = fundTable, column = 5, row = 19, text_halign = text.align_center)
+    table.cell_set_bgcolor(table_id = fundTable, column = 5, row = 19, bgcolor = tableBackgroundColor)
+    
+    // Row 20: Column headers
+    f_labelCell(fundTable, 0, 20, "Quarter")
+    f_labelCell(fundTable, 1, 20, "Estimate")
+    f_labelCell(fundTable, 2, 20, "Reported")
+    f_labelCell(fundTable, 3, 20, "Surprise")
+    f_labelCell(fundTable, 4, 20, "% Change (YoY)")
+    f_labelCell(fundTable, 5, 20, "Estimate")
+    f_labelCell(fundTable, 6, 20, "Reported")
+    f_labelCell(fundTable, 7, 20, "Surprise")
+    f_labelCell(fundTable, 8, 20, "% Change (YoY)")
+    
+
+    // Row 21: NEXT QTR
+    string epsEstStr = na(epsEstimate) ? "XX" : str.format("{0}", math.round(epsEstimate, 2))
+    string epsYoyStrNext = na(epsYoyGrowth) ? "XX" : str.format("{0}%", math.round(epsYoyGrowth, 1))
+    string revEstStr = na(revenueEstimate) ? "XX" : str.tostring(revenueEstimate, format.volume)
+
+    string revYoyStrNext = na(revenueYoyGrowth) ? "XX" : str.format("{0}%", math.round(revenueYoyGrowth, 1))
+    
+    f_labelCell(fundTable, 0, 21, "NEXT QTR")
+    f_valueCell(fundTable, 1, 21, epsEstStr)
+    f_emptyCell(fundTable, 2, 21)
+    f_emptyCell(fundTable, 3, 21)
+    f_valueCell(fundTable, 4, 21, epsYoyStrNext)
+    f_valueCell(fundTable, 5, 21, revEstStr)
+    f_emptyCell(fundTable, 6, 21)
+    f_emptyCell(fundTable, 7, 21)
+    f_valueCell(fundTable, 8, 21, revYoyStrNext)
+    
+    // Calculate dynamic quarters based on actual earnings dates
+    var array<string> quarters = array.new<string>(6)
+    
+    array.set(quarters, 0, f_getEarningsDateString(epsTime0))
+    array.set(quarters, 1, f_getEarningsDateString(epsTime1))
+    array.set(quarters, 2, f_getEarningsDateString(epsTime2))
+    array.set(quarters, 3, f_getEarningsDateString(epsTime3))
+    array.set(quarters, 4, f_getEarningsDateString(epsTime4))
+    array.set(quarters, 5, f_getEarningsDateString(epsTime5))
+    
+    // Rows 22-27: Historical quarters
+    array<float> epsData = array.from(epsQ0, epsQ1, epsQ2, epsQ3, epsQ4, epsQ5)
+    array<float> epsEstData = array.from(epsEst0, epsEst1, epsEst2, epsEst3, epsEst4, epsEst5)
+    array<float> epsYoyData = array.from(epsYoy0, epsYoy1, epsYoy2, epsYoy3, epsYoy4, epsYoy5)
+    array<float> revenueData = array.from(revenueQ0, revenueQ1, revenueQ2, revenueQ3, revenueQ4, revenueQ5)
+    array<float> revenueEstData = array.from(revenueEst0, revenueEst1, revenueEst2, revenueEst3, revenueEst4, revenueEst5)
+    array<float> revenueYoyData = array.from(revenueYoy0, revenueYoy1, revenueYoy2, revenueYoy3, revenueYoy4, revenueYoy5)
+    
+    for i = 0 to 5
+        string qtr = array.get(quarters, i)
+        float eps = array.get(epsData, i)
+        float epsEst = array.get(epsEstData, i)
+        float epsYoyVal = array.get(epsYoyData, i)
+        float revenue = array.get(revenueData, i)
+        float revenueEst = array.get(revenueEstData, i)
+        float revenueYoyVal = array.get(revenueYoyData, i)
+        
+        // Calculate EPS Surprise as percentage (Reported - Estimate) / Estimate * 100
+        float epsSurprise = na
+        if not na(eps) and not na(epsEst) and epsEst != 0
+            epsSurprise := ((eps - epsEst) / math.abs(epsEst)) * 100
+        
+        // Calculate Revenue Surprise as percentage (Reported - Estimate) / Estimate * 100
+        float revenueSurprise = na
+        if not na(revenue) and not na(revenueEst) and revenueEst != 0
+            revenueSurprise := ((revenue - revenueEst) / math.abs(revenueEst)) * 100
+        
+        string epsEstVal = na(epsEst) ? "XX" : str.format("{0}", math.round(epsEst, 2))
+        string epsVal = na(eps) ? "XX" : str.format("{0}", math.round(eps, 2))
+        string epsSurpriseVal = na(epsSurprise) ? "XX" : str.format("{0}%", math.round(epsSurprise, 1))
+        string epsYoyStr = na(epsYoyVal) ? "XX" : str.format("{0}%", math.round(epsYoyVal, 1))
+        
+        string revenueEstVal = na(revenueEst) ? "XX" : str.tostring(revenueEst, format.volume)
+        string revenueVal = na(revenue) ? "XX" : str.tostring(revenue, format.volume)
+        string revenueSurpriseVal = na(revenueSurprise) ? "XX" : str.format("{0}%", math.round(revenueSurprise, 1))
+        string revenueYoyStr = na(revenueYoyVal) ? "XX" : str.format("{0}%", math.round(revenueYoyVal, 1))
+        
+        f_labelCell(fundTable, 0, 22 + i, qtr)
+        f_valueCell(fundTable, 1, 22 + i, epsEstVal)
+        f_valueCell(fundTable, 2, 22 + i, epsVal)
+        f_valueCell(fundTable, 3, 22 + i, epsSurpriseVal)
+        f_valueCell(fundTable, 4, 22 + i, epsYoyStr)
+        f_valueCell(fundTable, 5, 22 + i, revenueEstVal)
+        f_valueCell(fundTable, 6, 22 + i, revenueVal)
+        f_valueCell(fundTable, 7, 22 + i, revenueSurpriseVal)
+        f_valueCell(fundTable, 8, 22 + i, revenueYoyStr)

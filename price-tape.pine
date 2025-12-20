@@ -1,0 +1,246 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Price Tape - Simplified real-time order flow for premium users
+
+//@version=6
+indicator(title = "Price Tape", shorttitle = "⚡ Tape", overlay = false, max_bars_back = 0)
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Other Constants
+const color NONE = color.new(color = color.black, transp = 100)
+
+// === INPUTS ===
+const string g1 = "Tape Settings"
+tapeLength = input.int(defval = 20, title = "Tape Length", minval = 5, maxval = 50, tooltip = "Number of price prints to display", group = g1)
+minVolume = input.float(defval = 10, title = "Min Print Volume", minval = 0, step = 10, tooltip = "Minimum volume to display a print", group = g1)
+largeVolume = input.float(defval = 10000, title = "Large Volume Threshold", minval = 100, step = 1000, tooltip = "Volume considered 'large' for emphasis", group = g1)
+showTime = input.bool(defval = true, title = "Show Time Column", group = g1)
+timeFormat = input.string(defval = "hh:mm", title = "Time Format", tooltip = "Time format (hh:mm, HH:mm, HH:mm:ss, etc.)", group = g1)
+
+// Colors
+const string g2 = "Colors"
+bullColor = input.color(defval = NORD10, title = "Bull Print", group = g2)
+bearColor = input.color(defval = NORD11, title = "Bear Print", group = g2)
+neutralColor = input.color(defval = NORD3, title = "Neutral Print", group = g2)
+largeBullColor = input.color(defval = color.new(color = NORD10, transp = 50), title = "Large Bull Print", tooltip = "Color for large volume bull prints (more emphasis)", group = g2)
+largeBearColor = input.color(defval = color.new(color = NORD11, transp = 50), title = "Large Bear Print", tooltip = "Color for large volume bear prints (more emphasis)", group = g2)
+headerColor = input.color(defval = NORD0, title = "Header", group = g2)
+textColor = input.color(defval = NORD4, title = "Text Color", group = g2)
+
+// Table Settings
+const string g3 = "Table Settings"
+tablePosition = input.string(defval = "Top Right", title = "Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = g3)
+tableBackgroundColor = input.color(defval = color.new(color = NORD0, transp = 10), title = "Background Color", group = g3)
+
+tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group = g3)
+tableFrameColor = input.color(defval = NORD1, title = "Frame Color", group = g3)
+
+tableBorderSize = input.int(defval = 0, title = "Border Size", minval = 0, maxval = 10, group = g3)
+tableBorderColor = input.color(defval = NORD2, title = "Border Color", group = g3)
+
+// Text Settings
+const string g4 = "Text Settings"
+textSize = input.int(defval = 14, title = "Text Size", minval = 8, maxval = 32, group = g4)
+textFontFamily = input.string(defval = font.family_default, title = "Font Family",
+     options = [font.family_default, font.family_monospace],
+     tooltip = "Monospace recommended for alignment", group = g4)
+largeFontSize = input.int(defval = 14, title = "Large Volume Text Size", minval = 8, maxval = 32,
+     tooltip = "Text size for large volume prints", group = g4)
+
+// Cell Dimensions
+const string g5 = "Cell Dimensions"
+cellPadding = input.int(defval = 2, title = "Cell Padding", minval = 0, maxval = 10,
+     tooltip = "Spaces around cell content", group = g5)
+priceWidth = input.int(defval = 8, title = "Price Column Width", minval = 5, maxval = 20,
+     tooltip = "Character width for price column", group = g5)
+sizeWidth = input.int(defval = 8, title = "Size Column Width", minval = 5, maxval = 15,
+     tooltip = "Character width for size column", group = g5)
+timeWidth = input.int(defval = 8, title = "Time Column Width", minval = 5, maxval = 15,
+     tooltip = "Character width for time column", group = g5)
+
+// === HELPER FUNCTIONS ===
+// Format volume with K suffix
+formatVolume(float vol) =>
+    if na(vol) or vol == 0
+        "0"
+    else if vol >= 1000
+        volK = vol / 1000
+        // Format with appropriate decimals
+        if volK >= 100
+            str.format(format = "{0, number, 0}K", arg0 = math.floor(number = volK))
+        else if volK >= 10
+            str.format(format = "{0, number, 0.0}K", arg0 = volK)
+        else
+            str.format(format = "{0, number, 0.00}K", arg0 = volK)
+    else
+        str.format(format = "{0, number, 0}", arg0 = math.floor(number = vol))
+
+// Pad string to fixed width (for cell alignment)
+padString(string txt, int width) =>
+    txtLen = str.length(string = txt)
+    if txtLen >= width
+        txt
+    else
+        // Add spaces to reach desired width
+        padding = ""
+        for i = 0 to (width - txtLen - 1)
+            padding += " "
+        padding + txt
+
+// Add cell padding
+addPadding(string txt, int padding) =>
+    if padding <= 0
+        txt
+    else
+        leftPad = ""
+        rightPad = ""
+        for i = 0 to (padding - 1)
+            leftPad += " "
+            rightPad += " "
+        leftPad + txt + rightPad
+
+// === CORE LOGIC ===
+// Arrays to store tape data
+varip array<float> tapePrices = array.new_float()
+varip array<float> tapeVolumes = array.new_float()
+varip array<int> tapeTimes = array.new_int()
+varip array<int> tapeDirections = array.new_int() // 1 = up, -1 = down, 0 = neutral
+
+// Track volume changes
+varip float lastVolume = 0
+varip float volumeDiff = 0
+
+// Get data from 1-second chart (premium sub has access to this)
+[sec_price, sec_volume, sec_time] = request.security_lower_tf(symbol = syminfo.tickerid, timeframe = "1S", expression = [close, volume, timenow])
+
+// Only process on realtime bars
+if barstate.isrealtime
+    // Calculate volume change
+    currentVol = sec_volume.sum()
+    if currentVol != lastVolume
+        volumeDiff := currentVol - lastVolume
+        lastVolume := currentVol
+        
+        // Only add if volume exceeds minimum
+        if volumeDiff >= minVolume
+            newPrice = sec_price.last()
+            
+            // Determine direction
+            direction = 0
+            if tapePrices.size() > 0
+                lastPrice = tapePrices.get(0)
+                direction := newPrice > lastPrice ? 1 : newPrice < lastPrice ? -1 : 0
+            
+            // Add to arrays (newest at front)
+            tapePrices.unshift(newPrice)
+            tapeVolumes.unshift(volumeDiff)
+            tapeTimes.unshift(sec_time.last())
+            tapeDirections.unshift(direction)
+            
+            // Keep array size limited
+            if tapePrices.size() > tapeLength
+                tapePrices.pop()
+                tapeVolumes.pop()
+                tapeTimes.pop()
+                tapeDirections.pop()
+
+// === TABLE DISPLAY ===
+// Convert position string to table position
+pos_y = str.pos(source = tablePosition, str = "Top") >= 0 ? "top" : str.pos(source = tablePosition, str = "Middle") >= 0 ? "middle" : "bottom"
+pos_x = str.pos(source = tablePosition, str = "Left") >= 0 ? "left" : str.pos(source = tablePosition, str = "Center") >= 0 ? "center" : "right"
+tablePos = pos_y + "_" + pos_x
+
+// Create table
+cols = showTime ? 3 : 2
+tape = table.new(position = tablePos, columns = cols, rows = tapeLength + 1, bgcolor = tableBackgroundColor,
+     frame_color = tableFrameColor, frame_width = tableFrameSize,
+     border_color = tableBorderColor, border_width = tableBorderSize)
+
+// Header row
+headerRow = 0
+priceHeader = addPadding(padString("PRICE", priceWidth), cellPadding)
+sizeHeader = addPadding(padString("SIZE", sizeWidth), cellPadding)
+timeHeader = addPadding(padString("TIME", timeWidth), cellPadding)
+
+table.cell(table_id = tape, column = 0, row = headerRow, text = priceHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+table.cell(table_id = tape, column = 1, row = headerRow, text = sizeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+if showTime
+    table.cell(table_id = tape, column = 2, row = headerRow, text = timeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+
+// Display tape data
+if tapePrices.size() > 0
+    for i = 0 to math.min(val0 = tapePrices.size() - 1, val1 = tapeLength - 1)
+        row = i + 1
+
+        // Get data
+        price = tapePrices.get(i)
+        vol = tapeVolumes.get(i)
+        tradeTime = tapeTimes.get(i)
+        dir = tapeDirections.get(i)
+
+        // Check if large volume
+        isLarge = vol >= largeVolume
+
+        // Determine background color and text size based on direction and volume
+        bgColor = color(na)
+        cellTextSize = textSize
+
+        if isLarge
+            // Large volume - use emphasized colors and size
+            bgColor := dir > 0 ? largeBullColor : dir < 0 ? largeBearColor : neutralColor
+            cellTextSize := largeFontSize
+        else
+            // Normal volume
+            bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
+
+        // Format and pad strings to fixed width
+        priceFormatted = str.tostring(value = price, format = format.mintick)
+        volFormatted = formatVolume(vol)
+        timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
+
+        priceStr = addPadding(padString(priceFormatted, priceWidth), cellPadding)
+        volStr = addPadding(padString(volFormatted, sizeWidth), cellPadding)
+        timeStr = addPadding(padString(timeFormatted, timeWidth), cellPadding)
+
+        // Create cells
+        table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+        table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+        if showTime
+            table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+else
+    // Show waiting message
+    waitingMsg = addPadding("Waiting for real-time data...", cellPadding)
+    table.cell(table_id = tape, column = 0, row = 1, text = waitingMsg, bgcolor = tableBackgroundColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+    if showTime
+        table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 2, end_row = 1)
+    else
+        table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 1, end_row = 1)
+
+// Fill empty rows
+if tapePrices.size() < tapeLength
+    emptyStr = addPadding("", cellPadding)
+    for i = tapePrices.size() to tapeLength - 1
+        row = i + 1
+        table.cell(table_id = tape, column = 0, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+        table.cell(table_id = tape, column = 1, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+        if showTime
+            table.cell(table_id = tape, column = 2, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+

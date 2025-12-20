@@ -2,209 +2,376 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Technical View Indicator", shorttitle = "TVI", overlay = true, dynamic_requests = false, behind_chart = false)
+indicator(title = "Technical View Indicator", shorttitle = "TVI", overlay = true, dynamic_requests = false)
 
-// Constants
-const float THOUSAND = math.pow(10, 3)
-const float MILLION = math.pow(10, 6)
-const float BILLION = math.pow(10, 9)
-const float TRILLION = math.pow(10, 12)
+// === CONSTANTS ===
+// Calculation Constants
+const float THOUSAND = 1e3
+const float MILLION = 1e6
+const float BILLION = 1e9
+const float TRILLION = 1e12
 
-// Nord Theme Color Constants
-// Polar Night
-const color NORD0 = #2E3440  // Dark background
-const color NORD1 = #3B4252  // Elevated UI elements
-const color NORD2 = #434C5E  // Selection/highlighting
-const color NORD3 = #4C566A  // Comments/subtle elements
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
 
-// Snow Storm  
-const color NORD4 = #D8DEE9  // Variables/constants
-const color NORD5 = #E5E9F0  // Subtle UI text
-const color NORD6 = #ECEFF4  // Plain text/brightest
-
-// Frost
-const color NORD7 = #8FBCBB  // Classes/types
-const color NORD8 = #88C0D0  // Primary accent/functions
-const color NORD9 = #81A1C1  // Keywords/operators
-const color NORD10 = #5E81AC // Pragmas/deep accent
-
-// Aurora
-const color NORD11 = #BF616A // Error states/red
-const color NORD12 = #D08770 // Advanced functionality/orange
-const color NORD13 = #EBCB8B // Warning states/yellow
-const color NORD14 = #A3BE8C // Success states/green
-const color NORD15 = #B48EAD // Uncommon functionality/purple
-
-// General Style
+// Input Settings
 // Table
-var string tablePosition = input.string(defval = position.top_right, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
-var color tableBackgroundColor = input.color(defval = color.new(NORD3, 100), title = "Background Color", group = "Table")
+var string tablePosition = input.string(defval = position.top_right, title = "Position", 
+     options=[position.top_left, position.top_center, position.top_right, 
+     position.middle_left, position.middle_center, position.middle_right, 
+     position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
+var color tableBackgroundColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Background Color", group = "Table")
 
-var int tableFrameSize = input.int(defval = 0, title = "Frame Size", group="Table")
-var color tableFrameColor = input.color(defval = color.new(NORD3, 100), title = "Frame Color", group = "Table")
+var int tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group="Table")
+var color tableFrameColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Frame Color", group = "Table")
 
-var int tableBorderSize = input.int(defval = 2, title = "Border Size", group="Table")
-var color tableBorderColor = input.color(defval = color.new(NORD3, 100), title = "Border Color", group = "Table")
+var int tableBorderSize = input.int(defval = 2, title = "Border Size", minval = 0, maxval = 10, group="Table")
+var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Border Color", group = "Table")
 
 var bool tableSpacerLeft = input.bool(defval = false, title = "Spacer Left", group = "Table")
-var bool tableSpacerRight = input.bool(defval = false, title = "Spacer Right", group = "Table")
+var bool tableSpacerRight = input.bool(defval = true, title = "Spacer Right", group = "Table")
 
 // Text
-var color textColor = input.color(defval = color.new(NORD4, 20), title = "Color", group = "Text")
-var int textSize = input.int(defval = 12, title = "Text Size", group="Text")
-var string textFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Text")
-var string textHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Text")
+var color textColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Text")
+var int textSize = input.int(defval = 14, title = "Text Size", minval = 8, maxval = 32, group = "Text")
+var string textFontFamily = input.string(defval = font.family_default, title = "Font Family", 
+     options=[font.family_default, font.family_monospace], group="Text")
+var string textHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", 
+     options=[text.align_left, text.align_center, text.align_right], group="Text")
+var string textValign = input.string(defval = text.align_center, title = "Vertical Alignment", 
+     options=[text.align_top, text.align_center, text.align_bottom], group="Text")
 
-var string textValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Text")
+// Strength Colors
+var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = "Strength")
+var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = "Strength")
 
-// Strength
-var color aboveColor = input.color(defval = color.new(NORD8, 0), title = "Above Color", group = "Strength")
-var color belowColor = input.color(defval = color.new(NORD4, 40),title = "Below Color", group = "Strength")
+// Helper Functions
+// Format number with appropriate suffix
+formatNumber(value, prefix = "", isCurrency = false) =>
+    result = switch
+        na(value) => "-"
+        value >= TRILLION => str.format(format = "{0}{1, number,0.0}T", arg0 = isCurrency ? "$" : "", arg1 = value / TRILLION)
+        value >= BILLION => str.format(format = "{0}{1, number,0.0}B", arg0 = isCurrency ? "$" : "", arg1 = value / BILLION)
+        value >= MILLION => str.format(format = "{0}{1, number,0.0}M", arg0 = isCurrency ? "$" : "", arg1 = value / MILLION)
+        value >= THOUSAND => str.format(format = "{0}{1, number,0}K", arg0 = isCurrency ? "$" : "", arg1 = value / THOUSAND)
+        => str.format(format = "{0}{1, number,0}", arg0 = isCurrency ? "$" : "", arg1 = value)
+    prefix + " " + result
 
 // Technical Indicators
+// Market Capitalization
+var bool mktCapVisible = input.bool(defval = true, title = "Visible", group = "Market Capitalization")
+var float mktCapBelow = input.float(defval = 10, title = "Sweet Spot (Below $B)", minval = 1, step = 1, 
+     tooltip = "Market cap below this value (in billions) indicates higher breakout potential", group = "Market Capitalization")
 
-//Volume
-var bool volumeVisible = input.bool(defval = true, title = "Visible", group = "Volume")
-var float volumeAbove = input.float(defval = 1000000, title = "Strength", minval = 0, step = 100000, inline = "Volume Strength", group = "Volume")
-var float volumeBelow = input.float(defval = 300000, title = "▲ - ▼", minval = 0, step = 100000, tooltip = "ABOVE and BELOW expectations in shares", inline = "Volume Strength", group = "Volume")
+float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
+float mktCap = na(tso) ? na : tso * close
+float mktCapBillions = na(mktCap) ? na : mktCap / BILLION
 
-float volumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = volume, lookahead = barmerge.lookahead_on)
+string mktCapText = formatNumber(mktCap, "CAP", true)
+color mktCapColor = na(mktCapBillions) ? textColor : 
+     mktCapBillions <= mktCapBelow ? aboveColor : textColor
+string mktCapTooltip = str.format(format = "Market cap. Below ${0, number, 0}B is ideal for explosive momentum moves", arg0 = mktCapBelow)
 
+// Float Shares Outstanding
+var bool floatSharesVisible = input.bool(defval = true, title = "Visible", group = "Float Shares Outstanding")
+var float floatSharesAbove = input.float(defval = 25, title = "Ideal (Below M)", minval = 1, step = 5, 
+     inline = "FloatShares Strength", group = "Float Shares Outstanding")
+var float floatSharesBelow = input.float(defval = 100, title = "▲ - ▼ High (Above M)", minval = 25, step = 10, 
+     tooltip = "Float at or below ideal indicates highest breakout potential. Above high threshold suggests slower moves", 
+     inline = "FloatShares Strength", group = "Float Shares Outstanding")
 
-string volumeFormatted = switch
-    volumeTicker > BILLION => str.format("{0, number, 0.00}B", math.round((volumeTicker / BILLION), 2))
-    volumeTicker > MILLION => str.format("{0, number, 0.00}M", math.round((volumeTicker / MILLION), 2))
-    volumeTicker > THOUSAND => str.format("{0, number, 0}K", math.round((volumeTicker / THOUSAND), 0))
-    na(volumeTicker) => "-"
-    => str.format("{0, number, 0}", volumeTicker)
+float floatShares = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = syminfo.shares_outstanding_float, lookahead = barmerge.lookahead_on)
+float floatSharesMillions = na(floatShares) ? na : floatShares / MILLION
 
-string volumeText = "Vol" + volumeFormatted
-color volumeColor = (volumeTicker >= volumeAbove) ? aboveColor : (volumeTicker <= volumeBelow) ? belowColor : textColor
-string volumeTooltip = "Total shares traded today"
+string floatSharesFormatted = switch
+    na(floatShares) => "-"
+    floatShares >= BILLION => str.format(format = "{0, number, 0.0}B", arg0 = floatShares / BILLION)
+    floatShares >= MILLION => str.format(format = "{0, number, 0.0}M", arg0 = floatShares / MILLION)
+    => str.format(format = "{0, number, 0.0}K", arg0 = floatShares / THOUSAND)
 
-// Dollar Volume
-var bool dollarVolumeVisible = input.bool(defval = true, title = "Visible", group = "Dollar Volume")
-var float dollarVolumeAbove = input.float(defval = 100000000, title = "Strength", minval = 0, step = 10000000, inline = "Dollar Volume Strength", group = "Dollar Volume")
-var float dollarVolumeBelow = input.float(defval = 20000000, title = "▲ - ▼", minval = 0, step = 10000000, tooltip = "ABOVE and BELOW expectations in dollars", inline = "Dollar Volume Strength", group = "Dollar Volume")
+string floatSharesText = "FLT" + floatSharesFormatted
+color floatSharesColor = na(floatSharesMillions) ? textColor : 
+     floatSharesMillions <= floatSharesAbove ? aboveColor : 
+     floatSharesMillions >= floatSharesBelow ? belowColor : textColor
+string floatSharesTooltip = str.format(format = "Float shares. At or below {0, number, 0}M is ideal for explosive moves. Above {1, number, 0}M indicates high float",
+     arg0 = floatSharesAbove, arg1 = floatSharesBelow)
 
-float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = volume * close, lookahead = barmerge.lookahead_on)
+// Average Daily Volume
+var bool volumeVisible = input.bool(defval = true, title = "Visible", group = "Average Daily Volume")
+var int volumePeriod = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Daily Volume")
+var float volumeAbove = input.float(defval = 500000, title = "Strong (Above)", minval = 0, step = 100000, 
+     inline = "Volume Strength", group = "Average Daily Volume")
+var float volumeBelow = input.float(defval = 200000, title = "▲ - ▼ Weak (Below)", minval = 0, step = 100000, 
+     tooltip = "Volume above threshold indicates good liquidity. Below threshold suggests low liquidity", 
+     inline = "Volume Strength", group = "Average Daily Volume")
 
-string dollarVolumeFormatted = switch
-    dollarVolumeTicker > BILLION => str.format("{0, number, $0.00}B", math.round((dollarVolumeTicker / BILLION), 2))
-    dollarVolumeTicker > MILLION => str.format("{0, number, $0.00}M", math.round((dollarVolumeTicker / MILLION), 2))
+float volumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume, length = volumePeriod), lookahead = barmerge.lookahead_on)
 
-    dollarVolumeTicker > THOUSAND => str.format("{0, number, $0}K", math.round((dollarVolumeTicker / THOUSAND), 0))
-    na(dollarVolumeTicker) => "-"
-    => str.format("{0, number, $0}", dollarVolumeTicker)
+string volumeText = formatNumber(volumeTicker, "VOL")
+color volumeColor = volumeTicker >= volumeAbove ? aboveColor : 
+     volumeTicker <= volumeBelow ? belowColor : textColor
+string volumeTooltip = str.format(format = "{0}-day average daily volume. Above {1, number, 0} shares indicates strong liquidity",
+     arg0 = volumePeriod, arg1 = volumeAbove)
 
-string dollarVolumeText = "Dvl" + dollarVolumeFormatted
-color dollarVolumeColor = (dollarVolumeTicker >= dollarVolumeAbove) ? aboveColor : (dollarVolumeTicker <= dollarVolumeBelow) ? belowColor : textColor
-string dollarVolumeTooltip = "Total dollar value traded today"
+// Average Dollar Volume
+var bool dollarVolumeVisible = input.bool(defval = true, title = "Visible", group = "Average Dollar Volume")
+var int dollarVolumePeriod = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Dollar Volume")
+var float dollarVolumeAbove = input.float(defval = 50000000, title = "Strong (Above)", minval = 0, step = 10000000, 
+     inline = "Dollar Volume Strength", group = "Average Dollar Volume")
+var float dollarVolumeBelow = input.float(defval = 10000000, title = "▲ - ▼ Weak (Below)", minval = 0, step = 5000000, 
+     tooltip = "Dollar volume above threshold indicates institutional interest. Below threshold suggests retail-only stock", 
+     inline = "Dollar Volume Strength", group = "Average Dollar Volume")
 
-// Price
-var bool priceVisible = input.bool(defval = true, title = "Visible", group = "Price")
-var float priceAbove = input.float(defval = 20, title = "Strength", minval = 0, step = 1, inline = "Price Strength", group = "Price")
-var float priceBelow = input.float(defval = 5, title = "▲ - ▼", minval = 0, step = 1, tooltip = "ABOVE and BELOW expectations in dollars", inline = "Price Strength", group = "Price")
+float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume * close, length = dollarVolumePeriod), lookahead = barmerge.lookahead_on)
 
-float priceTicker = close
-string priceFormatted = str.format("{0, number, $0.00}", priceTicker)
+string dollarVolumeText = formatNumber(dollarVolumeTicker, "DVL", true)
+color dollarVolumeColor = dollarVolumeTicker >= dollarVolumeAbove ? aboveColor : 
+     dollarVolumeTicker <= dollarVolumeBelow ? belowColor : textColor
+string dollarVolumeTooltip = str.format(format = "{0}-day average dollar volume. Above ${1, number, 0} indicates strong institutional participation",
 
-string priceText = "Prc" + priceFormatted
-color priceColor = (priceTicker >= priceAbove) ? aboveColor : (priceTicker <= priceBelow) ? belowColor : textColor
-string priceTooltip = "Current stock price per share"
+     arg0 = dollarVolumePeriod, arg1 = dollarVolumeAbove)
 
 // PE Ratio
 var bool peVisible = input.bool(defval = true, title = "Visible", group = "PE Ratio")
-var float peAbove = input.float(defval = 25, title = "Strength", minval = 0, step = 1, inline = "PE Strength", group = "PE Ratio")
-var float peBelow = input.float(defval = 15, title = "▲ - ▼", minval = 0, step = 1, tooltip = "ABOVE and BELOW expectations for PE ratio", inline = "PE Strength", group = "PE Ratio")
+var float peAbove = input.float(defval = 40, title = "High (Above)", minval = 0, step = 5, 
+     inline = "PE Strength", group = "PE Ratio")
+var float peBelow = input.float(defval = 15, title = "▲ - ▼ Low (Below)", minval = 0, step = 5, 
+     tooltip = "P/E above threshold may indicate overvaluation. Below threshold may indicate undervaluation or value opportunity", 
+     inline = "PE Strength", group = "PE Ratio")
 
 float peRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_EARNINGS_FORWARD", period = "FY")
-string peFormatted = str.format("{0, number, 0.0}", peRatio)
+string peFormatted = na(peRatio) ? "-" : str.format(format = "{0, number, 0.0}", arg0 = peRatio)
 
-string peText = "Pe" + peFormatted
-color peColor = (peRatio >= peAbove) ? belowColor : (peRatio <= peBelow) ? aboveColor : textColor
-string peTooltip = "Price-to-earnings ratio"
+string peText = "P/E" + peFormatted
+color peColor = na(peRatio) ? textColor :
+     peRatio >= peAbove ? belowColor : 
+     peRatio <= peBelow ? aboveColor : textColor
+string peTooltip = str.format(format = "Forward P/E ratio. Above {0, number, 0} suggests premium valuation. Below {1, number, 0} suggests value territory",
+     arg0 = peAbove, arg1 = peBelow)
+
+// PS Ratio
+var bool psVisible = input.bool(defval = true, title = "Visible", group = "PS Ratio")
+var float psAbove = input.float(defval = 10, title = "Reasonable (Above)", minval = 0, step = 5, 
+     inline = "PS Strength", group = "PS Ratio")
+var float psBelow = input.float(defval = 50, title = "▲ - ▼ Overvalued (Above)", minval = 10, step = 5, 
+     tooltip = "P/S between reasonable and overvalued range (10-50) is acceptable. Below or above this range may indicate risk", 
+     inline = "PS Strength", group = "PS Ratio")
+
+float psRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_SALES_FORWARD", period = "FY")
+string psFormatted = na(psRatio) ? "-" : str.format(format = "{0, number, 0.0}", arg0 = psRatio)
+
+string psText = "P/S" + psFormatted
+color psColor = na(psRatio) ? textColor :
+     psRatio >= psAbove and psRatio <= psBelow ? aboveColor : belowColor
+string psTooltip = str.format(format = "Forward P/S ratio. Between {0, number, 0} and {1, number, 0} is reasonable range. Outside this range may signal overvaluation or undervaluation risk",
+     arg0 = psAbove, arg1 = psBelow)
 
 // Average Daily Range (ADR) %
 var bool adrVisible = input.bool(defval = true, title = "Visible", group = "ADR")
-var int adrRange = input.int(defval = 20, title = "Period Range (Days)", minval = 0, step = 1, group = "ADR")
-var float adrAbove = input.float(defval = 0.15, title = "Strength", minval = 0, step = 0.01, inline = "ADR Strength", group = "ADR")
-var float adrBelow = input.float(defval = 0.04, title = "▲ - ▼", minval = 0, step = 0.01, tooltip = "ABOVE and BELOW expectations in %", inline = "ADR Strength", group = "ADR")
+var int adrRange = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ADR")
+var float adrAbove = input.float(defval = 0.05, title = "High Volatility (Above)", minval = 0, maxval = 1, step = 0.01, 
+     inline = "ADR Strength", group = "ADR")
+var float adrBelow = input.float(defval = 0.03, title = "▲ - ▼ Low Volatility (Below)", minval = 0, maxval = 1, step = 0.01, 
+     tooltip = "ADR above threshold indicates high volatility ideal for swing trading. Below threshold suggests choppy or slow price action", 
+     inline = "ADR Strength", group = "ADR")
 
-float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma((high / low), adrRange), lookahead = barmerge.lookahead_on)
+float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = (high / low), length = adrRange), lookahead = barmerge.lookahead_on)
 float adrRounded = math.round(adrTicker - 1, 4)
-string adrFormatted = str.format("{0, number, 0.00%}", adrRounded[0])
+string adrFormatted = str.format(format = "{0, number, 0.00%}", arg0 = adrRounded)
 
-string adrText = "Adr" + adrFormatted
-color adrColor = (adrRounded >= adrAbove) ? aboveColor : (adrRounded <= adrBelow) ? belowColor : textColor
-string adrTooltip = "Average daily range volatility measure"
+string adrText = "ADR" + adrFormatted
+color adrColor = adrRounded >= adrAbove ? aboveColor : 
+     adrRounded <= adrBelow ? belowColor : textColor
+string adrTooltip = str.format(format = "{0}-day average daily range. Above {1, number, 0.0%} indicates strong intraday movement ideal for swing trades",
+     arg0 = adrRange, arg1 = adrAbove)
 
 // Average True Range (ATR) $
 var bool atrVisible = input.bool(defval = true, title = "Visible", group = "ATR")
-var int atrRange = input.int(defval = 20, title = "Period Range (Days)", minval = 0, step = 1, group = "ATR")
+var int atrRange = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ATR")
+var float atrAbove = input.float(defval = 2.0, title = "High Volatility (Above $)", minval = 0, step = 0.5, 
+     tooltip = "ATR above this value indicates high volatility in dollar terms", group = "ATR")
 
-float atrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.atr(atrRange), lookahead = barmerge.lookahead_on)
+float atrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.atr(length = atrRange), lookahead = barmerge.lookahead_on)
 float atrRounded = math.round(atrTicker, 2)
-string atrFormatted = str.format("{0, number, currency}", atrRounded[0])
+string atrFormatted = str.format(format = "{0, number, $0.00}", arg0 = atrRounded)
 
-string atrText = "Atr " + atrFormatted
-color atrColor = textColor
-string atrTooltip = "Average true range volatility in dollars"
+string atrText = "ATR" + atrFormatted
+color atrColor = atrRounded >= atrAbove ? aboveColor : textColor
+string atrTooltip = str.format(format = "{0}-day average true range. Above ${1, number, 0.00} indicates high volatility for position sizing",
+     arg0 = atrRange, arg1 = atrAbove)
 
 // Relative Price Strength (RPS)
 var bool rpsVisible = input.bool(defval = true, title = "Visible", group = "RPS")
-var int rpsSmooth = input.int(defval = 5, title = "Smooth (Days)", minval = 1, step = 1, group = "RPS")
-var string rpsIndex = input.symbol(defval = "SPY", title = "Base Index", tooltip = "RPS Base Index", group = "RPS")
-var float rpsAbove = input.float(defval = 1.2, title = "Strength", minval = 0, step = 0.1, inline = "RPS Strength", group = "RPS")
-var float rpsBelow = input.float(defval = 0.8, title = "▲ - ▼", minval = 0, step = 0.1, inline = "RPS Strength", group = "RPS")
+var int rpsPeriod = input.int(defval = 63, title = "Lookback Period (Days)", minval = 20, maxval = 252, step = 1, 
+     tooltip = "Period for measuring relative performance (63 days ≈ 3 months)", group = "RPS")
+var string rpsIndex = input.symbol(defval = "IXIC", title = "Base Index", tooltip = "Benchmark index for relative strength comparison", group = "RPS")
+var float rpsAbove = input.float(defval = 1.1, title = "Strong (Above)", minval = 0, step = 0.05, 
+     inline = "RPS Strength", group = "RPS")
+var float rpsBelow = input.float(defval = 0.9, title = "▲ - ▼ Weak (Below)", minval = 0, step = 0.05, 
+     tooltip = "RPS above 1.0 shows outperformance. Below 1.0 shows underperformance vs benchmark", 
+     inline = "RPS Strength", group = "RPS")
 
-float rpsBenchmark = request.security(symbol = rpsIndex, timeframe = timeframe.period, expression = close, lookahead = barmerge.lookahead_on)
-float rpsRaw = close / rpsBenchmark
-float rpsRounded = ta.sma(rpsRaw, rpsSmooth)
-string rpsFormatted = str.format("{0, number, 0.00}", rpsRounded[0])
+// Get benchmark data
+float rpsBenchmarkCurrent = request.security(symbol = rpsIndex, timeframe = timeframe.period, expression = close, lookahead = barmerge.lookahead_on)
+float rpsBenchmarkPast = request.security(symbol = rpsIndex, timeframe = timeframe.period, expression = close[rpsPeriod], lookahead = barmerge.lookahead_on)
 
-string rpsText = "Rps" + rpsFormatted
-color rpsColor = (rpsRounded >= rpsAbove) ? aboveColor : (rpsRounded <= rpsBelow) ? belowColor : textColor
-string rpsTooltip = "Relative price strength vs benchmark"
+// Calculate percentage change for both stock and benchmark
+float stockPercentChange = na(close[rpsPeriod]) ? na : close / close[rpsPeriod]
+float benchmarkPercentChange = na(rpsBenchmarkPast) ? na : rpsBenchmarkCurrent / rpsBenchmarkPast
 
-// VWAP Ratio
-var bool vwapVisible = input.bool(defval = true, title = "Visible", group = "VWAP")
-var float vwapAbove = input.float(defval = 1.05, title = "Strength", minval = 0, step = 0.01, inline = "VWAP Strength", group = "VWAP")
-var float vwapBelow = input.float(defval = 0.95, title = "▲ - ▼", minval = 0, step = 0.01, tooltip = "ABOVE and BELOW expectations in ratio", inline = "VWAP Strength", group = "VWAP")
+// RPS is the ratio of stock performance to benchmark performance
+float rpsRounded = na(benchmarkPercentChange) or benchmarkPercentChange == 0 ? na : stockPercentChange / benchmarkPercentChange
+string rpsFormatted = na(rpsRounded) ? "-" : str.format(format = "{0, number, 0.00}", arg0 = rpsRounded)
 
-float vwapValue = ta.vwap
-float vwapRatio = close / vwapValue
-float vwapRounded = math.round(vwapRatio, 3)
-string vwapFormatted = str.format("{0, number, 0.00}", vwapRounded[0])
 
-string vwapText = "Vwa" + vwapFormatted
-color vwapColor = (vwapRounded >= vwapAbove) ? aboveColor : (vwapRounded <= vwapBelow) ? belowColor : textColor
-string vwapTooltip = "Price vs volume weighted average price ratio"
+string rpsText = "RPS" + rpsFormatted
+color rpsColor = na(rpsRounded) ? textColor :
+     rpsRounded >= rpsAbove ? aboveColor : 
+     rpsRounded <= rpsBelow ? belowColor : textColor
+string rpsTooltip = str.format(format = "Relative price strength vs {0} over {1} days. Above 1.0 = outperforming, below 1.0 = underperforming",
+     arg0 = rpsIndex, arg1 = rpsPeriod)
 
-// Indicators Table
-if (barstate.islast)
-    var techTable = table.new(position = tablePosition, columns = 8, rows = 1, border_width = tableBorderSize, border_color = tableBorderColor, frame_width = tableFrameSize, frame_color = tableFrameColor, force_overlay = true)
+// Table Rendering
+// Create table only once
+var table techTable = table.new(position = tablePosition, columns = 13, rows = 1,
+     border_width = tableBorderSize,
+     border_color = tableBorderColor,
+     frame_width = tableFrameSize,
+     frame_color = tableFrameColor)
 
-    if (volumeVisible)
-        table.cell(table_id = techTable, column = 0, row = 0, text = volumeText, text_color = volumeColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = volumeTooltip, text_font_family = textFontFamily)
+// Update table on last confirmed historical bar
+if barstate.islastconfirmedhistory
+    col = 0
     
-    if (dollarVolumeVisible)
-        table.cell(table_id = techTable, column = 1, row = 0, text = dollarVolumeText, text_color = dollarVolumeColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = dollarVolumeTooltip, text_font_family = textFontFamily)
-    
-    if (priceVisible)
-        table.cell(table_id = techTable, column = 2, row = 0, text = priceText, text_color = priceColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = priceTooltip, text_font_family = textFontFamily)
-    
-    if (peVisible)
-        table.cell(table_id = techTable, column = 3, row = 0, text = peText, text_color = peColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = peTooltip, text_font_family = textFontFamily)
-    
-    if (adrVisible)
-        table.cell(table_id = techTable, column = 4, row = 0, text = adrText, text_color = adrColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = adrTooltip, text_font_family = textFontFamily)
-    
-    if (atrVisible)
-        table.cell(table_id = techTable, column = 5, row = 0, text = atrText, text_color = atrColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = atrTooltip, text_font_family = textFontFamily)
+    // Left spacer
+    if tableSpacerLeft
+        table.cell(table_id = techTable, column = col, row = 0, text = "   ", bgcolor = tableBackgroundColor, text_size = textSize)
+        col += 1
 
-    if (rpsVisible)
-        table.cell(table_id = techTable, column = 6, row = 0, text = rpsText, text_color = rpsColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = rpsTooltip, text_font_family = textFontFamily)
+    // Market Cap
+    if mktCapVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = mktCapText,
+             text_color = mktCapColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = mktCapTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+    
+    // Float Shares
+    if floatSharesVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = floatSharesText,
+             text_color = floatSharesColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = floatSharesTooltip,
+             text_font_family = textFontFamily)
+        col += 1
 
-    if (vwapVisible)
-        table.cell(table_id = techTable, column = 7, row = 0, text = vwapText, text_color = vwapColor, text_halign = textHalign, text_valign = textValign, text_size = textSize, bgcolor = tableBackgroundColor, tooltip = vwapTooltip, text_font_family = textFontFamily)
+    // Average Daily Volume
+    if volumeVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = volumeText,
+             text_color = volumeColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = volumeTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // Average Dollar Volume
+    if dollarVolumeVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = dollarVolumeText,
+             text_color = dollarVolumeColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = dollarVolumeTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // PE Ratio
+    if peVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = peText,
+             text_color = peColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = peTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // PS Ratio
+    if psVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = psText,
+             text_color = psColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = psTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // ADR
+    if adrVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = adrText,
+             text_color = adrColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = adrTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // ATR
+    if atrVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = atrText,
+             text_color = atrColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = atrTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // RPS
+    if rpsVisible
+        table.cell(table_id = techTable, column = col, row = 0, text = rpsText,
+             text_color = rpsColor,
+             text_halign = textHalign,
+             text_valign = textValign,
+             text_size = textSize,
+             bgcolor = tableBackgroundColor,
+             tooltip = rpsTooltip,
+             text_font_family = textFontFamily)
+        col += 1
+
+    // Right spacer
+    if tableSpacerRight
+        table.cell(table_id = techTable, column = col, row = 0, text = "        ", bgcolor = tableBackgroundColor, text_size = textSize)
+        col += 1

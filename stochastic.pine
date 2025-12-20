@@ -1,0 +1,71 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Stochastic", shorttitle = "Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true)
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Stochastic Input Settings
+int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = "Stochastic")
+int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = "Stochastic")
+int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = "Stochastic")
+
+// Stochastic Colors & Width
+color colorK = input.color(defval = NORD3, title = "%K Color", group = "Style")
+int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = "Style")
+color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = "Style")
+int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = "Style")
+
+// Band Settings
+bool showUpperBand = input.bool(defval = true, title = "Show Upper Band", group = "Bands")
+int upperBand = input.int(defval = 80, title = "Upper Band", minval = 50, maxval = 100, group = "Bands")
+bool showUpperMidBand = input.bool(defval = true, title = "Show Upper Mid Band", group = "Bands")
+int upperMidBand = input.int(defval = 55, title = "Upper Mid Band", minval = 50, maxval = 100, group = "Bands")
+bool showMiddleBand = input.bool(defval = false, title = "Show Middle Band", group = "Bands")
+int middleBand = input.int(defval = 50, title = "Middle Band", minval = 0, maxval = 100, group = "Bands")
+bool showLowerMidBand = input.bool(defval = true, title = "Show Lower Mid Band", group = "Bands")
+int lowerMidBand = input.int(defval = 45, title = "Lower Mid Band", minval = 0, maxval = 50, group = "Bands")
+bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group = "Bands")
+int lowerBand = input.int(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = "Bands")
+color bandColor = input.color(defval = NORD3, title = "Band Color", group = "Bands")
+int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = "Bands")
+bool showFill = input.bool(defval = true, title = "Show Background Fill", group = "Bands")
+color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = "Bands")
+
+
+// Calculate Stochastic
+float k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
+float d = ta.sma(source = k, length = periodD)
+
+// Plot Stochastic Lines
+plot(series = d, title = "%D", color = colorD, linewidth = widthD)
+plot(series = k, title = "%K", color = colorK, linewidth = widthK)
+
+// Plot Bands
+h0 = hline(price = showUpperBand ? upperBand : na, title = "Upper Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+hline(price = showUpperMidBand ? upperMidBand : na, title = "Upper Mid Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+hline(price = showMiddleBand ? middleBand : na, title = "Middle Band", color = color.new(color = bandColor, transp = 50), linewidth = bandWidth)
+hline(price = showLowerMidBand ? lowerMidBand : na, title = "Lower Mid Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+h1 = hline(price = showLowerBand ? lowerBand : na, title = "Lower Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+
+// Background fill between upper and lower bands
+fill(hline1 = h0, hline2 = h1, color = showFill ? fillColor : na, title = "Background")
+

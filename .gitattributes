@@ -1,0 +1,8 @@
+# Enforce LF line endings for all text files
+* text=auto eol=lf
+
+# Explicitly set Pine Script files to use LF
+*.pine text eol=lf
+
+# Markdown files
+*.md text eol=lf

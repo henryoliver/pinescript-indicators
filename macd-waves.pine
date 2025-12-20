@@ -1,0 +1,300 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// MACD & Waves - Momentum wave counting based on MACD structure (HH/HL/LL/LH)
+
+//@version=6
+indicator(title = "MACD & Waves", shorttitle = "MACD&Waves")
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Calculation Constants
+const string TREND_UP   = "up"
+const string TREND_DOWN = "down"
+const string TREND_NONE = "none"
+
+const float RADIANS_TO_DEGREES = 180 / math.pi
+
+// === INPUTS ===
+// Source
+src = input.source(defval = close, title = "Source", group = "Basic Settings")
+
+// Lengths
+fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = "Basic Settings")
+slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = "Basic Settings")
+signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = "Basic Settings")
+
+// MA Types
+oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = "Basic Settings")
+signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = "Basic Settings")
+
+// Visual Settings
+showHistogram = input.bool(defval = false, title = "Show Histogram", group = "Display")
+showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = "Display")
+showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = "Display")
+showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = "Display")
+
+// Colors
+histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = "Colors")
+histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = "Colors")
+histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = "Colors")
+histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = "Colors")
+macdColor = input.color(defval = NORD3, title = "MACD Line", group = "Colors")
+signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = "Colors")
+signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = "Colors")
+signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = "Colors")
+zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = "Colors")
+
+// Line Widths
+macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = "Styling")
+signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = "Styling")
+
+// Wave Counting Settings
+showWaves = input.bool(defval = true, title = "Show Wave Count", group = "Wave Counting")
+pivotLookback = input.int(defval = 3, title = "Pivot Lookback", minval = 1, maxval = 10,
+     tooltip = "Bars to left and right for pivot detection on MACD", group = "Wave Counting")
+signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = "Wave Counting",
+     tooltip = "Number of bars to determine signal line angle (for color only, not wave counting)")
+signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = "Wave Counting",
+     tooltip = "Angle threshold for signal line color (not used for wave counting)")
+waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = "Wave Counting")
+waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = "Wave Counting")
+
+// Map wave label size string to size constant
+waveLabelSizeConst = switch waveLabelSize
+    "auto"   => size.auto
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+    "huge"   => size.huge
+    => size.normal  // fallback
+
+// === CALCULATIONS ===
+// Calculate fast and slow moving averages
+fastMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = fastLength) : ta.ema(source = src, length = fastLength)
+slowMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = slowLength) : ta.ema(source = src, length = slowLength)
+
+// Calculate MACD line
+macd = fastMA - slowMA
+
+// Calculate signal line (DAD)
+signal = signalMAType == "SMA" ? ta.sma(source = macd, length = signalLength) : ta.ema(source = macd, length = signalLength)
+
+// Calculate histogram
+hist = macd - signal
+
+// Determine histogram color based on momentum
+histColor = hist >= 0 ?
+     (hist > hist[1] ? histColorUp : histColorUpFading) :
+     (hist > hist[1] ? histColorDownFading : histColorDown)
+
+// Signal line slope (VISUAL ONLY - not used for wave counting)
+signalPast = signalTrendLookback <= bar_index ? signal[signalTrendLookback] : na
+signalHeight = signal - signalPast
+signalSlopeAngle = na(signalPast) or signalHeight == 0 ? 0 : math.atan(signalHeight / signalTrendLookback) * RADIANS_TO_DEGREES
+
+// Determine signal line color based on angle (VISUAL ONLY)
+signalCurrentColor = math.abs(signalSlopeAngle) < signalFlatThreshold ? signalColorNeutral :
+     signalSlopeAngle > 0 ? signalColorUp : signalColorDown
+
+// === MACD PIVOT DETECTION ===
+// Detect MACD highs and lows using pivot points
+macdHigh = ta.pivothigh(source = macd, leftbars = pivotLookback, rightbars = pivotLookback)
+macdLow = ta.pivotlow(source = macd, leftbars = pivotLookback, rightbars = pivotLookback)
+
+// Track when new pivots are confirmed
+newMacdHigh = not na(macdHigh)
+newMacdLow = not na(macdLow)
+
+// Get pivot values and bars (pivots are offset by lookback period)
+pivotHighValue = newMacdHigh ? macd[pivotLookback] : na
+pivotLowValue = newMacdLow ? macd[pivotLookback] : na
+pivotHighBar = newMacdHigh ? bar_index - pivotLookback : na
+pivotLowBar = newMacdLow ? bar_index - pivotLookback : na
+
+// === WAVE COUNTING BASED ON MACD STRUCTURE ===
+// Track MACD structure (HH/HL for uptrend, LL/LH for downtrend)
+var string macdTrend = TREND_NONE
+var int waveNumber = 0
+var float lastHigh = na
+var float lastLow = na
+var int lastHighBar = na
+var int lastLowBar = na
+var float wave1Value = na
+var int wave1Bar = na
+var bool wave1Confirmed = false
+var bool macdHooked = false
+
+// Detect structure and count waves
+if newMacdHigh
+    currentHigh = pivotHighValue
+    currentHighBar = pivotHighBar
+
+    // Compare to last high
+    if not na(lastHigh)
+        if currentHigh > lastHigh
+            // Higher High (HH)
+            if macdTrend == TREND_NONE or macdTrend == TREND_DOWN
+                // Structure change to uptrend - this could be wave 1
+                macdTrend := TREND_UP
+                waveNumber := 1
+                wave1Value := currentHigh
+                wave1Bar := currentHighBar
+                wave1Confirmed := false
+                lastHigh := currentHigh
+                lastHighBar := currentHighBar
+                macdHooked := false
+                // Don't label yet - wait for wave 2 confirmation
+
+            else if macdTrend == TREND_UP and waveNumber % 2 == 0 and macdHooked
+                // Odd wave (impulse) in uptrend - must be HH and MACD hooked
+                waveNumber += 1
+                lastHigh := currentHigh
+                lastHighBar := currentHighBar
+                macdHooked := false
+
+                if showWaves
+                    label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
+                         style = label.style_label_down, color = color.new(waveColor, 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                         textalign = text.align_center)
+
+        else if currentHigh < lastHigh
+            // Lower High (LH)
+            if macdTrend == TREND_UP
+                // Structure might be changing to downtrend - this could be wave 1
+                // But wave 1 in downtrend is a LL, not LH
+                // So we just track this LH but don't change trend yet
+                lastHigh := currentHigh
+                lastHighBar := currentHighBar
+
+            else if macdTrend == TREND_DOWN and waveNumber % 2 == 1 and waveNumber > 0
+                // Even wave (retrace) in downtrend - confirms wave 1 if not yet confirmed
+                if not wave1Confirmed and waveNumber == 1
+                    // NOW we can label wave 1 retroactively
+                    wave1Confirmed := true
+                    if showWaves
+                        label.new(x = wave1Bar, y = wave1Value, text = "1",
+                             style = label.style_label_up, color = color.new(waveColor, 100),
+                             textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                             textalign = text.align_center)
+
+                waveNumber += 1
+                lastHigh := currentHigh
+                lastHighBar := currentHighBar
+
+                if showWaves
+                    label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
+                         style = label.style_label_down, color = color.new(waveColor, 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                         textalign = text.align_center)
+    else
+        lastHigh := currentHigh
+        lastHighBar := currentHighBar
+
+if newMacdLow
+    currentLow = pivotLowValue
+    currentLowBar = pivotLowBar
+
+    // Compare to last low
+    if not na(lastLow)
+        if currentLow < lastLow
+            // Lower Low (LL)
+            if macdTrend == TREND_NONE or macdTrend == TREND_UP
+                // Structure change to downtrend - this could be wave 1
+                macdTrend := TREND_DOWN
+                waveNumber := 1
+                wave1Value := currentLow
+                wave1Bar := currentLowBar
+                wave1Confirmed := false
+                lastLow := currentLow
+                lastLowBar := currentLowBar
+                macdHooked := false
+                // Don't label yet - wait for wave 2 confirmation
+
+            else if macdTrend == TREND_DOWN and waveNumber % 2 == 0 and macdHooked
+                // Odd wave (impulse) in downtrend - must be LL and MACD hooked
+                waveNumber += 1
+                lastLow := currentLow
+                lastLowBar := currentLowBar
+                macdHooked := false
+
+                if showWaves
+                    label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
+                         style = label.style_label_up, color = color.new(waveColor, 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                         textalign = text.align_center)
+
+        else if currentLow > lastLow
+            // Higher Low (HL)
+            if macdTrend == TREND_DOWN
+                // Structure might be changing to uptrend - this could be wave 1
+                // But we need to wait for HH to confirm
+                // For now, just track this HL
+                lastLow := currentLow
+                lastLowBar := currentLowBar
+
+            else if macdTrend == TREND_UP
+                // Even wave (retrace) in uptrend - confirms wave 1 if not yet confirmed
+                if not wave1Confirmed and waveNumber == 1
+                    // NOW we can label wave 1 retroactively
+                    wave1Confirmed := true
+                    if showWaves
+                        label.new(x = wave1Bar, y = wave1Value, text = "1",
+                             style = label.style_label_down, color = color.new(waveColor, 100),
+                             textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                             textalign = text.align_center)
+
+                waveNumber += 1
+                lastLow := currentLow
+                lastLowBar := currentLowBar
+
+                if showWaves
+                    label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
+                         style = label.style_label_up, color = color.new(waveColor, 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
+                         textalign = text.align_center)
+    else
+        lastLow := currentLow
+        lastLowBar := currentLowBar
+
+// Check for MACD hooking (required between impulse waves)
+if macdTrend == TREND_UP and not na(lastHigh) and waveNumber % 2 == 1
+    // After odd wave in uptrend, check if MACD hooked down
+    if macd < lastHigh
+        macdHooked := true
+
+if macdTrend == TREND_DOWN and not na(lastLow) and waveNumber % 2 == 1
+    // After odd wave in downtrend, check if MACD hooked up
+    if macd > lastLow
+        macdHooked := true
+
+// === PLOTS ===
+// Zero line
+hline(price = showZeroLine ? 0 : na, title = "Zero Line", color = zeroLineColor, linestyle = hline.style_dashed, linewidth = 1)
+
+// Histogram
+plot(series = showHistogram ? hist : na, title = "Histogram", style = plot.style_columns, color = histColor)
+
+// MACD line
+plot(series = showMacdLine ? macd : na, title = "MACD", color = macdColor, linewidth = macdWidth)
+
+// Signal line (color based on angle - visual only)
+plot(series = showSignalLine ? signal : na, title = "Signal", color = signalCurrentColor, linewidth = signalWidth)

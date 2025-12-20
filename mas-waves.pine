@@ -1,0 +1,606 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Top Dog Trading Wave Counting - Based on Barry Burns methodology
+
+//@version=6
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true)
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Calculation Constants
+const string TREND_UP     = "up"
+const string TREND_DOWN   = "down"
+const string TREND_FLAT   = "flat"
+const string TREND_NONE   = "none"
+
+const float RADIANS_TO_DEGREES = 180 / math.pi
+
+// Cycle letters
+const array<string> CYCLE_LETTERS = array.from("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z")
+
+// === INPUTS ===
+src = input.source(defval = close, title = "Source")
+
+// EMA
+emaVisible = input.bool(defval = true, title = "Visible", group = "EMA")
+emaLength = input.int(defval = 15, title = "Length", minval = 1, group = "EMA")
+emaOffset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "EMA")
+emaColor = input.color(defval = NORD3, title = "Color", group = "EMA")
+emaWidth = input.int(defval = 2, title = "Line Width", minval = 1, maxval = 10, group = "EMA")
+
+// SMA 1 (50 SMA - THE TREND INDICATOR)
+sma1Visible = input.bool(defval = true, title = "Visible", group = "SMA 1")
+sma1Length = input.int(defval = 50, title = "Length", minval = 1, group = "SMA 1")
+sma1Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 1")
+sma1TrendLookback = input.int(defval = 5, title = "Trend Lookback (Bars)", minval = 1, maxval = 20,
+     tooltip = "Number of bars to look back to determine slope angle", group = "SMA 1")
+sma1FlatThreshold = input.float(defval = 0.0001, title = "Flat Threshold (Degrees)", minval = 0.0001, maxval = 5.0, step = 0.0001,
+     tooltip = "Angle threshold in degrees - slopes between -threshold and +threshold are considered flat", group = "SMA 1")
+sma1ColorUp = input.color(defval = color.new(color = NORD8, transp = 60), title = "Color (Up)", group = "SMA 1")
+sma1ColorNeutral = input.color(defval = NORD2, title = "Color (Neutral)", group = "SMA 1")
+sma1ColorDown = input.color(defval = color.new(color = NORD11, transp = 60), title = "Color (Down)", group = "SMA 1")
+sma1Width = input.int(defval = 3, title = "Line Width", minval = 1, maxval = 10, group = "SMA 1")
+
+// SMA 2 & 3
+sma2Visible = input.bool(defval = true, title = "Visible", group = "SMA 2")
+sma2Length = input.int(defval = 100, title = "Length", minval = 1, group = "SMA 2")
+sma2Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 2")
+sma2Color = input.color(defval = NORD1, title = "Color", group = "SMA 2")
+sma2Width = input.int(defval = 4, title = "Line Width", minval = 1, maxval = 10, group = "SMA 2")
+
+sma3Visible = input.bool(defval = true, title = "Visible", group = "SMA 3")
+sma3Length = input.int(defval = 200, title = "Length", minval = 1, group = "SMA 3")
+sma3Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 3")
+sma3Color = input.color(defval = NORD1, title = "Color", group = "SMA 3")
+sma3Width = input.int(defval = 5, title = "Line Width", minval = 1, maxval = 10, group = "SMA 3")
+
+// Wave Counting
+showWaves = input.bool(defval = true, title = "Show Wave Numbers", group = "Wave Counting")
+showCycles = input.bool(defval = true, title = "Show Cycle Letters", group = "Wave Counting")
+periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = "Wave Counting")
+smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = "Wave Counting")
+periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = "Wave Counting")
+upperMidLevel = input.int(defval = 55, title = "Upper Mid Level", minval = 50, maxval = 100,
+     tooltip = "D must return to this level to confirm cycle high", group = "Wave Counting")
+lowerMidLevel = input.int(defval = 45, title = "Lower Mid Level", minval = 0, maxval = 50,
+     tooltip = "D must return to this level to confirm cycle low", group = "Wave Counting")
+waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = "Wave Counting")
+waveLabelSize = input.string(defval = "normal", title = "Wave Label Size",
+     options = ["auto", "tiny", "small", "normal", "large", "huge"], group = "Wave Counting")
+cycleColor = input.color(defval = NORD2, title = "Cycle Label Color", group = "Wave Counting")
+cycleLabelSize = input.string(defval = "small", title = "Cycle Label Size",
+     options = ["auto", "tiny", "small", "normal", "large", "huge"], group = "Wave Counting")
+failedWaveColor = input.color(defval = NORD11, title = "Failed Wave Color", group = "Wave Counting")
+
+// Map wave label size string to size constant
+waveLabelSizeConst = switch waveLabelSize
+    "auto"   => size.auto
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+    "huge"   => size.huge
+    => size.normal  // fallback
+
+// Map cycle label size string to size constant
+cycleLabelSizeConst = switch cycleLabelSize
+    "auto"   => size.auto
+    "tiny"   => size.tiny
+    "small"  => size.small
+    "normal" => size.normal
+    "large"  => size.large
+    "huge"   => size.huge
+    => size.small  // fallback
+
+// === EARLY LOGGING CHECK ===
+// This should be the FIRST thing to execute - if this doesn't show, inputs or constants have an error
+if bar_index == 0
+    log.info("⚡ SCRIPT COMPILED SUCCESSFULLY | Logging Enabled: true")
+
+// === CALCULATIONS ===
+// Log immediately at start of calculations
+if bar_index == 0
+    log.info("🔧 CALCULATIONS START | Bar: 0 | Symbol: " + syminfo.tickerid)
+
+ema = ta.ema(source = src, length = emaLength)
+sma1 = ta.sma(source = src, length = sma1Length)
+sma2 = ta.sma(source = src, length = sma2Length)
+sma3 = ta.sma(source = src, length = sma3Length)
+
+if bar_index == 0
+    log.info("✅ MA CALCULATIONS COMPLETE | EMA: " + str.tostring(value = ema, format = format.mintick) + " | SMA1: " + str.tostring(value = sma1, format = format.mintick))
+
+// SMA 1 Slope (THE TREND INDICATOR)
+sma1Past = sma1TrendLookback <= bar_index ? sma1[sma1TrendLookback] : na
+sma1Height = sma1 - sma1Past
+sma1SlopeAngle = na(sma1Past) or sma1Height == 0 ? 0 : math.atan(sma1Height / sma1TrendLookback) * RADIANS_TO_DEGREES
+
+if bar_index == 0
+    log.info("📐 SLOPE CALC | Angle: " + str.tostring(value = sma1SlopeAngle, format = "#.####") + "° | Height: " + str.tostring(value = sma1Height, format = format.mintick))
+
+sma1Trend = math.abs(sma1SlopeAngle) < sma1FlatThreshold ? TREND_FLAT : sma1SlopeAngle > 0 ? TREND_UP : TREND_DOWN
+sma1CurrentColor = switch sma1Trend
+    TREND_UP => sma1ColorUp
+    TREND_DOWN => sma1ColorDown
+    => sma1ColorNeutral
+
+if bar_index == 0
+    log.info("🎨 COLOR CALC | Trend: " + sma1Trend)
+
+// === PLOTS ===
+if bar_index == 0
+    log.info("📈 EXECUTING PLOTS | Bar: 0")
+
+plot(series = emaVisible ? ema : na, title = "EMA", color = emaColor, linewidth = emaWidth, offset = emaOffset)
+plot(series = sma1Visible ? sma1 : na, title = "SMA 1", color = sma1CurrentColor, linewidth = sma1Width, offset = sma1Offset)
+plot(series = sma2Visible ? sma2 : na, title = "SMA 2", color = sma2Color, linewidth = sma2Width, offset = sma2Offset)
+plot(series = sma3Visible ? sma3 : na, title = "SMA 3", color = sma3Color, linewidth = sma3Width, offset = sma3Offset)
+
+if bar_index == 0
+    log.info("✅ PLOTS COMPLETE | Bar: 0")
+
+// === STOCHASTIC CYCLE DETECTION ===
+if bar_index == 0
+    log.info("📊 CALCULATING STOCHASTIC | Bar: 0")
+
+k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
+d = ta.sma(source = k, length = periodD)
+
+if bar_index == 0
+    log.info("✅ STOCHASTIC COMPLETE | k: " + str.tostring(value = k, format = "#.##") + " | d: " + str.tostring(value = d, format = "#.##"))
+
+// Startup logging (only on first bar)
+if bar_index == 0
+    log.info("🚀 MAs & Waves STARTED | Bar: 0 | Symbol: " + syminfo.tickerid + " | Timeframe: " + timeframe.period)
+
+// Cycle zones based on D
+inUpZone = d > lowerMidLevel  // Above 45
+inDownZone = d < upperMidLevel  // Below 55
+
+if bar_index == 0
+    log.info("🔷 ZONE CALC | inUpZone: " + str.tostring(value = inUpZone) + " | inDownZone: " + str.tostring(value = inDownZone))
+
+// Entering/exiting zones
+enteringUpZone = inUpZone and not inUpZone[1]
+exitingUpZone = not inUpZone and inUpZone[1] and d < upperMidLevel  // D returned to 55
+
+enteringDownZone = inDownZone and not inDownZone[1]
+exitingDownZone = not inDownZone and inDownZone[1] and d > lowerMidLevel  // D returned to 45
+
+// Track cycle highs and lows
+var bool inCycleHighZone = false
+var bool inCycleLowZone = false
+var float cycleHighPrice = na
+var float cycleLowPrice = na
+var int cycleHighBar = na
+var int cycleLowBar = na
+
+if bar_index == 0
+    log.info("✅ CYCLE VARS INITIALIZED | Bar: 0")
+
+// Enter cycle high zone when D > 45
+if enteringUpZone
+    inCycleHighZone := true
+    cycleHighPrice := high
+    cycleHighBar := bar_index
+    log.info("🔵 ENTERING CYCLE HIGH ZONE | Bar: " + str.tostring(bar_index) + " | D: " + str.tostring(d, "#.##") + " | High: " + str.tostring(high, format.mintick))
+
+// Enter cycle low zone when D < 55
+if enteringDownZone
+    inCycleLowZone := true
+    cycleLowPrice := low
+    cycleLowBar := bar_index
+    log.info("🔴 ENTERING CYCLE LOW ZONE | Bar: " + str.tostring(bar_index) + " | D: " + str.tostring(d, "#.##") + " | Low: " + str.tostring(low, format.mintick))
+
+// Track highest high in cycle high zone
+if inCycleHighZone and (na(cycleHighPrice) or high > cycleHighPrice)
+    cycleHighPrice := high
+    cycleHighBar := bar_index
+
+// Track lowest low in cycle low zone
+if inCycleLowZone and (na(cycleLowPrice) or low < cycleLowPrice)
+    cycleLowPrice := low
+    cycleLowBar := bar_index
+
+// Confirm cycles when D exits zones
+newCycleHigh = inCycleHighZone and exitingUpZone  // D returned to 55 from above 45
+newCycleLow = inCycleLowZone and exitingDownZone  // D returned to 45 from below 55
+
+// Exit zones after confirmation
+if newCycleHigh
+    inCycleHighZone := false
+    log.info("✅ CYCLE HIGH CONFIRMED | Bar: " + str.tostring(bar_index) + " | D: " + str.tostring(d, "#.##") + " | High: " + str.tostring(cycleHighPrice[1], format.mintick) + " at bar " + str.tostring(cycleHighBar[1]))
+
+if newCycleLow
+    inCycleLowZone := false
+    log.info("✅ CYCLE LOW CONFIRMED | Bar: " + str.tostring(bar_index) + " | D: " + str.tostring(d, "#.##") + " | Low: " + str.tostring(cycleLowPrice[1], format.mintick) + " at bar " + str.tostring(cycleLowBar[1]))
+
+// === WAVE COUNTING LOGIC ===
+if bar_index == 0
+    log.info("🌊 INITIALIZING WAVE COUNTING LOGIC | Bar: 0")
+
+// Trend state detection
+trendJustStartedUp = not (sma1SlopeAngle[1] > sma1FlatThreshold) and sma1SlopeAngle > sma1FlatThreshold
+trendJustStartedDown = not (sma1SlopeAngle[1] < -sma1FlatThreshold) and sma1SlopeAngle < -sma1FlatThreshold
+smaFlat = math.abs(sma1SlopeAngle) < sma1FlatThreshold
+smaFlat_prev = math.abs(sma1SlopeAngle[1]) < sma1FlatThreshold
+
+if bar_index == 0
+    log.info("📈 TREND STATE | JustUp: " + str.tostring(value = trendJustStartedUp) + " | JustDown: " + str.tostring(value = trendJustStartedDown) + " | Flat: " + str.tostring(value = smaFlat))
+
+// Wave tracking variables
+var int waveNumber = 0
+var string currentTrend = TREND_NONE
+var float wave1Value = na
+var float wave3Value = na
+var float wave5Value = na
+var float wave7Value = na
+var int wave1Bar = na
+var int wave3Bar = na
+var int wave5Bar = na
+var int wave7Bar = na
+
+if bar_index == 0
+    log.info("✅ WAVE VARS INITIALIZED | waveNumber: " + str.tostring(value = waveNumber) + " | currentTrend: " + currentTrend)
+
+// Cycle letter tracking
+var int cycleLetterIndex = 0
+
+// Retrace cycle tracking (for even waves)
+var array<float> retraceHighs = array.new<float>()
+var array<int> retraceHighBars = array.new<int>()
+var array<float> retraceLows = array.new<float>()
+var array<int> retraceLowBars = array.new<int>()
+
+if bar_index == 0
+    log.info("✅ RETRACE ARRAYS INITIALIZED | Bar: 0")
+
+// Periodic state logging (every 50 bars) to show indicator is running
+if bar_index % 50 == 0
+    trendName = currentTrend == TREND_NONE ? "NONE" : currentTrend == TREND_UP ? "UP" : currentTrend == TREND_DOWN ? "DOWN" : "FLAT"
+    log.info("📊 STATE | Bar: " + str.tostring(bar_index) + " | D: " + str.tostring(d, "#.##") + " | SMA1°: " + str.tostring(sma1SlopeAngle, "#.####") + " | Trend: " + trendName + " | Wave: " + str.tostring(waveNumber))
+
+// Reset on trend change or flat
+if trendJustStartedUp or trendJustStartedDown or (smaFlat and not smaFlat_prev)
+    waveNumber := 0
+    currentTrend := trendJustStartedUp ? TREND_UP : trendJustStartedDown ? TREND_DOWN : TREND_NONE
+    wave1Value := na
+    wave3Value := na
+    wave5Value := na
+    wave7Value := na
+    wave1Bar := na
+    wave3Bar := na
+    wave5Bar := na
+    wave7Bar := na
+    cycleLetterIndex := 0
+    array.clear(retraceHighs)
+    array.clear(retraceHighBars)
+    array.clear(retraceLows)
+    array.clear(retraceLowBars)
+    trendMsg = trendJustStartedUp ? "⬆️ SMA1 TREND UP" : trendJustStartedDown ? "⬇️ SMA1 TREND DOWN" : "➡️ SMA1 FLAT"
+    log.info(trendMsg + " | Bar: " + str.tostring(bar_index) + " | SMA1 Angle: " + str.tostring(sma1SlopeAngle, "#.####") + "° | Wave Reset to 0")
+
+// === DOWNTREND WAVE COUNTING ===
+if currentTrend == TREND_DOWN
+    if bar_index % 100 == 0
+        log.info("⬇️ IN DOWNTREND BLOCK | Bar: " + str.tostring(value = bar_index) + " | Wave: " + str.tostring(value = waveNumber))
+
+    // Cycle LOW detected
+    if newCycleLow
+        cycleLow = cycleLowPrice[1]
+        cycleLowBarIndex = cycleLowBar[1]
+
+        // Wave 1: First cycle low after SMA1 commits down
+        if waveNumber == 0
+            waveNumber := 1
+            wave1Value := cycleLow
+            wave1Bar := cycleLowBarIndex
+            cycleLetterIndex := 0
+            log.info("🌊 WAVE 1 DOWN CREATED | Bar: " + str.tostring(cycleLowBarIndex) + " | Low: " + str.tostring(cycleLow, format.mintick) + " | Current Trend: DOWN")
+
+            if showWaves
+                label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = "1",
+                     style = label.style_label_up, color = color.new(color = waveColor, transp = 100),
+                     textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
+                     textalign = text.align_center)
+
+            if showCycles
+                label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = "A",
+                     style = label.style_label_up, color = color.new(color = cycleColor, transp = 100),
+                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
+                     textalign = text.align_center, tooltip = "Cycle A")
+
+        // Odd waves (3, 5, 7, 9...) - Check commitment
+        else if waveNumber % 2 == 0
+            priorWaveValue = waveNumber == 2 ? wave1Value : waveNumber == 4 ? wave3Value : waveNumber == 6 ? wave5Value : wave7Value
+            log.info("🔍 CHECKING ODD WAVE COMMITMENT (DOWN) | Attempting Wave: " + str.tostring(waveNumber + 1) + " | Cycle Low: " + str.tostring(cycleLow, format.mintick) + " | Prior Wave " + str.tostring(waveNumber - 1) + ": " + str.tostring(priorWaveValue, format.mintick))
+
+            // Check if committed below prior wave
+            committed = false
+            for i = 0 to bar_index - cycleLowBarIndex
+                barIdx = cycleLowBarIndex + i
+                if barIdx <= bar_index
+                    o = open[bar_index - barIdx]
+                    c = close[bar_index - barIdx]
+                    l = low[bar_index - barIdx]
+
+                    // Close must be below prior wave AND real body must be at or below prior wave
+                    if c < priorWaveValue and o <= priorWaveValue
+                        committed := true
+                        break
+
+            log.info((committed ? "✅ COMMITTED" : "❌ NOT COMMITTED") + " | Wave " + str.tostring(waveNumber + 1) + " | Close/Open " + (committed ? "below" : "not below") + " prior wave")
+
+            if committed
+                // Valid wave
+                waveNumber += 1
+
+                if waveNumber == 3
+                    wave3Value := cycleLow
+                    wave3Bar := cycleLowBarIndex
+                else if waveNumber == 5
+                    wave5Value := cycleLow
+                    wave5Bar := cycleLowBarIndex
+                else if waveNumber == 7
+                    wave7Value := cycleLow
+                    wave7Bar := cycleLowBarIndex
+
+                cycleLetterIndex := 0
+                log.info("🌊 WAVE " + str.tostring(waveNumber) + " DOWN CREATED | Bar: " + str.tostring(cycleLowBarIndex) + " | Low: " + str.tostring(cycleLow, format.mintick))
+
+                if showWaves
+                    label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = str.tostring(waveNumber),
+                         style = label.style_label_up, color = color.new(color = waveColor, transp = 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
+                         textalign = text.align_center)
+
+                if showCycles
+                    label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = "A",
+                         style = label.style_label_up, color = color.new(color = cycleColor, transp = 100),
+                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
+                         textalign = text.align_center, tooltip = "Cycle A")
+
+                // Clear retrace tracking for next even wave
+                array.clear(retraceHighs)
+                array.clear(retraceHighBars)
+            else
+                // Failed wave
+                log.warning("❌ FAILED WAVE F" + str.tostring(waveNumber + 1) + " DOWN | Bar: " + str.tostring(cycleLowBarIndex) + " | Low: " + str.tostring(cycleLow, format.mintick) + " | Did not commit below wave " + str.tostring(waveNumber - 1))
+
+                if showWaves
+                    label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = "F" + str.tostring(waveNumber + 1),
+                         style = label.style_label_up, color = color.new(color = failedWaveColor, transp = 100),
+                         textcolor = failedWaveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
+                         textalign = text.align_center, tooltip = "Failed - did not commit below wave " + str.tostring(waveNumber))
+
+                if showCycles
+                    cycleLetterIndex += 1
+                    if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                        label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                             style = label.style_label_up, color = color.new(color = cycleColor, transp = 100),
+                             textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
+                             textalign = text.align_center)
+
+        // Just a cycle (after failed wave or between waves)
+        else if waveNumber % 2 == 1
+            // Store for even wave calculation
+            array.push(retraceLows, cycleLow)
+            array.push(retraceLowBars, cycleLowBarIndex)
+
+            if showCycles and waveNumber > 0
+                cycleLetterIndex += 1
+                if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                    label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                         style = label.style_label_up, color = color.new(color = cycleColor, transp = 100),
+                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
+                         textalign = text.align_center)
+
+    // Cycle HIGH detected (even waves - retraces)
+    if newCycleHigh and waveNumber % 2 == 1 and waveNumber > 0
+        cycleHigh = cycleHighPrice[1]
+        cycleHighBarIndex = cycleHighBar[1]
+
+        // Store this retrace high
+        array.push(retraceHighs, cycleHigh)
+        array.push(retraceHighBars, cycleHighBarIndex)
+
+        if showCycles
+            cycleLetterIndex += 1
+            if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                     style = label.style_label_down, color = color.new(color = cycleColor, transp = 100),
+                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
+                     textalign = text.align_center)
+
+    // When next odd wave confirms, find highest retrace high for even wave
+    if newCycleLow and waveNumber % 2 == 1 and waveNumber > 0 and array.size(retraceHighs) > 0
+        // Find highest high among retrace cycles
+        highestHigh = array.get(retraceHighs, 0)
+        highestBar = array.get(retraceHighBars, 0)
+
+        for i = 1 to array.size(retraceHighs) - 1
+            if array.get(retraceHighs, i) > highestHigh
+                highestHigh := array.get(retraceHighs, i)
+                highestBar := array.get(retraceHighBars, i)
+
+        log.info("🌊 EVEN WAVE " + str.tostring(waveNumber + 1) + " DOWN (RETROACTIVE) | Bar: " + str.tostring(highestBar) + " | High: " + str.tostring(highestHigh, format.mintick) + " | Highest retrace among " + str.tostring(array.size(retraceHighs)) + " cycles")
+
+        // This was the even wave
+        if showWaves
+            label.new(x = highestBar, y = high[bar_index - highestBar], text = str.tostring(waveNumber + 1),
+                 style = label.style_label_down, color = color.new(color = waveColor, transp = 100),
+                 textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
+                 textalign = text.align_center, tooltip = "Wave " + str.tostring(waveNumber + 1) + " (highest retrace)")
+
+// === UPTREND WAVE COUNTING ===
+if currentTrend == TREND_UP
+    if bar_index % 100 == 0
+        log.info("⬆️ IN UPTREND BLOCK | Bar: " + str.tostring(value = bar_index) + " | Wave: " + str.tostring(value = waveNumber))
+
+    // Cycle HIGH detected
+    if newCycleHigh
+        cycleHigh = cycleHighPrice[1]
+        cycleHighBarIndex = cycleHighBar[1]
+
+        // Wave 1: First cycle high after SMA1 commits up
+        if waveNumber == 0
+            waveNumber := 1
+            wave1Value := cycleHigh
+            wave1Bar := cycleHighBarIndex
+            cycleLetterIndex := 0
+            log.info("🌊 WAVE 1 UP CREATED | Bar: " + str.tostring(cycleHighBarIndex) + " | High: " + str.tostring(cycleHigh, format.mintick) + " | Current Trend: UP")
+
+            if showWaves
+                label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = "1",
+                     style = label.style_label_down, color = color.new(color = waveColor, transp = 100),
+                     textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
+                     textalign = text.align_center)
+
+            if showCycles
+                label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = "A",
+                     style = label.style_label_down, color = color.new(color = cycleColor, transp = 100),
+                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
+                     textalign = text.align_center, tooltip = "Cycle A")
+
+        // Odd waves (3, 5, 7, 9...) - Check commitment
+        else if waveNumber % 2 == 0
+            priorWaveValue = waveNumber == 2 ? wave1Value : waveNumber == 4 ? wave3Value : waveNumber == 6 ? wave5Value : wave7Value
+            log.info("🔍 CHECKING ODD WAVE COMMITMENT (UP) | Attempting Wave: " + str.tostring(waveNumber + 1) + " | Cycle High: " + str.tostring(cycleHigh, format.mintick) + " | Prior Wave " + str.tostring(waveNumber - 1) + ": " + str.tostring(priorWaveValue, format.mintick))
+
+            // Check if committed above prior wave
+            committed = false
+            for i = 0 to bar_index - cycleHighBarIndex
+                barIdx = cycleHighBarIndex + i
+                if barIdx <= bar_index
+                    o = open[bar_index - barIdx]
+                    c = close[bar_index - barIdx]
+                    h = high[bar_index - barIdx]
+
+                    // Close must be above prior wave AND real body must be at or above prior wave
+                    if c > priorWaveValue and o >= priorWaveValue
+                        committed := true
+                        break
+
+            log.info((committed ? "✅ COMMITTED" : "❌ NOT COMMITTED") + " | Wave " + str.tostring(waveNumber + 1) + " | Close/Open " + (committed ? "above" : "not above") + " prior wave")
+
+            if committed
+                // Valid wave
+                waveNumber += 1
+
+                if waveNumber == 3
+                    wave3Value := cycleHigh
+                    wave3Bar := cycleHighBarIndex
+                else if waveNumber == 5
+                    wave5Value := cycleHigh
+                    wave5Bar := cycleHighBarIndex
+                else if waveNumber == 7
+                    wave7Value := cycleHigh
+                    wave7Bar := cycleHighBarIndex
+
+                cycleLetterIndex := 0
+                log.info("🌊 WAVE " + str.tostring(waveNumber) + " UP CREATED | Bar: " + str.tostring(cycleHighBarIndex) + " | High: " + str.tostring(cycleHigh, format.mintick))
+
+                if showWaves
+                    label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = str.tostring(waveNumber),
+                         style = label.style_label_down, color = color.new(color = waveColor, transp = 100),
+                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
+                         textalign = text.align_center)
+
+                if showCycles
+                    label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = "A",
+                         style = label.style_label_down, color = color.new(color = cycleColor, transp = 100),
+                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
+                         textalign = text.align_center, tooltip = "Cycle A")
+
+                // Clear retrace tracking for next even wave
+                array.clear(retraceLows)
+                array.clear(retraceLowBars)
+            else
+                // Failed wave
+                log.warning("❌ FAILED WAVE F" + str.tostring(waveNumber + 1) + " UP | Bar: " + str.tostring(cycleHighBarIndex) + " | High: " + str.tostring(cycleHigh, format.mintick) + " | Did not commit above wave " + str.tostring(waveNumber - 1))
+
+                if showWaves
+                    label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = "F" + str.tostring(waveNumber + 1),
+                         style = label.style_label_down, color = color.new(color = failedWaveColor, transp = 100),
+                         textcolor = failedWaveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
+                         textalign = text.align_center, tooltip = "Failed - did not commit above wave " + str.tostring(waveNumber))
+
+                if showCycles
+                    cycleLetterIndex += 1
+                    if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                        label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                             style = label.style_label_down, color = color.new(color = cycleColor, transp = 100),
+                             textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
+                             textalign = text.align_center)
+
+        // Just a cycle (after failed wave or between waves)
+        else if waveNumber % 2 == 1
+            // Store for even wave calculation
+            array.push(retraceHighs, cycleHigh)
+            array.push(retraceHighBars, cycleHighBarIndex)
+
+            if showCycles and waveNumber > 0
+                cycleLetterIndex += 1
+                if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                    label.new(x = cycleHighBarIndex, y = high[bar_index - cycleHighBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                         style = label.style_label_down, color = color.new(color = cycleColor, transp = 100),
+                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
+                         textalign = text.align_center)
+
+    // Cycle LOW detected (even waves - retraces)
+    if newCycleLow and waveNumber % 2 == 1 and waveNumber > 0
+        cycleLow = cycleLowPrice[1]
+        cycleLowBarIndex = cycleLowBar[1]
+
+        // Store this retrace low
+        array.push(retraceLows, cycleLow)
+        array.push(retraceLowBars, cycleLowBarIndex)
+
+        if showCycles
+            cycleLetterIndex += 1
+            if cycleLetterIndex < array.size(CYCLE_LETTERS)
+                label.new(x = cycleLowBarIndex, y = low[bar_index - cycleLowBarIndex], text = array.get(CYCLE_LETTERS, cycleLetterIndex),
+                     style = label.style_label_up, color = color.new(color = cycleColor, transp = 100),
+                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
+                     textalign = text.align_center)
+
+    // When next odd wave confirms, find lowest retrace low for even wave
+    if newCycleHigh and waveNumber % 2 == 1 and waveNumber > 0 and array.size(retraceLows) > 0
+        // Find lowest low among retrace cycles
+        lowestLow = array.get(retraceLows, 0)
+        lowestBar = array.get(retraceLowBars, 0)
+
+        for i = 1 to array.size(retraceLows) - 1
+            if array.get(retraceLows, i) < lowestLow
+                lowestLow := array.get(retraceLows, i)
+                lowestBar := array.get(retraceLowBars, i)
+
+        log.info("🌊 EVEN WAVE " + str.tostring(waveNumber + 1) + " UP (RETROACTIVE) | Bar: " + str.tostring(lowestBar) + " | Low: " + str.tostring(lowestLow, format.mintick) + " | Lowest retrace among " + str.tostring(array.size(retraceLows)) + " cycles")
+
+        // This was the even wave
+        if showWaves
+            label.new(x = lowestBar, y = low[bar_index - lowestBar], text = str.tostring(waveNumber + 1),
+                 style = label.style_label_up, color = color.new(color = waveColor, transp = 100),
+                 textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
+                 textalign = text.align_center, tooltip = "Wave " + str.tostring(waveNumber + 1) + " (lowest retrace)")
+
+// === END OF SCRIPT ===
+if bar_index == 0
+    log.info("🏁 SCRIPT EXECUTION COMPLETE | Bar: 0 | All calculations finished successfully")
