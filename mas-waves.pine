@@ -153,6 +153,29 @@ method reset(WaveCounter this, string newTrend) =>
 
 
 
+// === LABELS ===
+var array<int> label_x_array = array.new<int>()
+var array<float> label_y_array = array.new<float>()
+var array<string> label_text_array = array.new<string>()
+var array<string> label_yloc_array = array.new<string>()
+var array<color> label_color_array = array.new<color>()
+var array<color> label_textcolor_array = array.new<color>()
+var array<string> label_size_array = array.new<string>()
+var array<string> label_style_array = array.new<string>()
+var array<string> label_tooltip_array = array.new<string>()
+
+f_addLabel(int x, float y, string text, string yloc, color color, color textcolor, string size, string style, string tooltip) =>
+    array.push(label_x_array, x)
+    array.push(label_y_array, y)
+    array.push(label_text_array, text)
+    array.push(label_yloc_array, yloc)
+    array.push(label_color_array, color)
+    array.push(label_textcolor_array, textcolor)
+    array.push(label_size_array, size)
+    array.push(label_style_array, style)
+    array.push(label_tooltip_array, tooltip)
+
+
 // === CALCULATIONS ===
 
 ema = ta.ema(source = src, length = emaLength)
@@ -262,16 +285,9 @@ if waveCounter.currentTrend == TREND_DOWN
             waveCounter.cycleLetterIndex := 0
 
             if showWaves
-                label.new(cycleLowBarIndex, na, "1",
-                     style = label.style_label_up, color = color.new(waveColor, 100),
-                     textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
-                     textalign = text.align_center)
-
+                f_addLabel(cycleLowBarIndex, cycleLow, "1", yloc.belowbar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_up, "")
             if showCycles
-                label.new(cycleLowBarIndex, na, "A",
-                     style = label.style_label_up, color = color.new(cycleColor, 100),
-                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
-                     textalign = text.align_center, tooltip = "Cycle A")
+                f_addLabel(cycleLowBarIndex, cycleLow, "A", yloc.belowbar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_up, "Cycle A")
 
         // Odd waves (3, 5, 7, 9...) - Check commitment
         else if waveCounter.waveNumber % 2 == 0
@@ -279,17 +295,10 @@ if waveCounter.currentTrend == TREND_DOWN
 
             // Check if committed below prior wave
             committed = false
-            for i = 0 to bar_index - cycleLowBarIndex
-                barIdx = cycleLowBarIndex + i
-                if barIdx <= bar_index
-                    o = open[bar_index - barIdx]
-                    c = close[bar_index - barIdx]
-                    l = low[bar_index - barIdx]
-
-                    // Close must be below prior wave AND real body must be at or below prior wave
-                    if c < priorWaveValue and o <= priorWaveValue
-                        committed := true
-                        break
+            barsSinceCycle = bar_index - cycleLowBarIndex
+            lowestSince = ta.lowest(low, barsSinceCycle + 1)
+            if lowestSince < priorWaveValue
+                committed := true
 
             if committed
                 // Valid wave
@@ -306,86 +315,51 @@ if waveCounter.currentTrend == TREND_DOWN
                     waveCounter.wave7Bar := cycleLowBarIndex
 
                 waveCounter.cycleLetterIndex := 0
-
                 if showWaves
-                    label.new(cycleLowBarIndex, na, str.tostring(waveCounter.waveNumber),
-                         style = label.style_label_up, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
-                         textalign = text.align_center)
-
+                    f_addLabel(cycleLowBarIndex, cycleLow, str.tostring(waveCounter.waveNumber), yloc.belowbar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_up, "")
                 if showCycles
-                    label.new(cycleLowBarIndex, na, "A",
-                         style = label.style_label_up, color = color.new(cycleColor, 100),
-                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
-                         textalign = text.align_center, tooltip = "Cycle A")
-
-                // Clear retrace tracking for next even wave
+                    f_addLabel(cycleLowBarIndex, cycleLow, "A", yloc.belowbar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_up, "Cycle A")
                 array.clear(waveCounter.retraceHighs)
                 array.clear(waveCounter.retraceHighBars)
             else
                 // Failed wave
                 if showWaves
-                    label.new(cycleLowBarIndex, na, "F" + str.tostring(waveCounter.waveNumber + 1),
-                         style = label.style_label_up, color = color.new(failedWaveColor, 100),
-                         textcolor = failedWaveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
-                         textalign = text.align_center, tooltip = "Failed - did not commit below wave " + str.tostring(waveCounter.waveNumber))
-
+                    f_addLabel(cycleLowBarIndex, cycleLow, "F" + str.tostring(waveCounter.waveNumber + 1), yloc.belowbar, color.new(failedWaveColor, 100), failedWaveColor, waveLabelSizeConst, label.style_label_up, "Failed - did not commit below wave " + str.tostring(waveCounter.waveNumber))
                 if showCycles
                     waveCounter.cycleLetterIndex += 1
                     if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                        label.new(cycleLowBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                             style = label.style_label_up, color = color.new(cycleColor, 100),
-                             textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
-                             textalign = text.align_center)
+                        f_addLabel(cycleLowBarIndex, cycleLow, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.belowbar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_up, "")
 
         // Just a cycle (after failed wave or between waves)
         else if waveCounter.waveNumber % 2 == 1
-            // Store for even wave calculation
             array.push(waveCounter.retraceLows, cycleLow)
             array.push(waveCounter.retraceLowBars, cycleLowBarIndex)
-
             if showCycles and waveCounter.waveNumber > 0
                 waveCounter.cycleLetterIndex += 1
                 if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                    label.new(cycleLowBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                         style = label.style_label_up, color = color.new(cycleColor, 100),
-                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
-                         textalign = text.align_center)
+                    f_addLabel(cycleLowBarIndex, cycleLow, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.belowbar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_up, "")
 
     // Cycle HIGH detected (even waves - retraces)
     if newCycleHigh and waveCounter.waveNumber % 2 == 1 and waveCounter.waveNumber > 0
         cycleHigh = cycleHighPrice[1]
         cycleHighBarIndex = cycleHighBar[1]
-
-        // Store this retrace high
         array.push(waveCounter.retraceHighs, cycleHigh)
         array.push(waveCounter.retraceHighBars, cycleHighBarIndex)
-
         if showCycles
             waveCounter.cycleLetterIndex += 1
             if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                label.new(cycleHighBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                     style = label.style_label_down, color = color.new(cycleColor, 100),
-                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
-                     textalign = text.align_center)
+                f_addLabel(cycleHighBarIndex, cycleHigh, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.abovebar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_down, "")
 
     // When next odd wave confirms, find highest retrace high for even wave
     if newCycleLow and waveCounter.waveNumber % 2 == 1 and waveCounter.waveNumber > 0 and array.size(waveCounter.retraceHighs) > 0
-        // Find highest high among retrace cycles
         highestHigh = array.get(waveCounter.retraceHighs, 0)
         highestBar = array.get(waveCounter.retraceHighBars, 0)
-
         for i = 1 to array.size(waveCounter.retraceHighs) - 1
             if array.get(waveCounter.retraceHighs, i) > highestHigh
                 highestHigh := array.get(waveCounter.retraceHighs, i)
                 highestBar := array.get(waveCounter.retraceHighBars, i)
-
-        // This was the even wave
         if showWaves
-            label.new(highestBar, na, str.tostring(waveCounter.waveNumber + 1),
-                 style = label.style_label_down, color = color.new(waveColor, 100),
-                 textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
-                 textalign = text.align_center, tooltip = "Wave " + str.tostring(waveCounter.waveNumber + 1) + " (highest retrace)")
+            f_addLabel(highestBar, highestHigh, str.tostring(waveCounter.waveNumber + 1), yloc.abovebar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_down, "Wave " + str.tostring(waveCounter.waveNumber + 1) + " (highest retrace)")
 
 // === UPTREND WAVE COUNTING ===
 if waveCounter.currentTrend == TREND_UP
@@ -400,18 +374,10 @@ if waveCounter.currentTrend == TREND_UP
             waveCounter.wave1Value := cycleHigh
             waveCounter.wave1Bar := cycleHighBarIndex
             waveCounter.cycleLetterIndex := 0
-
             if showWaves
-                label.new(cycleHighBarIndex, na, "1",
-                     style = label.style_label_down, color = color.new(waveColor, 100),
-                     textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
-                     textalign = text.align_center)
-
+                f_addLabel(cycleHighBarIndex, cycleHigh, "1", yloc.abovebar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_down, "")
             if showCycles
-                label.new(cycleHighBarIndex, na, "A",
-                     style = label.style_label_down, color = color.new(cycleColor, 100),
-                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
-                     textalign = text.align_center, tooltip = "Cycle A")
+                f_addLabel(cycleHighBarIndex, cycleHigh, "A", yloc.abovebar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_down, "Cycle A")
 
         // Odd waves (3, 5, 7, 9...) - Check commitment
         else if waveCounter.waveNumber % 2 == 0
@@ -419,22 +385,14 @@ if waveCounter.currentTrend == TREND_UP
 
             // Check if committed above prior wave
             committed = false
-            for i = 0 to bar_index - cycleHighBarIndex
-                barIdx = cycleHighBarIndex + i
-                if barIdx <= bar_index
-                    o = open[bar_index - barIdx]
-                    c = close[bar_index - barIdx]
-                    h = high[bar_index - barIdx]
-
-                    // Close must be above prior wave AND real body must be at or above prior wave
-                    if c > priorWaveValue and o >= priorWaveValue
-                        committed := true
-                        break
+            barsSinceCycle = bar_index - cycleHighBarIndex
+            highestSince = ta.highest(high, barsSinceCycle + 1)
+            if highestSince > priorWaveValue
+                committed := true
 
             if committed
                 // Valid wave
                 waveCounter.waveNumber += 1
-
                 if waveCounter.waveNumber == 3
                     waveCounter.wave3Value := cycleHigh
                     waveCounter.wave3Bar := cycleHighBarIndex
@@ -444,85 +402,68 @@ if waveCounter.currentTrend == TREND_UP
                 else if waveCounter.waveNumber == 7
                     waveCounter.wave7Value := cycleHigh
                     waveCounter.wave7Bar := cycleHighBarIndex
-
                 waveCounter.cycleLetterIndex := 0
-
                 if showWaves
-                    label.new(cycleHighBarIndex, na, str.tostring(waveCounter.waveNumber),
-                         style = label.style_label_down, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
-                         textalign = text.align_center)
-
+                    f_addLabel(cycleHighBarIndex, cycleHigh, str.tostring(waveCounter.waveNumber), yloc.abovebar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_down, "")
                 if showCycles
-                    label.new(cycleHighBarIndex, na, "A",
-                         style = label.style_label_down, color = color.new(cycleColor, 100),
-                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
-                         textalign = text.align_center, tooltip = "Cycle A")
-
-                // Clear retrace tracking for next even wave
+                    f_addLabel(cycleHighBarIndex, cycleHigh, "A", yloc.abovebar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_down, "Cycle A")
                 array.clear(waveCounter.retraceLows)
                 array.clear(waveCounter.retraceLowBars)
             else
                 // Failed wave
                 if showWaves
-                    label.new(cycleHighBarIndex, na, "F" + str.tostring(waveCounter.waveNumber + 1),
-                         style = label.style_label_down, color = color.new(failedWaveColor, 100),
-                         textcolor = failedWaveColor, size = waveLabelSizeConst, yloc = yloc.abovebar,
-                         textalign = text.align_center, tooltip = "Failed - did not commit above wave " + str.tostring(waveCounter.waveNumber))
-
+                    f_addLabel(cycleHighBarIndex, cycleHigh, "F" + str.tostring(waveCounter.waveNumber + 1), yloc.abovebar, color.new(failedWaveColor, 100), failedWaveColor, waveLabelSizeConst, label.style_label_down, "Failed - did not commit above wave " + str.tostring(waveCounter.waveNumber))
                 if showCycles
                     waveCounter.cycleLetterIndex += 1
                     if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                        label.new(cycleHighBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                             style = label.style_label_down, color = color.new(cycleColor, 100),
-                             textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
-                             textalign = text.align_center)
-
+                        f_addLabel(cycleHighBarIndex, cycleHigh, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.abovebar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_down, "")
         // Just a cycle (after failed wave or between waves)
         else if waveCounter.waveNumber % 2 == 1
-            // Store for even wave calculation
             array.push(waveCounter.retraceHighs, cycleHigh)
             array.push(waveCounter.retraceHighBars, cycleHighBarIndex)
-
             if showCycles and waveCounter.waveNumber > 0
                 waveCounter.cycleLetterIndex += 1
                 if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                    label.new(cycleHighBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                         style = label.style_label_down, color = color.new(cycleColor, 100),
-                         textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.abovebar,
-                         textalign = text.align_center)
+                    f_addLabel(cycleHighBarIndex, cycleHigh, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.abovebar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_down, "")
 
     // Cycle LOW detected (even waves - retraces)
     if newCycleLow and waveCounter.waveNumber % 2 == 1 and waveCounter.waveNumber > 0
         cycleLow = cycleLowPrice[1]
         cycleLowBarIndex = cycleLowBar[1]
-
-        // Store this retrace low
         array.push(waveCounter.retraceLows, cycleLow)
         array.push(waveCounter.retraceLowBars, cycleLowBarIndex)
-
         if showCycles
             waveCounter.cycleLetterIndex += 1
             if waveCounter.cycleLetterIndex < array.size(CYCLE_LETTERS)
-                label.new(cycleLowBarIndex, na, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex),
-                     style = label.style_label_up, color = color.new(cycleColor, 100),
-                     textcolor = cycleColor, size = cycleLabelSizeConst, yloc = yloc.belowbar,
-                     textalign = text.align_center)
+                f_addLabel(cycleLowBarIndex, cycleLow, array.get(CYCLE_LETTERS, waveCounter.cycleLetterIndex), yloc.belowbar, color.new(cycleColor, 100), cycleColor, cycleLabelSizeConst, label.style_label_up, "")
 
     // When next odd wave confirms, find lowest retrace low for even wave
     if newCycleHigh and waveCounter.waveNumber % 2 == 1 and waveCounter.waveNumber > 0 and array.size(waveCounter.retraceLows) > 0
         // Find lowest low among retrace cycles
         lowestLow = array.get(waveCounter.retraceLows, 0)
         lowestBar = array.get(waveCounter.retraceLowBars, 0)
-
         for i = 1 to array.size(waveCounter.retraceLows) - 1
             if array.get(waveCounter.retraceLows, i) < lowestLow
                 lowestLow := array.get(waveCounter.retraceLows, i)
                 lowestBar := array.get(waveCounter.retraceLowBars, i)
-
         // This was the even wave
         if showWaves
-            label.new(lowestBar, na, str.tostring(waveCounter.waveNumber + 1),
-                 style = label.style_label_up, color = color.new(waveColor, 100),
-                 textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.belowbar,
-                 textalign = text.align_center, tooltip = "Wave " + str.tostring(waveCounter.waveNumber + 1) + " (lowest retrace)")
+            f_addLabel(lowestBar, lowestLow, str.tostring(waveCounter.waveNumber + 1), yloc.belowbar, color.new(waveColor, 100), waveColor, waveLabelSizeConst, label.style_label_up, "Wave " + str.tostring(waveCounter.waveNumber + 1) + " (lowest retrace)")
+
+// === DRAW LABELS ===
+if barstate.islast
+    for i = 0 to array.size(label_x_array) - 1
+        label.new(
+             x = array.get(label_x_array, i),
+             y = array.get(label_y_array, i),
+             text = array.get(label_text_array, i),
+             xloc = xloc.bar_index,
+             yloc = array.get(label_yloc_array, i),
+             color = array.get(label_color_array, i),
+             style = array.get(label_style_array, i),
+             textcolor = array.get(label_textcolor_array, i),
+             size = array.get(label_size_array, i),
+             textalign = text.align_center,
+             tooltip = array.get(label_tooltip_array, i)
+        )
+
