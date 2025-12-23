@@ -215,7 +215,7 @@ if barstate.islast
                 bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
 
             // Format and pad strings to fixed width
-            priceFormatted = str.tostring(price)
+            priceFormatted = str.format("{0, number, #.00}", price)
             volFormatted = f_formatVolume(vol)
             timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
 
