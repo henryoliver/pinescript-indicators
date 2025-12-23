@@ -224,10 +224,10 @@ if barstate.islast
             timeStr = addPadding(padString(timeFormatted, timeWidth), cellPadding)
 
             // Create cells
-            table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-            table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+            table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_format = text.format.bold)
+            table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_format = text.format.bold)
             if showTime
-                table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+                table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_format = text.format.bold)
 
         // Fill empty rows
         if tapePrices.size() < tapeLength
