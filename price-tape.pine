@@ -225,15 +225,9 @@ if barstate.islast
 
             // Create cells
             table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-            if isLarge
-                table.cell_set_text_formatting(table_id = tape, column = 0, row = row, format = text.format.bold)
             table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-            if isLarge
-                table.cell_set_text_formatting(table_id = tape, column = 1, row = row, format = text.format.bold)
             if showTime
                 table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-                if isLarge
-                    table.cell_set_text_formatting(table_id = tape, column = 2, row = row, format = text.format.bold)
 
         // Fill empty rows
         if tapePrices.size() < tapeLength
