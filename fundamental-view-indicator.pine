@@ -65,13 +65,13 @@ string industry = syminfo.industry
 // Market data
 float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")[1]
 float mktCap = na(tso) or na(close[1]) ? na : tso * close[1]
-string mktCapStr = na(mktCap) ? "N/A" : mktCap >= BILLION ? str.format("{0}B", math.round(mktCap/BILLION, 1)) : str.format("{0}M", math.round(mktCap/MILLION, 1))
+string mktCapStr = na(mktCap) ? "N/A" : str.tostring(mktCap, format.volume)
 
 float roe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY")[1]
 string roeStr = na(roe) ? "N/A" : str.format("{0}%", math.round(roe, 1))
 
 float floatShares = request.financial(symbol = syminfo.tickerid, financial_id = "FLOAT_SHARES_OUTSTANDING", period = "FY")[1]
-string floatStr = na(floatShares) ? "N/A" : floatShares >= BILLION ? str.format("{0}B", math.round(floatShares/BILLION, 1)) : str.format("{0}M", math.round(floatShares/MILLION, 1))
+string floatStr = na(floatShares) ? "N/A" : str.tostring(floatShares, format.volume)
 
 // IPO Date
 var string ipoDate = "N/A"
@@ -431,11 +431,7 @@ if barstate.islastconfirmedhistory
     // Row 21: NEXT QTR
     string epsEstStr = na(epsEstimate) ? "XX" : str.format("{0}", math.round(epsEstimate, 2))
     string epsYoyStrNext = na(epsYoyGrowth) ? "XX" : str.format("{0}%", math.round(epsYoyGrowth, 1))
-    string revEstStr = na(revenueEstimate) ? "XX" :
-     revenueEstimate >= BILLION ? str.format("{0,number,#.00}B", revenueEstimate / BILLION) :
-     revenueEstimate >= MILLION ? str.format("{0,number,#.00}M", revenueEstimate / MILLION) :
-     revenueEstimate >= 1000 ? str.format("{0,number,#}K", revenueEstimate / 1000) :
-     str.format("{0,number}", revenueEstimate)
+    string revEstStr = na(revenueEstimate) ? "XX" : str.tostring(revenueEstimate, format.currency)
 
     string revYoyStrNext = na(revenueYoyGrowth) ? "XX" : str.format("{0}%", math.round(revenueYoyGrowth, 1))
     
@@ -491,16 +487,8 @@ if barstate.islastconfirmedhistory
         string epsSurpriseVal = na(epsSurprise) ? "XX" : str.format("{0}%", math.round(epsSurprise, 1))
         string epsYoyStr = na(epsYoyVal) ? "XX" : str.format("{0}%", math.round(epsYoyVal, 1))
         
-        string revenueEstVal = na(revenueEst) ? "XX" : 
-            revenueEst >= BILLION ? str.format("{0,number,#.00}B", revenueEst / BILLION) :
-            revenueEst >= MILLION ? str.format("{0,number,#.00}M", revenueEst / MILLION) :
-            revenueEst >= 1000 ? str.format("{0,number,#}K", revenueEst / 1000) :
-            str.format("{0,number}", revenueEst)
-        string revenueVal = na(revenue) ? "XX" :
-            revenue >= BILLION ? str.format("{0,number,#.00}B", revenue / BILLION) :
-            revenue >= MILLION ? str.format("{0,number,#.00}M", revenue / MILLION) :
-            revenue >= 1000 ? str.format("{0,number,#}K", revenue / 1000) :
-            str.format("{0,number}", revenue)
+        string revenueEstVal = na(revenueEst) ? "XX" : str.tostring(revenueEst, format.currency)
+        string revenueVal = na(revenue) ? "XX" : str.tostring(revenue, format.currency)
         string revenueSurpriseVal = na(revenueSurprise) ? "XX" : str.format("{0}%", math.round(revenueSurprise, 1))
         string revenueYoyStr = na(revenueYoyVal) ? "XX" : str.format("{0}%", math.round(revenueYoyVal, 1))
         
