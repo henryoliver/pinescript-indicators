@@ -228,6 +228,16 @@ if barstate.islast
             table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
             if showTime
                 table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+
+        // Fill empty rows
+        if tapePrices.size() < tapeLength
+            emptyStr = addPadding("", cellPadding)
+            for i = tapePrices.size() to tapeLength - 1
+                row = i + 1
+                table.cell(table_id = tape, column = 0, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+                table.cell(table_id = tape, column = 1, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+                if showTime
+                    table.cell(table_id = tape, column = 2, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
     else
         // Show waiting message
         waitingMsg = addPadding("Waiting for real-time data...", cellPadding)
@@ -236,14 +246,4 @@ if barstate.islast
             table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 2, end_row = 1)
         else
             table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 1, end_row = 1)
-
-    // Fill empty rows
-    if tapePrices.size() < tapeLength
-        emptyStr = addPadding("", cellPadding)
-        for i = tapePrices.size() to tapeLength - 1
-            row = i + 1
-            table.cell(table_id = tape, column = 0, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
-            table.cell(table_id = tape, column = 1, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
-            if showTime
-                table.cell(table_id = tape, column = 2, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
 
