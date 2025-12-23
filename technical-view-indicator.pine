@@ -70,12 +70,7 @@ float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_S
 float mktCap = na(tso) ? na : tso * close
 float mktCapBillions = na(mktCap) ? na : mktCap / BILLION
 
-string mktCapFormatted = na(mktCap) ? "-" :
-     mktCap >= BILLION ? str.format("{0,number,#.0}B", mktCap / BILLION) :
-     mktCap >= MILLION ? str.format("{0,number,#.0}M", mktCap / MILLION) :
-     mktCap >= THOUSAND ? str.format("{0,number,#}K", mktCap / THOUSAND) :
-     str.format("{0,number}", mktCap)
-string mktCapText = "CAP " + mktCapFormatted
+string mktCapText = "CAP " + (na(mktCap) ? "-" : str.format("{0,volume}", mktCap))
 color mktCapColor = na(mktCapBillions) ? textColor : 
      mktCapBillions <= mktCapBelow ? aboveColor : textColor
 string mktCapTooltip = str.format("Market cap. Below ${0}B is ideal for explosive momentum moves", mktCapBelow)
@@ -91,12 +86,7 @@ var float floatSharesBelow = input.float(100, "▲ - ▼ High (Above M)", minval
 float floatShares = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = syminfo.shares_outstanding_float, lookahead = barmerge.lookahead_on)
 float floatSharesMillions = na(floatShares) ? na : floatShares / MILLION
 
-string floatSharesFormatted = na(floatShares) ? "-" :
-     floatShares >= MILLION ? str.format("{0,number,#.0}M", floatShares / MILLION) :
-     floatShares >= THOUSAND ? str.format("{0,number,#.0}K", floatShares / THOUSAND) :
-     str.format("{0,number}", floatShares)
-
-string floatSharesText = "FLT " + floatSharesFormatted
+string floatSharesText = "FLT " + (na(floatShares) ? "-" : str.format("{0,volume}", floatShares))
 color floatSharesColor = na(floatSharesMillions) ? textColor : 
      floatSharesMillions <= floatSharesAbove ? aboveColor : 
      floatSharesMillions >= floatSharesBelow ? belowColor : textColor
@@ -114,7 +104,7 @@ var float volumeBelow = input.float(200000, "▲ - ▼ Weak (Below)", minval = 0
 
 float volumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume, length = volumePeriod), lookahead = barmerge.lookahead_on)
 
-string volumeText = "VOL " + (na(volumeTicker) ? "-" : str.format("{0, number, #,###}", volumeTicker))
+string volumeText = "VOL " + (na(volumeTicker) ? "-" : str.format("{0,volume}", volumeTicker))
 color volumeColor = volumeTicker >= volumeAbove ? aboveColor : 
      volumeTicker <= volumeBelow ? belowColor : textColor
 string volumeTooltip = str.format("{0}-day average daily volume. Above {1, number, #,###} shares indicates strong liquidity",
@@ -131,12 +121,7 @@ var float dollarVolumeBelow = input.float(10000000, "▲ - ▼ Weak (Below)", mi
 
 float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume * close, length = dollarVolumePeriod), lookahead = barmerge.lookahead_on)
 
-string dollarVolumeFormatted = na(dollarVolumeTicker) ? "-" :
-     dollarVolumeTicker >= BILLION ? str.format("${0,number,#.00}B", dollarVolumeTicker / BILLION) :
-     dollarVolumeTicker >= MILLION ? str.format("${0,number,#.00}M", dollarVolumeTicker / MILLION) :
-     dollarVolumeTicker >= THOUSAND ? str.format("${0,number,#}K", dollarVolumeTicker / THOUSAND) :
-     str.format("${0,number}", dollarVolumeTicker)
-string dollarVolumeText = "DVOL " + dollarVolumeFormatted
+string dollarVolumeText = "DVOL " + (na(dollarVolumeTicker) ? "-" : str.format("{0,currency}", dollarVolumeTicker))
 color dollarVolumeColor = dollarVolumeTicker >= dollarVolumeAbove ? aboveColor : 
      dollarVolumeTicker <= dollarVolumeBelow ? belowColor : textColor
 string dollarVolumeTooltip = str.format("{0}-day average dollar volume. Above ${1, number, #,###} indicates strong institutional participation",

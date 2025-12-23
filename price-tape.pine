@@ -76,22 +76,7 @@ sizeWidth = input.int(defval = 8, title = "Size Column Width", minval = 5, maxva
 timeWidth = input.int(defval = 8, title = "Time Column Width", minval = 5, maxval = 15,
      tooltip = "Character width for time column", group = g5)
 
-// === HELPER FUNCTIONS ===
-// Format volume with K suffix
-formatVolume(float vol) =>
-    if na(vol) or vol == 0
-        "0"
-    else if vol >= 1000
-        volK = vol / 1000
-        // Format with appropriate decimals
-        if volK >= 100
-            str.format("{0, number, #}K", math.floor(volK))
-        else if volK >= 10
-            str.format("{0, number, #.0}K", volK)
-        else
-            str.format("{0, number, #.00}K", volK)
-    else
-        str.format("{0, number, #}", math.floor(vol))
+
 
 // Pad string to fixed width (for cell alignment)
 padString(string txt, int width) =>
@@ -217,7 +202,7 @@ if barstate.islast
 
             // Format and pad strings to fixed width
             priceFormatted = str.tostring(price)
-            volFormatted = formatVolume(vol)
+            volFormatted = str.format("{0,volume}", vol)
             timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
 
             priceStr = addPadding(padString(priceFormatted, priceWidth), cellPadding)
