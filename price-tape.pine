@@ -205,13 +205,11 @@ if barstate.islast
             // Determine background color and text size based on direction and volume
             bgColor = color(na)
             cellTextSize = textSize
-            cellTextFormat = text.format_none
 
             if isLarge
                 // Large volume - use emphasized colors and size
                 bgColor := dir > 0 ? largeBullColor : dir < 0 ? largeBearColor : neutralColor
                 cellTextSize := largeFontSize
-                cellTextFormat := text.format_bold
             else
                 // Normal volume
                 bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
@@ -226,10 +224,10 @@ if barstate.islast
             timeStr = addPadding(padString(timeFormatted, timeWidth), cellPadding)
 
             // Create cells
-            table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = cellTextFormat)
-            table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = cellTextFormat)
+            table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = text.format_bold)
+            table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = text.format_bold)
             if showTime
-                table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = cellTextFormat)
+                table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily, text_formatting = text.format_bold)
 
         // Fill empty rows
         if tapePrices.size() < tapeLength
