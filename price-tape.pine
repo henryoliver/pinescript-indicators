@@ -37,18 +37,18 @@ timeFormat = input.string(defval = "hh:mm", title = "Time Format", tooltip = "Ti
 
 // Colors
 const string g2 = "Colors"
-bullColor = input.color(defval = NORD10, title = "Bull Print", group = g2)
-bearColor = input.color(defval = NORD11, title = "Bear Print", group = g2)
-neutralColor = input.color(defval = NORD3, title = "Neutral Print", group = g2)
-largeBullColor = input.color(defval = color.new(color = NORD10, transp = 50), title = "Large Bull Print", tooltip = "Color for large volume bull prints (more emphasis)", group = g2)
-largeBearColor = input.color(defval = color.new(color = NORD11, transp = 50), title = "Large Bear Print", tooltip = "Color for large volume bear prints (more emphasis)", group = g2)
+bullColor = input.color(defval = color.new(NORD8, 30), title = "Bull Print", group = g2)
+bearColor = input.color(defval = color.new(NORD11, 40), title = "Bear Print", group = g2)
+neutralColor = input.color(defval = NORD1, title = "Neutral Print", group = g2)
+largeBullColor = input.color(defval = color.new(NORD8, 50), title = "Large Bull Print", tooltip = "Color for large volume bull prints (more emphasis)", group = g2)
+largeBearColor = input.color(defval = color.new(NORD11, 60), title = "Large Bear Print", tooltip = "Color for large volume bear prints (more emphasis)", group = g2)
 headerColor = input.color(defval = NORD0, title = "Header", group = g2)
 textColor = input.color(defval = NORD4, title = "Text Color", group = g2)
 
 // Table Settings
 const string g3 = "Table Settings"
 tablePosition = input.string(defval = "Top Right", title = "Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = g3)
-tableBackgroundColor = input.color(defval = color.new(color = NORD0, transp = 10), title = "Background Color", group = g3)
+tableBackgroundColor = input.color(defval = color.new(NORD0, 100), title = "Background Color", group = g3)
 
 tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group = g3)
 tableFrameColor = input.color(defval = NORD1, title = "Frame Color", group = g3)
