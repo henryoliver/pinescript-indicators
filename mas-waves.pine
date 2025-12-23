@@ -133,22 +133,23 @@ type WaveCounter
     array<float> retraceLows
     array<int> retraceLowBars
 
-    method reset(string newTrend) =>
-        waveNumber := 0
-        currentTrend := newTrend
-        wave1Value := na
-        wave3Value := na
-        wave5Value := na
-        wave7Value := na
-        wave1Bar := na
-        wave3Bar := na
-        wave5Bar := na
-        wave7Bar := na
-        cycleLetterIndex := 0
-        retraceHighs.clear()
-        retraceHighBars.clear()
-        retraceLows.clear()
-        retraceLowBars.clear()
+method reset(WaveCounter this, string newTrend) =>
+    this.waveNumber := 0
+    this.currentTrend := newTrend
+    this.wave1Value := na
+    this.wave3Value := na
+    this.wave5Value := na
+    this.wave7Value := na
+    this.wave1Bar := na
+    this.wave3Bar := na
+    this.wave5Bar := na
+    this.wave7Bar := na
+    this.cycleLetterIndex := 0
+    array.clear(this.retraceHighs)
+    array.clear(this.retraceHighBars)
+    array.clear(this.retraceLows)
+    array.clear(this.retraceLowBars)
+
 
 
 
