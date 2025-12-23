@@ -23,32 +23,37 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
+// Input group names
+const string g1 = "Stochastic"
+const string g2 = "Style"
+const string g3 = "Bands"
+
 // Stochastic Input Settings
-int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = "Stochastic")
-int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = "Stochastic")
-int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = "Stochastic")
+int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = g1)
+int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = g1)
+int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = g1)
 
 // Stochastic Colors & Width
-color colorK = input.color(defval = NORD3, title = "%K Color", group = "Style")
-int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = "Style")
-color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = "Style")
-int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = "Style")
+color colorK = input.color(defval = NORD3, title = "%K Color", group = g2)
+int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = g2)
+color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = g2)
+int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = g2)
 
 // Band Settings
-bool showUpperBand = input.bool(defval = true, title = "Show Upper Band", group = "Bands")
-int upperBand = input.int(defval = 80, title = "Upper Band", minval = 50, maxval = 100, group = "Bands")
-bool showUpperMidBand = input.bool(defval = true, title = "Show Upper Mid Band", group = "Bands")
-int upperMidBand = input.int(defval = 55, title = "Upper Mid Band", minval = 50, maxval = 100, group = "Bands")
-bool showMiddleBand = input.bool(defval = false, title = "Show Middle Band", group = "Bands")
-int middleBand = input.int(defval = 50, title = "Middle Band", minval = 0, maxval = 100, group = "Bands")
-bool showLowerMidBand = input.bool(defval = true, title = "Show Lower Mid Band", group = "Bands")
-int lowerMidBand = input.int(defval = 45, title = "Lower Mid Band", minval = 0, maxval = 50, group = "Bands")
-bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group = "Bands")
-int lowerBand = input.int(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = "Bands")
-color bandColor = input.color(defval = NORD3, title = "Band Color", group = "Bands")
-int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = "Bands")
-bool showFill = input.bool(defval = true, title = "Show Background Fill", group = "Bands")
-color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = "Bands")
+bool showUpperBand = input.bool(defval = true, title = "Show Upper Band", group = g3)
+float upperBand = input.float(defval = 80, title = "Upper Band", minval = 50, maxval = 100, group = g3)
+bool showUpperMidBand = input.bool(defval = true, title = "Show Upper Mid Band", group = g3)
+float upperMidBand = input.float(defval = 55, title = "Upper Mid Band", minval = 50, maxval = 100, group = g3)
+bool showMiddleBand = input.bool(defval = false, title = "Show Middle Band", group = g3)
+float middleBand = input.float(defval = 50, title = "Middle Band", minval = 0, maxval = 100, group = g3)
+bool showLowerMidBand = input.bool(defval = true, title = "Show Lower Mid Band", group = g3)
+float lowerMidBand = input.float(defval = 45, title = "Lower Mid Band", minval = 0, maxval = 50, group = g3)
+bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group = g3)
+float lowerBand = input.float(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = g3)
+color bandColor = input.color(defval = NORD3, title = "Band Color", group = g3)
+int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = g3)
+bool showFill = input.bool(defval = true, title = "Show Background Fill", group = g3)
+color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = g3)
 
 
 // Calculate Stochastic

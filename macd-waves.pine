@@ -32,49 +32,55 @@ const string TREND_NONE = "none"
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
 // === INPUTS ===
+const string g1 = "MACD Settings"
+const string g2 = "Display"
+const string g3 = "Colors"
+const string g4 = "Styling"
+const string g5 = "Wave Counting"
+
 // Source
-src = input.source(defval = close, title = "Source", group = "Basic Settings")
+src = input.source(defval = close, title = "Source", group = g1)
 
 // Lengths
-fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = "Basic Settings")
-slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = "Basic Settings")
-signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = "Basic Settings")
+fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = g1)
+slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = g1)
+signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = g1)
 
 // MA Types
-oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = "Basic Settings")
-signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = "Basic Settings")
+oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = g1)
+signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = g1)
 
 // Visual Settings
-showHistogram = input.bool(defval = false, title = "Show Histogram", group = "Display")
-showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = "Display")
-showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = "Display")
-showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = "Display")
+showHistogram = input.bool(defval = false, title = "Show Histogram", group = g2)
+showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = g2)
+showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = g2)
+showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = g2)
 
 // Colors
-histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = "Colors")
-histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = "Colors")
-histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = "Colors")
-histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = "Colors")
-macdColor = input.color(defval = NORD3, title = "MACD Line", group = "Colors")
-signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = "Colors")
-signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = "Colors")
-signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = "Colors")
-zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = "Colors")
+histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = g3)
+histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = g3)
+histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = g3)
+histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = g3)
+macdColor = input.color(defval = NORD3, title = "MACD Line", group = g3)
+signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = g3)
+signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = g3)
+signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = g3)
+zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = g3)
 
 // Line Widths
-macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = "Styling")
-signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = "Styling")
+macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = g4)
+signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = g4)
 
 // Wave Counting Settings
-showWaves = input.bool(defval = true, title = "Show Wave Count", group = "Wave Counting")
+showWaves = input.bool(defval = true, title = "Show Wave Count", group = g5)
 pivotLookback = input.int(defval = 3, title = "Pivot Lookback", minval = 1, maxval = 10,
-     tooltip = "Bars to left and right for pivot detection on MACD", group = "Wave Counting")
-signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = "Wave Counting",
+     tooltip = "Bars to left and right for pivot detection on MACD", group = g5)
+signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = g5,
      tooltip = "Number of bars to determine signal line angle (for color only, not wave counting)")
-signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = "Wave Counting",
+signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = g5,
      tooltip = "Angle threshold for signal line color (not used for wave counting)")
-waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = "Wave Counting")
-waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = "Wave Counting")
+waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = g5)
+waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = g5)
 
 // Map wave label size string to size constant
 waveLabelSizeConst = switch waveLabelSize
@@ -131,16 +137,16 @@ pivotLowBar = newMacdLow ? bar_index - pivotLookback : na
 
 // === WAVE COUNTING BASED ON MACD STRUCTURE ===
 // Track MACD structure (HH/HL for uptrend, LL/LH for downtrend)
-var string macdTrend = TREND_NONE
-var int waveNumber = 0
-var float lastHigh = na
-var float lastLow = na
-var int lastHighBar = na
-var int lastLowBar = na
-var float wave1Value = na
-var int wave1Bar = na
-var bool wave1Confirmed = false
-var bool macdHooked = false
+varip string macdTrend = TREND_NONE
+varip int waveNumber = 0
+varip float lastHigh = na
+varip float lastLow = na
+varip int lastHighBar = na
+varip int lastLowBar = na
+varip float wave1Value = na
+varip int wave1Bar = na
+varip bool wave1Confirmed = false
+varip bool macdHooked = false
 
 // Detect structure and count waves
 if newMacdHigh

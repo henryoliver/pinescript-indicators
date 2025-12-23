@@ -60,169 +60,166 @@ var string textValign = input.string(defval = text.align_center, title = "Vertic
 var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = "Strength")
 var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = "Strength")
 
-// Helper Functions
-// Format number with appropriate suffix
-formatNumber(value, prefix = "", isCurrency = false) =>
-    result = switch
-        na(value) => "-"
-        value >= TRILLION => str.format(format = "{0}{1, number,0.0}T", arg0 = isCurrency ? "$" : "", arg1 = value / TRILLION)
-        value >= BILLION => str.format(format = "{0}{1, number,0.0}B", arg0 = isCurrency ? "$" : "", arg1 = value / BILLION)
-        value >= MILLION => str.format(format = "{0}{1, number,0.0}M", arg0 = isCurrency ? "$" : "", arg1 = value / MILLION)
-        value >= THOUSAND => str.format(format = "{0}{1, number,0}K", arg0 = isCurrency ? "$" : "", arg1 = value / THOUSAND)
-        => str.format(format = "{0}{1, number,0}", arg0 = isCurrency ? "$" : "", arg1 = value)
-    prefix + " " + result
-
 // Technical Indicators
 // Market Capitalization
-var bool mktCapVisible = input.bool(defval = true, title = "Visible", group = "Market Capitalization")
-var float mktCapBelow = input.float(defval = 10, title = "Sweet Spot (Below $B)", minval = 1, step = 1, 
+var bool mktCapVisible = input.bool(true, "Visible", group = "Market Capitalization")
+var float mktCapBelow = input.float(10, "Sweet Spot (Below $B)", minval = 1, step = 1, 
      tooltip = "Market cap below this value (in billions) indicates higher breakout potential", group = "Market Capitalization")
 
 float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
 float mktCap = na(tso) ? na : tso * close
 float mktCapBillions = na(mktCap) ? na : mktCap / BILLION
 
-string mktCapText = formatNumber(mktCap, "CAP", true)
+string mktCapFormatted = na(mktCap) ? "-" :
+     mktCap >= BILLION ? str.format("{0,number,#.0}B", mktCap / BILLION) :
+     mktCap >= MILLION ? str.format("{0,number,#.0}M", mktCap / MILLION) :
+     mktCap >= THOUSAND ? str.format("{0,number,#}K", mktCap / THOUSAND) :
+     str.format("{0,number}", mktCap)
+string mktCapText = "CAP " + mktCapFormatted
 color mktCapColor = na(mktCapBillions) ? textColor : 
      mktCapBillions <= mktCapBelow ? aboveColor : textColor
-string mktCapTooltip = str.format(format = "Market cap. Below ${0, number, 0}B is ideal for explosive momentum moves", arg0 = mktCapBelow)
+string mktCapTooltip = str.format("Market cap. Below ${0}B is ideal for explosive momentum moves", mktCapBelow)
 
 // Float Shares Outstanding
-var bool floatSharesVisible = input.bool(defval = true, title = "Visible", group = "Float Shares Outstanding")
-var float floatSharesAbove = input.float(defval = 25, title = "Ideal (Below M)", minval = 1, step = 5, 
+var bool floatSharesVisible = input.bool(true, "Visible", group = "Float Shares Outstanding")
+var float floatSharesAbove = input.float(25, "Ideal (Below M)", minval = 1, step = 5, 
      inline = "FloatShares Strength", group = "Float Shares Outstanding")
-var float floatSharesBelow = input.float(defval = 100, title = "▲ - ▼ High (Above M)", minval = 25, step = 10, 
+var float floatSharesBelow = input.float(100, "▲ - ▼ High (Above M)", minval = 25, step = 10, 
      tooltip = "Float at or below ideal indicates highest breakout potential. Above high threshold suggests slower moves", 
      inline = "FloatShares Strength", group = "Float Shares Outstanding")
 
 float floatShares = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = syminfo.shares_outstanding_float, lookahead = barmerge.lookahead_on)
 float floatSharesMillions = na(floatShares) ? na : floatShares / MILLION
 
-string floatSharesFormatted = switch
-    na(floatShares) => "-"
-    floatShares >= BILLION => str.format(format = "{0, number, 0.0}B", arg0 = floatShares / BILLION)
-    floatShares >= MILLION => str.format(format = "{0, number, 0.0}M", arg0 = floatShares / MILLION)
-    => str.format(format = "{0, number, 0.0}K", arg0 = floatShares / THOUSAND)
+string floatSharesFormatted = na(floatShares) ? "-" :
+     floatShares >= MILLION ? str.format("{0,number,#.0}M", floatShares / MILLION) :
+     floatShares >= THOUSAND ? str.format("{0,number,#.0}K", floatShares / THOUSAND) :
+     str.format("{0,number}", floatShares)
 
-string floatSharesText = "FLT" + floatSharesFormatted
+string floatSharesText = "FLT " + floatSharesFormatted
 color floatSharesColor = na(floatSharesMillions) ? textColor : 
      floatSharesMillions <= floatSharesAbove ? aboveColor : 
      floatSharesMillions >= floatSharesBelow ? belowColor : textColor
-string floatSharesTooltip = str.format(format = "Float shares. At or below {0, number, 0}M is ideal for explosive moves. Above {1, number, 0}M indicates high float",
-     arg0 = floatSharesAbove, arg1 = floatSharesBelow)
+string floatSharesTooltip = str.format("Float shares. At or below {0}M is ideal for explosive moves. Above {1}M indicates high float",
+     floatSharesAbove, floatSharesBelow)
 
 // Average Daily Volume
-var bool volumeVisible = input.bool(defval = true, title = "Visible", group = "Average Daily Volume")
-var int volumePeriod = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Daily Volume")
-var float volumeAbove = input.float(defval = 500000, title = "Strong (Above)", minval = 0, step = 100000, 
+var bool volumeVisible = input.bool(true, "Visible", group = "Average Daily Volume")
+var int volumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Daily Volume")
+var float volumeAbove = input.float(500000, "Strong (Above)", minval = 0, step = 100000, 
      inline = "Volume Strength", group = "Average Daily Volume")
-var float volumeBelow = input.float(defval = 200000, title = "▲ - ▼ Weak (Below)", minval = 0, step = 100000, 
+var float volumeBelow = input.float(200000, "▲ - ▼ Weak (Below)", minval = 0, step = 100000, 
      tooltip = "Volume above threshold indicates good liquidity. Below threshold suggests low liquidity", 
      inline = "Volume Strength", group = "Average Daily Volume")
 
 float volumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume, length = volumePeriod), lookahead = barmerge.lookahead_on)
 
-string volumeText = formatNumber(volumeTicker, "VOL")
+string volumeText = "VOL " + (na(volumeTicker) ? "-" : str.format("{0, number, #,###}", volumeTicker))
 color volumeColor = volumeTicker >= volumeAbove ? aboveColor : 
      volumeTicker <= volumeBelow ? belowColor : textColor
-string volumeTooltip = str.format(format = "{0}-day average daily volume. Above {1, number, 0} shares indicates strong liquidity",
-     arg0 = volumePeriod, arg1 = volumeAbove)
+string volumeTooltip = str.format("{0}-day average daily volume. Above {1, number, #,###} shares indicates strong liquidity",
+     volumePeriod, volumeAbove)
 
 // Average Dollar Volume
-var bool dollarVolumeVisible = input.bool(defval = true, title = "Visible", group = "Average Dollar Volume")
-var int dollarVolumePeriod = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Dollar Volume")
-var float dollarVolumeAbove = input.float(defval = 50000000, title = "Strong (Above)", minval = 0, step = 10000000, 
+var bool dollarVolumeVisible = input.bool(true, "Visible", group = "Average Dollar Volume")
+var int dollarVolumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Dollar Volume")
+var float dollarVolumeAbove = input.float(50000000, "Strong (Above)", minval = 0, step = 10000000, 
      inline = "Dollar Volume Strength", group = "Average Dollar Volume")
-var float dollarVolumeBelow = input.float(defval = 10000000, title = "▲ - ▼ Weak (Below)", minval = 0, step = 5000000, 
+var float dollarVolumeBelow = input.float(10000000, "▲ - ▼ Weak (Below)", minval = 0, step = 5000000, 
      tooltip = "Dollar volume above threshold indicates institutional interest. Below threshold suggests retail-only stock", 
      inline = "Dollar Volume Strength", group = "Average Dollar Volume")
 
 float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume * close, length = dollarVolumePeriod), lookahead = barmerge.lookahead_on)
 
-string dollarVolumeText = formatNumber(dollarVolumeTicker, "DVL", true)
+string dollarVolumeFormatted = na(dollarVolumeTicker) ? "-" :
+     dollarVolumeTicker >= BILLION ? str.format("${0,number,#.00}B", dollarVolumeTicker / BILLION) :
+     dollarVolumeTicker >= MILLION ? str.format("${0,number,#.00}M", dollarVolumeTicker / MILLION) :
+     dollarVolumeTicker >= THOUSAND ? str.format("${0,number,#}K", dollarVolumeTicker / THOUSAND) :
+     str.format("${0,number}", dollarVolumeTicker)
+string dollarVolumeText = "DVOL " + dollarVolumeFormatted
 color dollarVolumeColor = dollarVolumeTicker >= dollarVolumeAbove ? aboveColor : 
      dollarVolumeTicker <= dollarVolumeBelow ? belowColor : textColor
-string dollarVolumeTooltip = str.format(format = "{0}-day average dollar volume. Above ${1, number, 0} indicates strong institutional participation",
+string dollarVolumeTooltip = str.format("{0}-day average dollar volume. Above ${1, number, #,###} indicates strong institutional participation",
 
-     arg0 = dollarVolumePeriod, arg1 = dollarVolumeAbove)
+     dollarVolumePeriod, dollarVolumeAbove)
 
 // PE Ratio
-var bool peVisible = input.bool(defval = true, title = "Visible", group = "PE Ratio")
-var float peAbove = input.float(defval = 40, title = "High (Above)", minval = 0, step = 5, 
+var bool peVisible = input.bool(true, "Visible", group = "PE Ratio")
+var float peAbove = input.float(40, "High (Above)", minval = 0, step = 5, 
      inline = "PE Strength", group = "PE Ratio")
-var float peBelow = input.float(defval = 15, title = "▲ - ▼ Low (Below)", minval = 0, step = 5, 
+var float peBelow = input.float(15, "▲ - ▼ Low (Below)", minval = 0, step = 5, 
      tooltip = "P/E above threshold may indicate overvaluation. Below threshold may indicate undervaluation or value opportunity", 
      inline = "PE Strength", group = "PE Ratio")
 
 float peRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_EARNINGS_FORWARD", period = "FY")
-string peFormatted = na(peRatio) ? "-" : str.format(format = "{0, number, 0.0}", arg0 = peRatio)
+string peFormatted = na(peRatio) ? "-" : str.format("{0, number, #.0}", peRatio)
 
 string peText = "P/E" + peFormatted
 color peColor = na(peRatio) ? textColor :
      peRatio >= peAbove ? belowColor : 
      peRatio <= peBelow ? aboveColor : textColor
-string peTooltip = str.format(format = "Forward P/E ratio. Above {0, number, 0} suggests premium valuation. Below {1, number, 0} suggests value territory",
-     arg0 = peAbove, arg1 = peBelow)
+string peTooltip = str.format("Forward P/E ratio. Above {0} suggests premium valuation. Below {1} suggests value territory",
+     peAbove, peBelow)
 
 // PS Ratio
-var bool psVisible = input.bool(defval = true, title = "Visible", group = "PS Ratio")
-var float psAbove = input.float(defval = 10, title = "Reasonable (Above)", minval = 0, step = 5, 
+var bool psVisible = input.bool(true, "Visible", group = "PS Ratio")
+var float psAbove = input.float(10, "Reasonable (Above)", minval = 0, step = 5, 
      inline = "PS Strength", group = "PS Ratio")
-var float psBelow = input.float(defval = 50, title = "▲ - ▼ Overvalued (Above)", minval = 10, step = 5, 
+var float psBelow = input.float(50, "▲ - ▼ Overvalued (Above)", minval = 10, step = 5, 
      tooltip = "P/S between reasonable and overvalued range (10-50) is acceptable. Below or above this range may indicate risk", 
      inline = "PS Strength", group = "PS Ratio")
 
 float psRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_SALES_FORWARD", period = "FY")
-string psFormatted = na(psRatio) ? "-" : str.format(format = "{0, number, 0.0}", arg0 = psRatio)
+string psFormatted = na(psRatio) ? "-" : str.format("{0, number, #.0}", psRatio)
 
 string psText = "P/S" + psFormatted
 color psColor = na(psRatio) ? textColor :
      psRatio >= psAbove and psRatio <= psBelow ? aboveColor : belowColor
-string psTooltip = str.format(format = "Forward P/S ratio. Between {0, number, 0} and {1, number, 0} is reasonable range. Outside this range may signal overvaluation or undervaluation risk",
-     arg0 = psAbove, arg1 = psBelow)
+string psTooltip = str.format("Forward P/S ratio. Between {0} and {1} is reasonable range. Outside this range may signal overvaluation or undervaluation risk",
+     psAbove, psBelow)
 
 // Average Daily Range (ADR) %
-var bool adrVisible = input.bool(defval = true, title = "Visible", group = "ADR")
-var int adrRange = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ADR")
-var float adrAbove = input.float(defval = 0.05, title = "High Volatility (Above)", minval = 0, maxval = 1, step = 0.01, 
+var bool adrVisible = input.bool(true, "Visible", group = "ADR")
+var int adrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ADR")
+var float adrAbove = input.float(0.05, "High Volatility (Above)", minval = 0, maxval = 1, step = 0.01, 
      inline = "ADR Strength", group = "ADR")
-var float adrBelow = input.float(defval = 0.03, title = "▲ - ▼ Low Volatility (Below)", minval = 0, maxval = 1, step = 0.01, 
+var float adrBelow = input.float(0.03, "▲ - ▼ Low Volatility (Below)", minval = 0, maxval = 1, step = 0.01, 
      tooltip = "ADR above threshold indicates high volatility ideal for swing trading. Below threshold suggests choppy or slow price action", 
      inline = "ADR Strength", group = "ADR")
 
 float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = (high / low), length = adrRange), lookahead = barmerge.lookahead_on)
 float adrRounded = math.round(adrTicker - 1, 4)
-string adrFormatted = str.format(format = "{0, number, 0.00%}", arg0 = adrRounded)
+string adrFormatted = str.format("{0, number, #.00}%", adrRounded * 100)
 
 string adrText = "ADR" + adrFormatted
 color adrColor = adrRounded >= adrAbove ? aboveColor : 
      adrRounded <= adrBelow ? belowColor : textColor
-string adrTooltip = str.format(format = "{0}-day average daily range. Above {1, number, 0.0%} indicates strong intraday movement ideal for swing trades",
-     arg0 = adrRange, arg1 = adrAbove)
+string adrTooltip = str.format("{0}-day average daily range. Above {1, number, #.0}% indicates strong intraday movement ideal for swing trades",
+     adrRange, adrAbove * 100)
 
 // Average True Range (ATR) $
-var bool atrVisible = input.bool(defval = true, title = "Visible", group = "ATR")
-var int atrRange = input.int(defval = 20, title = "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ATR")
-var float atrAbove = input.float(defval = 2.0, title = "High Volatility (Above $)", minval = 0, step = 0.5, 
+var bool atrVisible = input.bool(true, "Visible", group = "ATR")
+var int atrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ATR")
+var float atrAbove = input.float(2.0, "High Volatility (Above $)", minval = 0, step = 0.5, 
      tooltip = "ATR above this value indicates high volatility in dollar terms", group = "ATR")
 
 float atrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.atr(length = atrRange), lookahead = barmerge.lookahead_on)
 float atrRounded = math.round(atrTicker, 2)
-string atrFormatted = str.format(format = "{0, number, $0.00}", arg0 = atrRounded)
+string atrFormatted = str.format("${0, number, #.00}", atrRounded)
 
 string atrText = "ATR" + atrFormatted
 color atrColor = atrRounded >= atrAbove ? aboveColor : textColor
-string atrTooltip = str.format(format = "{0}-day average true range. Above ${1, number, 0.00} indicates high volatility for position sizing",
-     arg0 = atrRange, arg1 = atrAbove)
+string atrTooltip = str.format("{0}-day average true range. Above ${1, number, #.00} indicates high volatility for position sizing",
+     atrRange, atrAbove)
 
 // Relative Price Strength (RPS)
-var bool rpsVisible = input.bool(defval = true, title = "Visible", group = "RPS")
-var int rpsPeriod = input.int(defval = 63, title = "Lookback Period (Days)", minval = 20, maxval = 252, step = 1, 
+var bool rpsVisible = input.bool(true, "Visible", group = "RPS")
+var int rpsPeriod = input.int(63, "Lookback Period (Days)", minval = 20, maxval = 252, step = 1, 
      tooltip = "Period for measuring relative performance (63 days ≈ 3 months)", group = "RPS")
-var string rpsIndex = input.symbol(defval = "IXIC", title = "Base Index", tooltip = "Benchmark index for relative strength comparison", group = "RPS")
-var float rpsAbove = input.float(defval = 1.1, title = "Strong (Above)", minval = 0, step = 0.05, 
+var string rpsIndex = input.symbol("IXIC", title = "Base Index", tooltip = "Benchmark index for relative strength comparison", group = "RPS")
+var float rpsAbove = input.float(1.1, "Strong (Above)", minval = 0, step = 0.05, 
      inline = "RPS Strength", group = "RPS")
-var float rpsBelow = input.float(defval = 0.9, title = "▲ - ▼ Weak (Below)", minval = 0, step = 0.05, 
+var float rpsBelow = input.float(0.9, "▲ - ▼ Weak (Below)", minval = 0, step = 0.05, 
      tooltip = "RPS above 1.0 shows outperformance. Below 1.0 shows underperformance vs benchmark", 
      inline = "RPS Strength", group = "RPS")
 
@@ -236,15 +233,15 @@ float benchmarkPercentChange = na(rpsBenchmarkPast) ? na : rpsBenchmarkCurrent /
 
 // RPS is the ratio of stock performance to benchmark performance
 float rpsRounded = na(benchmarkPercentChange) or benchmarkPercentChange == 0 ? na : stockPercentChange / benchmarkPercentChange
-string rpsFormatted = na(rpsRounded) ? "-" : str.format(format = "{0, number, 0.00}", arg0 = rpsRounded)
+string rpsFormatted = na(rpsRounded) ? "-" : str.format("{0, number, #.00}", rpsRounded)
 
 
 string rpsText = "RPS" + rpsFormatted
 color rpsColor = na(rpsRounded) ? textColor :
      rpsRounded >= rpsAbove ? aboveColor : 
      rpsRounded <= rpsBelow ? belowColor : textColor
-string rpsTooltip = str.format(format = "Relative price strength vs {0} over {1} days. Above 1.0 = outperforming, below 1.0 = underperforming",
-     arg0 = rpsIndex, arg1 = rpsPeriod)
+string rpsTooltip = str.format("Relative price strength vs {0} over {1} days. Above 1.0 = outperforming, below 1.0 = underperforming",
+     rpsIndex, rpsPeriod)
 
 // Table Rendering
 // Create table only once

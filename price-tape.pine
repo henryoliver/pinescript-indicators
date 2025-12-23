@@ -85,13 +85,13 @@ formatVolume(float vol) =>
         volK = vol / 1000
         // Format with appropriate decimals
         if volK >= 100
-            str.format(format = "{0, number, 0}K", arg0 = math.floor(number = volK))
+            str.format("{0, number, #}K", math.floor(volK))
         else if volK >= 10
-            str.format(format = "{0, number, 0.0}K", arg0 = volK)
+            str.format("{0, number, #.0}K", volK)
         else
-            str.format(format = "{0, number, 0.00}K", arg0 = volK)
+            str.format("{0, number, #.00}K", volK)
     else
-        str.format(format = "{0, number, 0}", arg0 = math.floor(number = vol))
+        str.format("{0, number, #}", math.floor(vol))
 
 // Pad string to fixed width (for cell alignment)
 padString(string txt, int width) =>
@@ -164,8 +164,8 @@ if barstate.isrealtime
 
 // === TABLE DISPLAY ===
 // Convert position string to table position
-pos_y = str.pos(source = tablePosition, str = "Top") >= 0 ? "top" : str.pos(source = tablePosition, str = "Middle") >= 0 ? "middle" : "bottom"
-pos_x = str.pos(source = tablePosition, str = "Left") >= 0 ? "left" : str.pos(source = tablePosition, str = "Center") >= 0 ? "center" : "right"
+pos_y = str.contains(tablePosition, "Top") ? "top" : str.contains(tablePosition, "Middle") ? "middle" : "bottom"
+pos_x = str.contains(tablePosition, "Left") ? "left" : str.contains(tablePosition, "Center") ? "center" : "right"
 tablePos = pos_y + "_" + pos_x
 
 // Create table
@@ -187,7 +187,7 @@ if showTime
 
 // Display tape data
 if tapePrices.size() > 0
-    for i = 0 to math.min(val0 = tapePrices.size() - 1, val1 = tapeLength - 1)
+    for i = 0 to math.min(tapePrices.size() - 1, tapeLength - 1)
         row = i + 1
 
         // Get data
@@ -212,7 +212,7 @@ if tapePrices.size() > 0
             bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
 
         // Format and pad strings to fixed width
-        priceFormatted = str.tostring(value = price, format = format.mintick)
+        priceFormatted = str.tostring(price)
         volFormatted = formatVolume(vol)
         timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
 
