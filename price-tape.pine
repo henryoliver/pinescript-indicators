@@ -168,79 +168,83 @@ pos_y = str.contains(tablePosition, "Top") ? "top" : str.contains(tablePosition,
 pos_x = str.contains(tablePosition, "Left") ? "left" : str.contains(tablePosition, "Center") ? "center" : "right"
 tablePos = pos_y + "_" + pos_x
 
-// Create table
+// Create table only once
 cols = showTime ? 3 : 2
-tape = table.new(position = tablePos, columns = cols, rows = tapeLength + 1, bgcolor = tableBackgroundColor,
+var table tape = table.new(position = tablePos, columns = cols, rows = tapeLength + 1, bgcolor = tableBackgroundColor,
      frame_color = tableFrameColor, frame_width = tableFrameSize,
      border_color = tableBorderColor, border_width = tableBorderSize)
 
-// Header row
-headerRow = 0
-priceHeader = addPadding(padString("PRICE", priceWidth), cellPadding)
-sizeHeader = addPadding(padString("SIZE", sizeWidth), cellPadding)
-timeHeader = addPadding(padString("TIME", timeWidth), cellPadding)
+// Draw the table only on the last bar to prevent performance issues
+if barstate.islast
+    table.clear(tape)
 
-table.cell(table_id = tape, column = 0, row = headerRow, text = priceHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
-table.cell(table_id = tape, column = 1, row = headerRow, text = sizeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
-if showTime
-    table.cell(table_id = tape, column = 2, row = headerRow, text = timeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+    // Header row
+    headerRow = 0
+    priceHeader = addPadding(padString("PRICE", priceWidth), cellPadding)
+    sizeHeader = addPadding(padString("SIZE", sizeWidth), cellPadding)
+    timeHeader = addPadding(padString("TIME", timeWidth), cellPadding)
 
-// Display tape data
-if tapePrices.size() > 0
-    for i = 0 to math.min(tapePrices.size() - 1, tapeLength - 1)
-        row = i + 1
-
-        // Get data
-        price = tapePrices.get(i)
-        vol = tapeVolumes.get(i)
-        tradeTime = tapeTimes.get(i)
-        dir = tapeDirections.get(i)
-
-        // Check if large volume
-        isLarge = vol >= largeVolume
-
-        // Determine background color and text size based on direction and volume
-        bgColor = color(na)
-        cellTextSize = textSize
-
-        if isLarge
-            // Large volume - use emphasized colors and size
-            bgColor := dir > 0 ? largeBullColor : dir < 0 ? largeBearColor : neutralColor
-            cellTextSize := largeFontSize
-        else
-            // Normal volume
-            bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
-
-        // Format and pad strings to fixed width
-        priceFormatted = str.tostring(price)
-        volFormatted = formatVolume(vol)
-        timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
-
-        priceStr = addPadding(padString(priceFormatted, priceWidth), cellPadding)
-        volStr = addPadding(padString(volFormatted, sizeWidth), cellPadding)
-        timeStr = addPadding(padString(timeFormatted, timeWidth), cellPadding)
-
-        // Create cells
-        table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-        table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-        if showTime
-            table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
-else
-    // Show waiting message
-    waitingMsg = addPadding("Waiting for real-time data...", cellPadding)
-    table.cell(table_id = tape, column = 0, row = 1, text = waitingMsg, bgcolor = tableBackgroundColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+    table.cell(table_id = tape, column = 0, row = headerRow, text = priceHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
+    table.cell(table_id = tape, column = 1, row = headerRow, text = sizeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
     if showTime
-        table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 2, end_row = 1)
-    else
-        table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 1, end_row = 1)
+        table.cell(table_id = tape, column = 2, row = headerRow, text = timeHeader, bgcolor = headerColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
 
-// Fill empty rows
-if tapePrices.size() < tapeLength
-    emptyStr = addPadding("", cellPadding)
-    for i = tapePrices.size() to tapeLength - 1
-        row = i + 1
-        table.cell(table_id = tape, column = 0, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
-        table.cell(table_id = tape, column = 1, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+    // Display tape data
+    if tapePrices.size() > 0
+        for i = 0 to math.min(tapePrices.size() - 1, tapeLength - 1)
+            row = i + 1
+
+            // Get data
+            price = tapePrices.get(i)
+            vol = tapeVolumes.get(i)
+            tradeTime = tapeTimes.get(i)
+            dir = tapeDirections.get(i)
+
+            // Check if large volume
+            isLarge = vol >= largeVolume
+
+            // Determine background color and text size based on direction and volume
+            bgColor = color(na)
+            cellTextSize = textSize
+
+            if isLarge
+                // Large volume - use emphasized colors and size
+                bgColor := dir > 0 ? largeBullColor : dir < 0 ? largeBearColor : neutralColor
+                cellTextSize := largeFontSize
+            else
+                // Normal volume
+                bgColor := dir > 0 ? bullColor : dir < 0 ? bearColor : neutralColor
+
+            // Format and pad strings to fixed width
+            priceFormatted = str.tostring(price)
+            volFormatted = formatVolume(vol)
+            timeFormatted = str.format_time(time = tradeTime, format = timeFormat, timezone = syminfo.timezone)
+
+            priceStr = addPadding(padString(priceFormatted, priceWidth), cellPadding)
+            volStr = addPadding(padString(volFormatted, sizeWidth), cellPadding)
+            timeStr = addPadding(padString(timeFormatted, timeWidth), cellPadding)
+
+            // Create cells
+            table.cell(table_id = tape, column = 0, row = row, text = priceStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+            table.cell(table_id = tape, column = 1, row = row, text = volStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+            if showTime
+                table.cell(table_id = tape, column = 2, row = row, text = timeStr, bgcolor = bgColor, text_color = textColor, text_size = cellTextSize, text_halign = text.align_right, text_font_family = textFontFamily)
+    else
+        // Show waiting message
+        waitingMsg = addPadding("Waiting for real-time data...", cellPadding)
+        table.cell(table_id = tape, column = 0, row = 1, text = waitingMsg, bgcolor = tableBackgroundColor, text_color = textColor, text_size = textSize, text_font_family = textFontFamily)
         if showTime
-            table.cell(table_id = tape, column = 2, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+            table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 2, end_row = 1)
+        else
+            table.merge_cells(table_id = tape, start_column = 0, start_row = 1, end_column = 1, end_row = 1)
+
+    // Fill empty rows
+    if tapePrices.size() < tapeLength
+        emptyStr = addPadding("", cellPadding)
+        for i = tapePrices.size() to tapeLength - 1
+            row = i + 1
+            table.cell(table_id = tape, column = 0, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+            table.cell(table_id = tape, column = 1, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
+            if showTime
+                table.cell(table_id = tape, column = 2, row = row, text = emptyStr, bgcolor = tableBackgroundColor, text_size = textSize, text_font_family = textFontFamily)
 
