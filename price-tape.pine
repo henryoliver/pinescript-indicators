@@ -176,7 +176,7 @@ var table tape = table.new(position = tablePos, columns = cols, rows = tapeLengt
 
 // Draw the table only on the last bar to prevent performance issues
 if barstate.islast
-    table.clear(tape)
+    table.clear(tape, 0, 0, cols - 1, tapeLength)
 
     // Header row
     headerRow = 0
