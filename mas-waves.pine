@@ -178,6 +178,10 @@ sma1 = ta.sma(source = src, length = sma1Length)
 sma2 = ta.sma(source = src, length = sma2Length)
 sma3 = ta.sma(source = src, length = sma3Length)
 
+// Call ta.lowest/highest here to avoid warnings
+lowestOverall = ta.lowest(low, lookbackLengthLow)
+highestOverall = ta.highest(high, lookbackLengthHigh)
+
 // SMA 1 Slope (THE TREND INDICATOR)
 sma1Past = sma1TrendLookback <= bar_index ? sma1[sma1TrendLookback] : na
 sma1Height = sma1 - sma1Past
@@ -266,6 +270,15 @@ barsSinceLastHigh = bar_index - lastCycleHighBarIndex + 1
 lowestSinceLast = ta.lowest(low, na(barsSinceLastLow) ? 1 : barsSinceLastLow)
 highestSinceLast = ta.highest(high, na(barsSinceLastHigh) ? 1 : barsSinceLastHigh)
 
+// Pre-calculate lowest/highest since last cycle to avoid warnings
+var int lastConfirmedLowBarIndex = na
+var int lastConfirmedHighBarIndex = na
+var int lookbackLengthForLow = 1
+var int lookbackLengthForHigh = 1
+
+series float lowestOverallSeries = ta.lowest(low, lookbackLengthForLow)
+series float highestOverallSeries = ta.highest(high, lookbackLengthForHigh)
+
 // Wave tracking variables
 var WaveCounter waveCounter = WaveCounter.new(0, TREND_NONE, na, na, na, na, na, na, na, na, 0, array.new<float>(), array.new<int>(), array.new<float>(), array.new<int>())
 
@@ -279,6 +292,8 @@ if waveCounter.currentTrend == TREND_DOWN
     if newCycleLow
         cycleLow = cycleLowPrice[1]
         cycleLowBarIndex = cycleLowBar[1]
+        lastConfirmedLowBarIndex := cycleLowBarIndex
+        lookbackLengthLow := bar_index - cycleLowBarIndex + 1
         lastCycleLowBarIndex := cycleLowBarIndex
 
         // Wave 1: First cycle low after SMA1 commits down
@@ -298,7 +313,7 @@ if waveCounter.currentTrend == TREND_DOWN
             priorWaveValue = waveCounter.waveNumber == 2 ? waveCounter.wave1Value : waveCounter.waveNumber == 4 ? waveCounter.wave3Value : waveCounter.waveNumber == 6 ? waveCounter.wave5Value : waveCounter.wave7Value
 
             // Check if committed below prior wave
-            if lowestSinceLast < priorWaveValue
+            if lowestOverallSeries < priorWaveValue
                 // Valid wave
                 waveCounter.waveNumber += 1
 
@@ -366,6 +381,8 @@ if waveCounter.currentTrend == TREND_UP
     if newCycleHigh
         cycleHigh = cycleHighPrice[1]
         cycleHighBarIndex = cycleHighBar[1]
+        lastConfirmedHighBarIndex := cycleHighBarIndex
+        lookbackLengthHigh := bar_index - cycleHighBarIndex + 1
         lastCycleHighBarIndex := cycleHighBarIndex
 
         // Wave 1: First cycle high after SMA1 commits up
@@ -384,7 +401,7 @@ if waveCounter.currentTrend == TREND_UP
             priorWaveValue = waveCounter.waveNumber == 2 ? waveCounter.wave1Value : waveCounter.waveNumber == 4 ? waveCounter.wave3Value : waveCounter.waveNumber == 6 ? waveCounter.wave5Value : waveCounter.wave7Value
 
             // Check if committed above prior wave
-            if highestSinceLast > priorWaveValue
+            if highestOverallSeries > priorWaveValue
                 // Valid wave
                 waveCounter.waveNumber += 1
                 if waveCounter.waveNumber == 3
