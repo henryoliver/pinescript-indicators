@@ -119,14 +119,8 @@ type Wave
 type WaveCounter
     int waveNumber
     string currentTrend
-    float wave1Value
-    float wave3Value
-    float wave5Value
-    float wave7Value
-    int wave1Bar
-    int wave3Bar
-    int wave5Bar
-    int wave7Bar
+    array<float> impulseWaveValues
+    array<int> impulseWaveBars
     int cycleLetterIndex
     array<float> retraceHighs
     array<int> retraceHighBars
@@ -136,15 +130,9 @@ type WaveCounter
 method reset(WaveCounter this, string newTrend) =>
     this.waveNumber := 0
     this.currentTrend := newTrend
-    this.wave1Value := na
-    this.wave3Value := na
-    this.wave5Value := na
-    this.wave7Value := na
-    this.wave1Bar := na
-    this.wave3Bar := na
-    this.wave5Bar := na
-    this.wave7Bar := na
     this.cycleLetterIndex := 0
+    array.clear(this.impulseWaveValues)
+    array.clear(this.impulseWaveBars)
     array.clear(this.retraceHighs)
     array.clear(this.retraceHighBars)
     array.clear(this.retraceLows)
@@ -241,7 +229,7 @@ smaFlat = math.abs(sma1SlopeAngle) < sma1FlatThreshold
 smaFlat_prev = math.abs(sma1SlopeAngle[1]) < sma1FlatThreshold
 
 // Wave tracking variables
-varip WaveCounter waveCounter = WaveCounter.new(0, TREND_NONE, na, na, na, na, na, na, na, na, 0, array.new<float>(), array.new<int>(), array.new<float>(), array.new<int>())
+var WaveCounter waveCounter = WaveCounter.new(0, TREND_NONE, array.new<float>(), array.new<int>(), 0, array.new<float>(), array.new<int>(), array.new<float>(), array.new<int>())
 
 // Reset on trend change or flat
 if trendJustStartedUp or trendJustStartedDown or (smaFlat and not smaFlat_prev)
@@ -257,8 +245,8 @@ if waveCounter.currentTrend == TREND_DOWN
         // Wave 1: First cycle low after SMA1 commits down
         if waveCounter.waveNumber == 0
             waveCounter.waveNumber := 1
-            waveCounter.wave1Value := cycleLow
-            waveCounter.wave1Bar := cycleLowBarIndex
+            array.push(waveCounter.impulseWaveValues, cycleLow)
+            array.push(waveCounter.impulseWaveBars, cycleLowBarIndex)
             waveCounter.cycleLetterIndex := 0
 
             if showWaves
@@ -275,7 +263,7 @@ if waveCounter.currentTrend == TREND_DOWN
 
         // Odd waves (3, 5, 7, 9...) - Check commitment
         else if waveCounter.waveNumber % 2 == 0
-            priorWaveValue = waveCounter.waveNumber == 2 ? waveCounter.wave1Value : waveCounter.waveNumber == 4 ? waveCounter.wave3Value : waveCounter.waveNumber == 6 ? waveCounter.wave5Value : waveCounter.wave7Value
+            priorWaveValue = array.last(waveCounter.impulseWaveValues)
 
             // Check if committed below prior wave
             committed = false
@@ -294,17 +282,8 @@ if waveCounter.currentTrend == TREND_DOWN
             if committed
                 // Valid wave
                 waveCounter.waveNumber += 1
-
-                if waveCounter.waveNumber == 3
-                    waveCounter.wave3Value := cycleLow
-                    waveCounter.wave3Bar := cycleLowBarIndex
-                else if waveCounter.waveNumber == 5
-                    waveCounter.wave5Value := cycleLow
-                    waveCounter.wave5Bar := cycleLowBarIndex
-                else if waveCounter.waveNumber == 7
-                    waveCounter.wave7Value := cycleLow
-                    waveCounter.wave7Bar := cycleLowBarIndex
-
+                array.push(waveCounter.impulseWaveValues, cycleLow)
+                array.push(waveCounter.impulseWaveBars, cycleLowBarIndex)
                 waveCounter.cycleLetterIndex := 0
 
                 if showWaves
@@ -397,8 +376,8 @@ if waveCounter.currentTrend == TREND_UP
         // Wave 1: First cycle high after SMA1 commits up
         if waveCounter.waveNumber == 0
             waveCounter.waveNumber := 1
-            waveCounter.wave1Value := cycleHigh
-            waveCounter.wave1Bar := cycleHighBarIndex
+            array.push(waveCounter.impulseWaveValues, cycleHigh)
+            array.push(waveCounter.impulseWaveBars, cycleHighBarIndex)
             waveCounter.cycleLetterIndex := 0
 
             if showWaves
@@ -415,7 +394,7 @@ if waveCounter.currentTrend == TREND_UP
 
         // Odd waves (3, 5, 7, 9...) - Check commitment
         else if waveCounter.waveNumber % 2 == 0
-            priorWaveValue = waveCounter.waveNumber == 2 ? waveCounter.wave1Value : waveCounter.waveNumber == 4 ? waveCounter.wave3Value : waveCounter.waveNumber == 6 ? waveCounter.wave5Value : waveCounter.wave7Value
+            priorWaveValue = array.last(waveCounter.impulseWaveValues)
 
             // Check if committed above prior wave
             committed = false
@@ -434,17 +413,8 @@ if waveCounter.currentTrend == TREND_UP
             if committed
                 // Valid wave
                 waveCounter.waveNumber += 1
-
-                if waveCounter.waveNumber == 3
-                    waveCounter.wave3Value := cycleHigh
-                    waveCounter.wave3Bar := cycleHighBarIndex
-                else if waveCounter.waveNumber == 5
-                    waveCounter.wave5Value := cycleHigh
-                    waveCounter.wave5Bar := cycleHighBarIndex
-                else if waveCounter.waveNumber == 7
-                    waveCounter.wave7Value := cycleHigh
-                    waveCounter.wave7Bar := cycleHighBarIndex
-
+                array.push(waveCounter.impulseWaveValues, cycleHigh)
+                array.push(waveCounter.impulseWaveBars, cycleHighBarIndex)
                 waveCounter.cycleLetterIndex := 0
 
                 if showWaves
