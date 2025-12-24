@@ -200,19 +200,19 @@ plot(series = sma2Visible ? sma2 : na, title = "SMA 2", color = sma2Color, linew
 plot(series = sma3Visible ? sma3 : na, title = "SMA 3", color = sma3Color, linewidth = sma3Width, offset = sma3Offset)
 
 // === STOCHASTIC CYCLE DETECTION ===
-k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
-d = ta.sma(source = k, length = periodD)
+stochK_smoothed = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
+stochD_main = ta.sma(source = stochK_smoothed, length = periodD)
 
 // Cycle zones based on D
-inUpZone = d > lowerMidLevel  // Above 45
-inDownZone = d < upperMidLevel  // Below 55
+inUpZone = stochD_main > lowerMidLevel  // Above 45
+inDownZone = stochD_main < upperMidLevel  // Below 55
 
 // Entering/exiting zones
 enteringUpZone = inUpZone and not inUpZone[1]
-exitingUpZone = not inUpZone and inUpZone[1] and d < upperMidLevel  // D returned to 55
+exitingUpZone = not inUpZone and inUpZone[1] and stochD_main < upperMidLevel  // D returned to 55
 
 enteringDownZone = inDownZone and not inDownZone[1]
-exitingDownZone = not inDownZone and inDownZone[1] and d > lowerMidLevel  // D returned to 45
+exitingDownZone = not inDownZone and inDownZone[1] and stochD_main > lowerMidLevel  // D returned to 45
 
 // Track cycle highs and lows
 var bool inCycleHighZone = false
