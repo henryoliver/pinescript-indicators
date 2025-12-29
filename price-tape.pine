@@ -48,7 +48,7 @@ textColor = input.color(defval = NORD4, title = "Text Color", group = g2)
 // Table Settings
 const string g3 = "Table Settings"
 tablePosition = input.string(defval = "Top Right", title = "Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = g3)
-tableBackgroundColor = input.color(defval = color.new(NORD0, 100), title = "Background Color", group = g3)
+tableBackgroundColor = input.color(defval = NORD0, title = "Background Color", group = g3)
 
 tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group = g3)
 tableFrameColor = input.color(defval = NORD1, title = "Frame Color", group = g3)
