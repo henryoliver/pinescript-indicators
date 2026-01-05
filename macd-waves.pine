@@ -3,7 +3,7 @@
 // MACD & Waves - Momentum wave counting based on MACD structure (HH/HL/LL/LH)
 
 //@version=6
-indicator(title = "MACD & Waves", shorttitle = "MACD&Waves")
+indicator(title = "MACD & Waves", shorttitle = "MACD&Waves", calc_on_every_tick = calcOnEveryTick)
 
 // === CONSTANTS ===
 // Nord Theme Color
@@ -32,11 +32,15 @@ const string TREND_NONE = "none"
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
 // === INPUTS ===
+const string g0 = "General"
 const string g1 = "MACD Settings"
 const string g2 = "Display"
 const string g3 = "Colors"
 const string g4 = "Styling"
 const string g5 = "Wave Counting"
+
+// General
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = g0, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Source
 src = input.source(defval = close, title = "Source", group = g1)

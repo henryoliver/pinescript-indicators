@@ -3,7 +3,7 @@
 // Price Tape - Simplified real-time order flow for premium users
 
 //@version=6
-indicator(title = "Price Tape", shorttitle = "⚡ Tape", overlay = false, max_bars_back = 0)
+indicator(title = "Price Tape", shorttitle = "⚡ Tape", overlay = false, max_bars_back = 0, calc_on_every_tick = calcOnEveryTick)
 
 // === CONSTANTS ===
 // Nord Theme Color
@@ -28,7 +28,9 @@ const color NORD15 = #B48EAD
 const color NONE = color.new(color = color.black, transp = 100)
 
 // === INPUTS ===
+const string g0 = "General"
 const string g1 = "Tape Settings"
+calcOnEveryTick = input.bool(defval = true, title = "Calculate On Every Tick", group = g0, tooltip = "When checked (default), the script calculates on every incoming tick for a real-time tape. Unchecking it will update less frequently and may not provide a true tape-like experience.")
 tapeLength = input.int(defval = 20, title = "Tape Length", minval = 5, maxval = 50, tooltip = "Number of price prints to display", group = g1)
 minVolume = input.float(defval = 1000, title = "Min Print Volume", minval = 0, step = 10, tooltip = "Minimum volume to display a print", group = g1)
 largeVolume = input.float(defval = 10000, title = "Large Volume Threshold", minval = 100, step = 1000, tooltip = "Volume considered 'large' for emphasis", group = g1)

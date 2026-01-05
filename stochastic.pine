@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Stochastic", shorttitle = "Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true)
+indicator(title = "Stochastic", shorttitle = "Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true, calc_on_every_tick = calcOnEveryTick)
 
 // === CONSTANTS ===
 // Nord Theme Color
@@ -24,9 +24,13 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // Input group names
+const string g0 = "General"
 const string g1 = "Stochastic"
 const string g2 = "Style"
 const string g3 = "Bands"
+
+// General
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = g0, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Stochastic Input Settings
 int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = g1)

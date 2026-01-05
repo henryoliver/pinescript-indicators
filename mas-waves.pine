@@ -3,7 +3,7 @@
 // Moving Averages with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true)
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_on_every_tick = calcOnEveryTick)
 
 // === CONSTANTS ===
 // Nord Theme Color
@@ -32,7 +32,9 @@ const string TREND_FLAT   = "flat"
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
 // === INPUTS ===
-src = input.source(defval = close, title = "Source")
+// General
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+src = input.source(defval = close, title = "Source", group = "General")
 
 // EMA
 emaVisible = input.bool(defval = true, title = "Visible", group = "EMA")
@@ -68,7 +70,6 @@ sma3Color = input.color(defval = NORD1, title = "Color", group = "SMA 3")
 sma3Width = input.int(defval = 5, title = "Line Width", minval = 1, maxval = 10, group = "SMA 3")
 
 // === CALCULATIONS ===
-
 ema = ta.ema(source = src, length = emaLength)
 sma1 = ta.sma(source = src, length = sma1Length)
 sma2 = ta.sma(source = src, length = sma2Length)

@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Technical View Indicator", shorttitle = "TVI", overlay = true, dynamic_requests = false)
+indicator(title = "Technical View Indicator", shorttitle = "TVI", overlay = true, calc_on_every_tick = calcOnEveryTick, dynamic_requests = false)
 
 // === CONSTANTS ===
 // Calculation Constants
@@ -29,7 +29,9 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Input Settings
+// General
+var calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+
 // Table
 var string tablePosition = input.string(defval = position.top_right, title = "Position", 
      options=[position.top_left, position.top_center, position.top_right, 

@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true)
+indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true, calc_on_every_tick = calcOnEveryTick)
 
 // === CONSTANTS ===
 // Nord Theme Color
@@ -22,6 +22,9 @@ const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
+
+// General
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // General Style
 // Table
