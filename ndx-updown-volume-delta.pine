@@ -12,10 +12,10 @@ const color NORD9  = #81A1C1
 
 // === DATA FETCHING ===
 // Fetch NASDAQ 100 up volume OHLC
-[float upVolOpen, float upVolHigh, float upVolLow, float upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[upVolOpen, upVolHigh, upVolLow, upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Fetch NASDAQ 100 down volume OHLC
-[float downVolOpen, float downVolHigh, float downVolLow, float downVolClose] = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[downVolOpen, downVolHigh, downVolLow, downVolClose] = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Calculate volume delta for each OHLC component
 float deltaOpen = upVolOpen - downVolOpen
@@ -31,4 +31,4 @@ color candleColor = deltaClose >= deltaOpen ? NORD8 : NORD9
 plotcandle(open = deltaOpen, high = deltaHigh, low = deltaLow, close = deltaClose, title = "Volume Delta", color = candleColor, wickcolor = candleColor, bordercolor = candleColor, editable = true)
 
 // Plot zero line
-hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 2, editable = true)
+hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 3, editable = true)

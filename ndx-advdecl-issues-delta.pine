@@ -12,10 +12,10 @@ const color NORD9  = #81A1C1
 
 // === DATA FETCHING ===
 // Fetch NASDAQ 100 advancing issues OHLC
-[float advOpen, float advHigh, float advLow, float advClose] = request.security(symbol = "USI:ADVN.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[advOpen, advHigh, advLow, advClose] = request.security(symbol = "USI:ADVN.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Fetch NASDAQ 100 declining issues OHLC
-[float declOpen, float declHigh, float declLow, float declClose] = request.security(symbol = "USI:DECL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[declOpen, declHigh, declLow, declClose] = request.security(symbol = "USI:DECL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Calculate advance-decline delta for each OHLC component
 float deltaOpen = advOpen - declOpen
@@ -31,4 +31,4 @@ color candleColor = deltaClose >= deltaOpen ? NORD8 : NORD9
 plotcandle(open = deltaOpen, high = deltaHigh, low = deltaLow, close = deltaClose, title = "Advance-Decline Delta", color = candleColor, wickcolor = candleColor, bordercolor = candleColor, editable = true)
 
 // Plot zero line
-hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 2, editable = true)
+hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 3, editable = true)
