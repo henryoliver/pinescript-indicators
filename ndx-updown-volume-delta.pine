@@ -11,19 +11,24 @@ const color NORD8  = #88C0D0
 const color NORD9  = #81A1C1
 
 // === DATA FETCHING ===
-// Fetch NASDAQ 100 up and down volume
-float upVol = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = close, lookahead = barmerge.lookahead_off)
-float downVol = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = close, lookahead = barmerge.lookahead_off)
+// Fetch NASDAQ 100 up volume OHLC
+[upVolOpen, upVolHigh, upVolLow, upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
-// Calculate volume delta (difference between up and down volume)
-float volumeDelta = upVol - downVol
+// Fetch NASDAQ 100 down volume OHLC
+[downVolOpen, downVolHigh, downVolLow, downVolClose] = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+
+// Calculate volume delta for each OHLC component
+float deltaOpen = upVolOpen - downVolOpen
+float deltaHigh = upVolHigh - downVolHigh
+float deltaLow = upVolLow - downVolLow
+float deltaClose = upVolClose - downVolClose
 
 // === VISUALIZATION ===
-// Determine bar color based on delta direction
-color barColor = volumeDelta >= 0 ? NORD8 : NORD9
+// Determine candle color based on open vs close
+color candleColor = deltaClose >= deltaOpen ? NORD8 : NORD9
 
-// Plot volume delta as candlestick bars without wicks or borders
-plotcandle(open = 0, high = math.max(0, volumeDelta), low = math.min(0, volumeDelta), close = volumeDelta, title = "Volume Delta", color = barColor, wickcolor = na, bordercolor = na, editable = true)
+// Plot volume delta as candlesticks
+plotcandle(open = deltaOpen, high = deltaHigh, low = deltaLow, close = deltaClose, title = "Volume Delta", color = candleColor, wickcolor = candleColor, bordercolor = candleColor, editable = true)
 
 // Plot zero line
 hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 2, editable = true)
