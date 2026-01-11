@@ -12,10 +12,10 @@ const color NORD9  = #81A1C1
 
 // === DATA FETCHING ===
 // Fetch NASDAQ 100 advancing issues OHLC
-[advOpen, advHigh, advLow, advClose] = request.security(symbol = "USI:ADVN.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[float advOpen, float advHigh, float advLow, float advClose] = request.security(symbol = "USI:ADVN.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Fetch NASDAQ 100 declining issues OHLC
-[declOpen, declHigh, declLow, declClose] = request.security(symbol = "USI:DECL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[float declOpen, float declHigh, float declLow, float declClose] = request.security(symbol = "USI:DECL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Calculate advance-decline delta for each OHLC component
 float deltaOpen = advOpen - declOpen

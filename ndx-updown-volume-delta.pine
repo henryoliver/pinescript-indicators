@@ -12,10 +12,10 @@ const color NORD9  = #81A1C1
 
 // === DATA FETCHING ===
 // Fetch NASDAQ 100 up volume OHLC
-[upVolOpen, upVolHigh, upVolLow, upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[float upVolOpen, float upVolHigh, float upVolLow, float upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Fetch NASDAQ 100 down volume OHLC
-[downVolOpen, downVolHigh, downVolLow, downVolClose] = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
+[float downVolOpen, float downVolHigh, float downVolLow, float downVolClose] = request.security(symbol = "USI:DNVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
 
 // Calculate volume delta for each OHLC component
 float deltaOpen = upVolOpen - downVolOpen
