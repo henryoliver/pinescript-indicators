@@ -10,6 +10,8 @@ This project is a collection of Pine Script indicators for the TradingView platf
 *   **`mas-waves.pine`**: Implements the "Top Dog Trading" wave counting methodology by Barry Burns, using a combination of moving averages and a stochastic oscillator to label price and momentum waves.
 *   **`price-tape.pine`**: Simulates a "time and sales" tape, providing a real-time view of order flow by sampling 1-second data (requires a TradingView premium subscription).
 *   **`stochastic.pine`**: A standard Stochastic Oscillator indicator with customizable bands and styling.
+*   **`ndx-updown-volume-delta.pine`**: Tracks the difference between NASDAQ 100 up volume and down volume, visualized as a histogram with Nord theme colors. Data sources: `USI:UPVOL.NQ` and `USI:DNVOL.NQ`.
+*   **`ndx-advdecl-issues-delta.pine`**: Tracks the difference between NASDAQ 100 advancing and declining issues, visualized as a histogram with Nord theme colors. Data sources: `USI:ADVN.NQ` and `USI:DECL.NQ`.
 
 ## Development Conventions
 
@@ -17,6 +19,7 @@ This project is a collection of Pine Script indicators for the TradingView platf
 *   **Styling**: The indicators share a common "Nord" color theme, with constants defined for colors.
 *   **Inputs**: User-configurable inputs are grouped for better organization in the indicator settings.
 *   **File Structure**: Each indicator is a self-contained `.pine` file.
+*   **Verbose Parameter Naming**: ALWAYS use explicit parameter names in ALL function calls. Never use positional arguments. This applies to all Pine Script functions, including `indicator()`, `input.*()`, `request.*()`, `table.*()`, `plot*()`, `ta.*()`, `label.*()`, `line.*()`, and all other built-in functions. Refer to the Pine Script v6 Reference documentation for complete parameter names.
 
 ## Building and Running
 
@@ -36,7 +39,7 @@ Alternatively, you can publish these indicators on TradingView to use them acros
 **CRITICAL**: You MUST read and consult the official Pine Script documentation **EVERY TIME** you update any `.pine` file in this project. This is not optional - it is a mandatory step to ensure:
 
 1.  **Correct Syntax**: Use the latest Pine Script v6 syntax and avoid deprecated methods
-2.  **Best Practices**: Follow TradingView's recommended coding patterns and conventions
+2.  **Best Practices**: Follow TradingView's recommended coding patterns and conventions, including **always using verbose parameter names**.
 3.  **Avoid Reinventing the Wheel**: Leverage built-in functions and idioms instead of custom implementations
 4.  **Prevent Errors**: Understand language requirements (e.g., local scope blocks, proper parameter naming)
 5.  **Stay Current**: Keep code updated with the latest Pine Script features and improvements
@@ -66,7 +69,7 @@ Alternatively, you can publish these indicators on TradingView to use them acros
 1.  **Review current file** to understand its purpose and structure
 2.  **Consult Pine Script v6 Reference** for correct function signatures and parameter names
 3.  **Check Pine Script Documentation** for language requirements and best practices
-4.  **Implement changes** following the coding conventions in CLAUDE.md
+4.  **Implement changes** following the coding conventions in this `GEMINI.md` file (especially verbose parameter naming)
 5.  **Verify syntax** matches current v6 standards
 6.  **Test compilation** to catch errors before committing
 
@@ -180,7 +183,7 @@ ema_value = ta.ema(source = close, length = 20)
 - If uncertain, check the documentation first
 
 ### 4. Explicit Parameter Names
-Always use explicit parameter names (as per CLAUDE.md conventions):
+Always use explicit parameter names (as per the "Development Conventions" in this `GEMINI.md` file):
 
 ✅ **CORRECT**:
 ```pine
