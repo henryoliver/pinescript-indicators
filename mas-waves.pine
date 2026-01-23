@@ -1,12 +1,12 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Moving Averages with Trend Indicator
+// Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_on_every_tick = calcOnEveryTick)
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, timeframe = "", timeframe_gaps = true)
 
 // === CONSTANTS ===
-// Nord Theme Color
+// Nord Theme Colors
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
 const color NORD2  = #434C5E
@@ -24,70 +24,49 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Calculation Constants
-const string TREND_UP     = "up"
-const string TREND_DOWN   = "down"
-const string TREND_FLAT   = "flat"
-
-const float RADIANS_TO_DEGREES = 180 / math.pi
+// Trend States
+const string TREND_UP   = "up"
+const string TREND_DOWN = "down"
+const string TREND_FLAT = "flat"
 
 // === INPUTS ===
-// General
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
-src = input.source(defval = close, title = "Source", group = "General")
+// General Settings
+src = input(defval = close, title = "Source")
+smaLength = input.int(defval = 50, title = "Length", minval = 1)
+smaOffset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, display = display.none)
+smaWidth = input.int(defval = 3, title = "Line Width", minval = 1, maxval = 10)
 
-// EMA
-emaVisible = input.bool(defval = true, title = "Visible", group = "EMA")
-emaLength = input.int(defval = 15, title = "Length", minval = 1, group = "EMA")
-emaOffset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "EMA")
-emaColor = input.color(defval = NORD3, title = "Color", group = "EMA")
-emaWidth = input.int(defval = 2, title = "Line Width", minval = 1, maxval = 10, group = "EMA")
+// Trend Detection Settings
+trendLookback = input.int(defval = 1, title = "Lookback Period (Bars)", minval = 1, maxval = 20,
+     tooltip = "Number of bars to look back when calculating the slope", group = "Trend Detection", display = display.none)
+flatThreshold = input.float(defval = 0.0001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
+     tooltip = "Slope values between -threshold and +threshold are considered flat/neutral", group = "Trend Detection", display = display.none)
 
-// SMA 1 (50 SMA - THE TREND INDICATOR)
-sma1Visible = input.bool(defval = true, title = "Visible", group = "SMA 1")
-sma1Length = input.int(defval = 50, title = "Length", minval = 1, group = "SMA 1")
-sma1Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 1")
-sma1TrendLookback = input.int(defval = 5, title = "Trend Lookback (Bars)", minval = 1, maxval = 20,
-     tooltip = "Number of bars to look back to determine slope angle", group = "SMA 1")
-sma1FlatThreshold = input.float(defval = 0.0001, title = "Flat Threshold (Degrees)", minval = 0.0001, maxval = 5.0, step = 0.0001,
-     tooltip = "Angle threshold in degrees - slopes between -threshold and +threshold are considered flat", group = "SMA 1")
-sma1ColorUp = input.color(defval = color.new(color = NORD8, transp = 60), title = "Color (Up)", group = "SMA 1")
-sma1ColorNeutral = input.color(defval = NORD2, title = "Color (Neutral)", group = "SMA 1")
-sma1ColorDown = input.color(defval = color.new(color = NORD11, transp = 60), title = "Color (Down)", group = "SMA 1")
-sma1Width = input.int(defval = 3, title = "Line Width", minval = 1, maxval = 10, group = "SMA 1")
-
-// SMA 2 & 3
-sma2Visible = input.bool(defval = true, title = "Visible", group = "SMA 2")
-sma2Length = input.int(defval = 100, title = "Length", minval = 1, group = "SMA 2")
-sma2Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 2")
-sma2Color = input.color(defval = NORD1, title = "Color", group = "SMA 2")
-sma2Width = input.int(defval = 4, title = "Line Width", minval = 1, maxval = 10, group = "SMA 2")
-
-sma3Visible = input.bool(defval = true, title = "Visible", group = "SMA 3")
-sma3Length = input.int(defval = 200, title = "Length", minval = 1, group = "SMA 3")
-sma3Offset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500, group = "SMA 3")
-sma3Color = input.color(defval = NORD1, title = "Color", group = "SMA 3")
-sma3Width = input.int(defval = 5, title = "Line Width", minval = 1, maxval = 10, group = "SMA 3")
+// Color Settings
+colorUp = input.color(defval = color.new(color = NORD8, transp = 20), title = "Uptrend Color", group = "Trend Colors")
+colorFlat = input.color(defval = NORD2, title = "Flat/Neutral Color", group = "Trend Colors")
+colorDown = input.color(defval = color.new(color = NORD9, transp = 60), title = "Downtrend Color", group = "Trend Colors")
 
 // === CALCULATIONS ===
-ema = ta.ema(source = src, length = emaLength)
-sma1 = ta.sma(source = src, length = sma1Length)
-sma2 = ta.sma(source = src, length = sma2Length)
-sma3 = ta.sma(source = src, length = sma3Length)
+// Calculate the Simple Moving Average
+sma = ta.sma(source = src, length = smaLength)
 
-// SMA 1 Slope (THE TREND INDICATOR)
-sma1Height = ta.change(sma1, sma1TrendLookback)
-sma1SlopeAngle = na(sma1Height) or sma1Height == 0 ? 0 : math.atan(sma1Height / sma1TrendLookback) * RADIANS_TO_DEGREES
+// Calculate Slope (Direct comparison - no trigonometric functions for better performance)
+// Slope = change in SMA value over the lookback period
+smaSlope = ta.change(source = sma, length = trendLookback)
 
-sma1Trend = math.abs(sma1SlopeAngle) < sma1FlatThreshold ? TREND_FLAT : sma1SlopeAngle > 0 ? TREND_UP : TREND_DOWN
-sma1CurrentColor = switch sma1Trend
-    TREND_UP => sma1ColorUp
-    TREND_DOWN => sma1ColorDown
-    => sma1ColorNeutral
+// Determine Trend Direction
+// If absolute slope is less than threshold: FLAT
+// If slope is positive: UPTREND
+// If slope is negative: DOWNTREND
+trend = math.abs(smaSlope) < flatThreshold ? TREND_FLAT : smaSlope > 0 ? TREND_UP : TREND_DOWN
 
-// === PLOTS ===
-plot(series = emaVisible ? ema : na, title = "EMA", color = emaColor, linewidth = emaWidth, offset = emaOffset)
-plot(series = sma1Visible ? sma1 : na, title = "SMA 1", color = sma1CurrentColor, linewidth = sma1Width, offset = sma1Offset)
-plot(series = sma2Visible ? sma2 : na, title = "SMA 2", color = sma2Color, linewidth = sma2Width, offset = sma2Offset)
-plot(series = sma3Visible ? sma3 : na, title = "SMA 3", color = sma3Color, linewidth = sma3Width, offset = sma3Offset)
+// Select Color Based on Trend
+smaColor = switch trend
+    TREND_UP => colorUp
+    TREND_DOWN => colorDown
+    => colorFlat
+
+// === PLOT ===
+plot(series = sma, title = "SMA", color = smaColor, linewidth = smaWidth, offset = smaOffset)
 

@@ -10,6 +10,12 @@ const color NORD1  = #3B4252
 const color NORD8  = #88C0D0
 const color NORD9  = #81A1C1
 
+// === INPUTS ===
+// Candle Styling
+bool showBody = input.bool(defval = false, title = "Show Candle Body", group = "Candle Styling", tooltip = "Toggle visibility of the candle body")
+bool showWick = input.bool(defval = false, title = "Show Candle Wick", group = "Candle Styling", tooltip = "Toggle visibility of the candle wicks")
+bool showBorder = input.bool(defval = true, title = "Show Candle Border", group = "Candle Styling", tooltip = "Toggle visibility of the candle border")
+
 // === DATA FETCHING ===
 // Fetch NASDAQ 100 up volume OHLC
 [upVolOpen, upVolHigh, upVolLow, upVolClose] = request.security(symbol = "USI:UPVOL.NQ", timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off)
@@ -27,8 +33,13 @@ float deltaClose = upVolClose - downVolClose
 // Determine candle color based on open vs close
 color candleColor = deltaClose >= deltaOpen ? NORD8 : NORD9
 
+// Apply visibility toggles
+color bodyColor = showBody ? candleColor : na
+color wickColor = showWick ? candleColor : na
+color borderColor = showBorder ? candleColor : na
+
 // Plot volume delta as candlesticks
-plotcandle(open = deltaOpen, high = deltaHigh, low = deltaLow, close = deltaClose, title = "Volume Delta", color = candleColor, wickcolor = candleColor, bordercolor = candleColor, editable = true)
+plotcandle(open = deltaOpen, high = deltaHigh, low = deltaLow, close = deltaClose, title = "Volume Delta", color = bodyColor, wickcolor = wickColor, bordercolor = borderColor, editable = true)
 
 // Plot zero line
 hline(price = 0, title = "Zero Line", color = NORD1, linestyle = hline.style_solid, linewidth = 3, editable = true)
