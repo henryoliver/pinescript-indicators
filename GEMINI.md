@@ -19,7 +19,7 @@ This project is a collection of Pine Script indicators for the TradingView platf
 *   **Styling**: The indicators share a common "Nord" color theme, with constants defined for colors.
 *   **Inputs**: User-configurable inputs are grouped for better organization in the indicator settings.
 *   **File Structure**: Each indicator is a self-contained `.pine` file.
-*   **Verbose Parameter Naming**: ALWAYS use explicit parameter names in ALL function calls. Never use positional arguments. This applies to all Pine Script functions, including `indicator()`, `input.*()`, `request.*()`, `table.*()`, `plot*()`, `ta.*()`, `label.*()`, `line.*()`, and all other built-in functions. Refer to the Pine Script v6 Reference documentation for complete parameter names.
+*   **Verbose Parameter Naming**: ALWAYS use explicit parameter names in ALL function calls where the official Pine Script v6 documentation specifies parameter names. **You MUST verify this in the documentation first.** Never use positional arguments if named parameters are available. This applies to all Pine Script functions, including `indicator()`, `input.*()`, `request.*()`, `table.*()`, `plot*()`, `ta.*()`, `label.*()`, `line.*()`, and all other built-in functions. If the official documentation for a function shows no parameter names, then positional arguments are acceptable as a last resort. Refer to the Pine Script v6 Reference documentation for complete parameter names.
 
 ## Building and Running
 
