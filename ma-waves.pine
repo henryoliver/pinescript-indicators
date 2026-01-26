@@ -134,7 +134,7 @@ if trendChanged
     wave1Anchored := false
     currentImpulseNumber := 0
     lastImpulseCandle := CycleCandle.new(na, na)
-    array.clear(id = pendingRetracements)
+    pendingRetracements.clear()
     previousTrend := trend
 
 // Cycle Zone State Machine
@@ -216,17 +216,17 @@ if trend == TREND_DOWN
                 label.new(x = bar_index[1], y = low[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_up, color = NORD10, textcolor = NORD6)
 
                 // Process pending retracements
-                if array.size(id = pendingRetracements) > 0
+                if pendingRetracements.size() > 0
                     // Find highest cycle high for even wave number
                     int highestIndex = 0
-                    float highestClose = array.get(id = pendingRetracements, index = 0).candle.close
-                    for i = 1 to array.size(pendingRetracements) - 1
-                        if array.get(id = pendingRetracements, index = i).candle.close > highestClose
-                            highestClose := array.get(pendingRetracements, i).candle.close
+                    float highestClose = pendingRetracements.get(0).candle.close
+                    for i = 1 to pendingRetracements.size() - 1
+                        if pendingRetracements.get(i).candle.close > highestClose
+                            highestClose := pendingRetracements.get(i).candle.close
                             highestIndex := i
 
                     // Assign even number to highest
-                    PendingCycle winner = array.get(id = pendingRetracements, index = highestIndex)
+                    PendingCycle winner = pendingRetracements.get(highestIndex)
                     int evenNumber = currentImpulseNumber - 1
                     label.new(x = winner.barIndex, y = high[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_down, color = NORD11, textcolor = NORD6)
 
@@ -238,7 +238,7 @@ if trend == TREND_DOWN
                             label.new(x = pending.barIndex, y = high[bar_index - pending.barIndex], text = letter, style = label.style_label_down, color = NORD12, textcolor = NORD6)
                             letterIdx += 1
 
-                    array.clear(id = pendingRetracements)
+                    pendingRetracements.clear()
             else
                 // Failed impulse wave
                 int failedNumber = currentImpulseNumber + 2
@@ -247,7 +247,7 @@ if trend == TREND_DOWN
     // Completed a cycle HIGH → add to pending retracements
     if completedCycleHigh and not na(previousCycleHigh.close)
         PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleHigh, barIndex = bar_index[1])
-        array.push(id = pendingRetracements, value = pendingRetracement)
+        pendingRetracements.push(pendingRetracement)
 
 // UPTREND wave logic (inverted from downtrend)
 if trend == TREND_UP
@@ -274,16 +274,16 @@ if trend == TREND_UP
                 label.new(x = bar_index[1], y = high[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_down, color = NORD10, textcolor = NORD6)
 
                 // Process pending retracements (find lowest)
-                if array.size(id = pendingRetracements) > 0
+                if pendingRetracements.size() > 0
                     int lowestIndex = 0
-                    float lowestClose = array.get(id = pendingRetracements, index = 0).candle.close
-                    for i = 1 to array.size(pendingRetracements) - 1
-                        if array.get(id = pendingRetracements, index = i).candle.close < lowestClose
-                            lowestClose := array.get(pendingRetracements, i).candle.close
+                    float lowestClose = pendingRetracements.get(0).candle.close
+                    for i = 1 to pendingRetracements.size() - 1
+                        if pendingRetracements.get(i).candle.close < lowestClose
+                            lowestClose := pendingRetracements.get(i).candle.close
                             lowestIndex := i
 
                     // Assign even number to lowest
-                    PendingCycle winner = array.get(id = pendingRetracements, index = lowestIndex)
+                    PendingCycle winner = pendingRetracements.get(lowestIndex)
                     int evenNumber = currentImpulseNumber - 1
                     label.new(x = winner.barIndex, y = low[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_up, color = NORD11, textcolor = NORD6)
 
@@ -295,7 +295,7 @@ if trend == TREND_UP
                             label.new(x = pending.barIndex, y = low[bar_index - pending.barIndex], text = letter, style = label.style_label_up, color = NORD12, textcolor = NORD6)
                             letterIdx += 1
 
-                    array.clear(id = pendingRetracements)
+                    pendingRetracements.clear()
             else
                 // Failed impulse wave
                 int failedNumber = currentImpulseNumber + 2
@@ -304,7 +304,7 @@ if trend == TREND_UP
     // Completed a cycle LOW → add to pending retracements
     if completedCycleLow and not na(previousCycleLow.close)
         PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleLow, barIndex = bar_index[1])
-        array.push(id = pendingRetracements, value = pendingRetracement)
+        pendingRetracements.push(pendingRetracement)
 
 // === DEBUG LOGGING ===
 if barstate.islast
@@ -320,7 +320,7 @@ if barstate.islast
     log.info("=== CYCLES ===")
     log.info("Cycle Zone: " + str.tostring(value = cycleZone))
     log.info("Previous Cycle Zone: " + str.tostring(value = previousCycleZone))
-    log.info("Pending Retracements: " + str.tostring(value = array.size(id = pendingRetracements)))
+    log.info("Pending Retracements: " + str.tostring(value = pendingRetracements.size()))
     log.info("")
     if not na(currentCycleHigh.close)
         log.info("Current Cycle High - Open: " + str.tostring(value = currentCycleHigh.open) + " Close: " + str.tostring(value = currentCycleHigh.close))
