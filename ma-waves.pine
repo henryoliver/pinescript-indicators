@@ -3,7 +3,7 @@
 // Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, timeframe = "", timeframe_gaps = true)
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true)
 
 // === CONSTANTS ===
 // Nord Theme Colors
@@ -29,6 +29,9 @@ const string TREND_UP   = "up"
 const string TREND_DOWN = "down"
 const string TREND_FLAT = "flat"
 
+// Alphabet for complex retrace letters (skip 'a' - start with 'b')
+const string ALPHABET = "bcdefghijklmnopqrstuvwxyz"
+
 // === TYPES ===
 // Custom type to store candle body (open and close)
 type CycleCandle
@@ -37,8 +40,8 @@ type CycleCandle
 
 // Enum for cycle zone states
 enum CycleZone
-    NONE,
-    HIGH,
+    NONE
+    HIGH
     LOW
 
 // Custom type to store pending retracement cycle info
@@ -101,6 +104,7 @@ bool trendChanged = trend != previousTrend
 
 // Cycle state variables
 var CycleZone cycleZone = CycleZone.NONE
+var CycleZone previousCycleZone = CycleZone.NONE
 
 // Current cycle tracking (winner = highest/lowest CLOSE, but store both open and close)
 var CycleCandle currentCycleHigh = CycleCandle.new(na, na)
@@ -119,12 +123,10 @@ var CycleCandle lastImpulseCandle = CycleCandle.new(na, na)
 // Pending retracements (waiting for next impulse to confirm)
 var array<PendingCycle> pendingRetracements = array.new<PendingCycle>()
 
-// Letter tracking for complex retraces (b, c, d...)
-var int letterIndex = 0  // 0=none, 1=b, 2=c, 3=d...
-
 // Reset ALL cycle and wave variables when trend changes
 if trendChanged
     cycleZone := CycleZone.NONE
+    previousCycleZone := CycleZone.NONE
     currentCycleHigh := CycleCandle.new(na, na)
     currentCycleLow := CycleCandle.new(na, na)
     previousCycleHigh := CycleCandle.new(na, na)
@@ -133,7 +135,6 @@ if trendChanged
     currentImpulseNumber := 0
     lastImpulseCandle := CycleCandle.new(na, na)
     array.clear(id = pendingRetracements)
-    letterIndex := 0
     previousTrend := trend
 
 // Cycle Zone State Machine
@@ -176,8 +177,11 @@ switch cycleZone
 
 // === WAVE ASSIGNMENT ===
 // Detect when cycles complete and assign wave labels
-bool completedCycleLow = cycleZone == CycleZone.HIGH and cycleZone[1] == CycleZone.LOW
-bool completedCycleHigh = cycleZone == CycleZone.LOW and cycleZone[1] == CycleZone.HIGH
+bool completedCycleLow = cycleZone == CycleZone.HIGH and previousCycleZone == CycleZone.LOW
+bool completedCycleHigh = cycleZone == CycleZone.LOW and previousCycleZone == CycleZone.HIGH
+
+// Update previous cycle zone for next bar
+previousCycleZone := cycleZone
 
 // Helper function to get low of candle body
 getLow(CycleCandle candle) =>
@@ -197,7 +201,6 @@ if trend == TREND_DOWN
             currentImpulseNumber := 1
             lastImpulseCandle := previousCycleLow
             label.new(x = bar_index[1], y = low[1], text = "1", style = label.style_label_up, color = NORD10, textcolor = NORD6)
-            letterIndex := 0
         else
             // Check if qualifies as next impulse (3, 5, 7...)
             float previousLow = getLow(candle = lastImpulseCandle)
@@ -228,22 +231,21 @@ if trend == TREND_DOWN
                     label.new(x = winner.barIndex, y = high[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_down, color = NORD11, textcolor = NORD6)
 
                     // Assign letters to others (starting with "b" since we omit "a")
-                    int letterIdx = 1  // Start at "b"
-                    for i = 0 to array.size(pendingRetracements) - 1
-                            PendingCycle pending = array.get(id = pendingRetracements, index = i)
-                            string letter = letterIdx == 1 ? "b" : letterIdx == 2 ? "c" : letterIdx == 3 ? "d" : "e"
+                    int letterIdx = 0  // Start at index 0 for 'b'
+                    for [i, pending] in pendingRetracements
+                        if i != highestIndex
+                            string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
                             label.new(x = pending.barIndex, y = high[bar_index - pending.barIndex], text = letter, style = label.style_label_down, color = NORD12, textcolor = NORD6)
                             letterIdx += 1
 
-                    array.clear(pendingRetracements)
-                    letterIndex := 0
+                    array.clear(id = pendingRetracements)
             else
                 // Failed impulse wave
                 int failedNumber = currentImpulseNumber + 2
                 label.new(x = bar_index[1], y = low[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_up, color = NORD3, textcolor = NORD6)
 
     // Completed a cycle HIGH → add to pending retracements
-    if completedCycleHigh
+    if completedCycleHigh and not na(previousCycleHigh.close)
         PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleHigh, barIndex = bar_index[1])
         array.push(id = pendingRetracements, value = pendingRetracement)
 
@@ -257,7 +259,6 @@ if trend == TREND_UP
             currentImpulseNumber := 1
             lastImpulseCandle := previousCycleHigh
             label.new(x = bar_index[1], y = high[1], text = "1", style = label.style_label_down, color = NORD10, textcolor = NORD6)
-            letterIndex := 0
         else
             // Check if qualifies as next impulse (3, 5, 7...)
             float previousHigh = getHigh(candle = lastImpulseCandle)
@@ -287,46 +288,48 @@ if trend == TREND_UP
                     label.new(x = winner.barIndex, y = low[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_up, color = NORD11, textcolor = NORD6)
 
                     // Assign letters to others
-                    int letterIdx = 1
-                    for i = 0 to array.size(pendingRetracements) - 1
+                    int letterIdx = 0
+                    for [i, pending] in pendingRetracements
                         if i != lowestIndex
-                            PendingCycle pending = array.get(id = pendingRetracements, index = i)
-                            string letter = letterIdx == 1 ? "b" : letterIdx == 2 ? "c" : letterIdx == 3 ? "d" : "e"
+                            string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
                             label.new(x = pending.barIndex, y = low[bar_index - pending.barIndex], text = letter, style = label.style_label_up, color = NORD12, textcolor = NORD6)
                             letterIdx += 1
 
-                    array.clear(pendingRetracements)
-                    letterIndex := 0
+                    array.clear(id = pendingRetracements)
             else
                 // Failed impulse wave
                 int failedNumber = currentImpulseNumber + 2
                 label.new(x = bar_index[1], y = high[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_down, color = NORD3, textcolor = NORD6)
 
     // Completed a cycle LOW → add to pending retracements
-    if completedCycleLow
+    if completedCycleLow and not na(previousCycleLow.close)
         PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleLow, barIndex = bar_index[1])
         array.push(id = pendingRetracements, value = pendingRetracement)
 
 // === DEBUG LOGGING ===
 if barstate.islast
-    log.info(message = "=== TREND ===")
-    log.info(message = "Trend: " + trend)
-    log.info(message = "SMA Slope: " + str.tostring(value = smaSlope))
-    log.info(message = "")
-    log.info(message = "=== STOCHASTIC ===")
-    log.info(message = "Stoch %D: " + str.tostring(value = stochD))
-    log.info(message = "")
-    log.info(message = "=== CYCLES ===")
-    log.info(message = "Cycle Zone: " + str.tostring(value = cycleZone))
-    log.info(message = "")
+    log.info("=== TREND ===")
+    log.info("Trend: " + trend)
+    log.info("SMA Slope: " + str.tostring(value = smaSlope))
+    log.info("Wave 1 Anchored: " + str.tostring(value = wave1Anchored))
+    log.info("Current Impulse Number: " + str.tostring(value = currentImpulseNumber))
+    log.info("")
+    log.info("=== STOCHASTIC ===")
+    log.info("Stoch %D: " + str.tostring(value = stochD))
+    log.info("")
+    log.info("=== CYCLES ===")
+    log.info("Cycle Zone: " + str.tostring(value = cycleZone))
+    log.info("Previous Cycle Zone: " + str.tostring(value = previousCycleZone))
+    log.info("Pending Retracements: " + str.tostring(value = array.size(id = pendingRetracements)))
+    log.info("")
     if not na(currentCycleHigh.close)
-        log.info(message = "Current Cycle High - Open: " + str.tostring(value = currentCycleHigh.open) + " Close: " + str.tostring(value = currentCycleHigh.close))
+        log.info("Current Cycle High - Open: " + str.tostring(value = currentCycleHigh.open) + " Close: " + str.tostring(value = currentCycleHigh.close))
     if not na(previousCycleHigh.close)
-        log.info(message = "Previous Cycle High - Open: " + str.tostring(value = previousCycleHigh.open) + " Close: " + str.tostring(value = previousCycleHigh.close))
+        log.info("Previous Cycle High - Open: " + str.tostring(value = previousCycleHigh.open) + " Close: " + str.tostring(value = previousCycleHigh.close))
     if not na(currentCycleLow.close)
-        log.info(message = "Current Cycle Low - Open: " + str.tostring(value = currentCycleLow.open) + " Close: " + str.tostring(value = currentCycleLow.close))
+        log.info("Current Cycle Low - Open: " + str.tostring(value = currentCycleLow.open) + " Close: " + str.tostring(value = currentCycleLow.close))
     if not na(previousCycleLow.close)
-        log.info(message = "Previous Cycle Low - Open: " + str.tostring(value = previousCycleLow.open) + " Close: " + str.tostring(value = previousCycleLow.close))
+        log.info("Previous Cycle Low - Open: " + str.tostring(value = previousCycleLow.open) + " Close: " + str.tostring(value = previousCycleLow.close))
 
 // === PLOT ===
 plot(series = sma, title = "SMA", color = smaColor, linewidth = smaWidth, offset = smaOffset)
