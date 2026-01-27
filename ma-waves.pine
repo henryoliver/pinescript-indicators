@@ -3,7 +3,7 @@
 // Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true)
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300)
 
 // === CONSTANTS ===
 // Nord Theme Colors
@@ -46,7 +46,8 @@ enum CycleZone
 
 // Custom type to store pending retracement cycle info
 type PendingCycle
-    CycleCandle candle
+    float candleOpen
+    float candleClose
     int barIndex
 
 // === INPUTS ===
@@ -71,6 +72,9 @@ colorDown = input.color(defval = color.new(color = NORD9, transp = 60), title = 
 stochLength = input.int(defval = 5, title = "K Length", minval = 1, group = "Stochastic Cycles")
 stochSmooth = input.int(defval = 2, title = "K Smooth", minval = 1, group = "Stochastic Cycles")
 stochDLength = input.int(defval = 3, title = "D Length", minval = 1, group = "Stochastic Cycles")
+
+// Array size limit to prevent performance issues
+const int MAX_PENDING_RETRACEMENTS = 20
 
 // === CALCULATIONS ===
 // Calculate the Simple Moving Average
@@ -191,120 +195,123 @@ getLow(CycleCandle candle) =>
 getHigh(CycleCandle candle) =>
     math.max(candle.open, candle.close)
 
-// DOWNTREND wave logic
-if trend == TREND_DOWN
-    // Completed a cycle LOW → check for impulse wave (1, 3, 5, 7...)
-    if completedCycleLow
-        // Wave 1 ANCHOR: first cycle low after 50MA angles down
-        if not wave1Anchored
-            wave1Anchored := true
-            currentImpulseNumber := 1
-            lastImpulseCandle := previousCycleLow
-            label.new(x = bar_index[1], y = low[1], text = "1", style = label.style_label_up, color = NORD10, textcolor = NORD6)
-        else
-            // Check if qualifies as next impulse (3, 5, 7...)
-            float previousLow = getLow(candle = lastImpulseCandle)
-            float currentClose = previousCycleLow.close
-            float currentOpen = previousCycleLow.open
-
-            bool qualifiesAsImpulse = currentClose < previousLow and currentOpen <= previousLow
-
-            if qualifiesAsImpulse
-                // Confirmed impulse wave
-                currentImpulseNumber += 2
+// === WAVE LOGIC ===
+// Only execute wave logic on confirmed bars (bar close, not every tick)
+if barstate.isconfirmed
+    // DOWNTREND wave logic
+    if trend == TREND_DOWN
+        // Completed a cycle LOW → check for impulse wave (1, 3, 5, 7...)
+        if completedCycleLow
+            // Wave 1 ANCHOR: first cycle low after 50MA angles down
+            if not wave1Anchored
+                wave1Anchored := true
+                currentImpulseNumber := 1
                 lastImpulseCandle := previousCycleLow
-                label.new(x = bar_index[1], y = low[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_up, color = NORD10, textcolor = NORD6)
-
-                // Process pending retracements
-                if pendingRetracements.size() > 0
-                    // Find highest cycle high for even wave number
-                    int highestIndex = 0
-                    float highestClose = pendingRetracements.get(0).candle.close
-                    for i = 1 to pendingRetracements.size() - 1
-                        if pendingRetracements.get(i).candle.close > highestClose
-                            highestClose := pendingRetracements.get(i).candle.close
-                            highestIndex := i
-
-                    // Assign even number to highest
-                    PendingCycle winner = pendingRetracements.get(highestIndex)
-                    int evenNumber = currentImpulseNumber - 1
-                    label.new(x = winner.barIndex, y = high[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_down, color = NORD11, textcolor = NORD6)
-
-                    // Assign letters to others (starting with "b" since we omit "a")
-                    int letterIdx = 0  // Start at index 0 for 'b'
-                    for [i, pending] in pendingRetracements
-                        if i != highestIndex
-                            string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
-                            label.new(x = pending.barIndex, y = high[bar_index - pending.barIndex], text = letter, style = label.style_label_down, color = NORD12, textcolor = NORD6)
-                            letterIdx += 1
-
-                    pendingRetracements.clear()
+                label.new(x = bar_index[1], y = low[1], text = "1", style = label.style_label_up, color = NORD10, textcolor = NORD6)
             else
-                // Failed impulse wave
-                int failedNumber = currentImpulseNumber + 2
-                label.new(x = bar_index[1], y = low[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_up, color = NORD3, textcolor = NORD6)
+                // Check if qualifies as next impulse (3, 5, 7...)
+                float previousLow = getLow(candle = lastImpulseCandle)
+                float currentClose = previousCycleLow.close
+                float currentOpen = previousCycleLow.open
 
-    // Completed a cycle HIGH → add to pending retracements
-    if completedCycleHigh and not na(previousCycleHigh.close)
-        PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleHigh, barIndex = bar_index[1])
-        pendingRetracements.push(pendingRetracement)
+                bool qualifiesAsImpulse = currentClose < previousLow and currentOpen <= previousLow
 
-// UPTREND wave logic (inverted from downtrend)
-if trend == TREND_UP
-    // Completed a cycle HIGH → check for impulse wave (1, 3, 5, 7...)
-    if completedCycleHigh
-        // Wave 1 ANCHOR: first cycle high after 50MA angles up
-        if not wave1Anchored
-            wave1Anchored := true
-            currentImpulseNumber := 1
-            lastImpulseCandle := previousCycleHigh
-            label.new(x = bar_index[1], y = high[1], text = "1", style = label.style_label_down, color = NORD10, textcolor = NORD6)
-        else
-            // Check if qualifies as next impulse (3, 5, 7...)
-            float previousHigh = getHigh(candle = lastImpulseCandle)
-            float currentClose = previousCycleHigh.close
-            float currentOpen = previousCycleHigh.open
+                if qualifiesAsImpulse
+                    // Confirmed impulse wave
+                    currentImpulseNumber += 2
+                    lastImpulseCandle := previousCycleLow
+                    label.new(x = bar_index[1], y = low[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_up, color = NORD10, textcolor = NORD6)
 
-            bool qualifiesAsImpulse = currentClose > previousHigh and currentOpen >= previousHigh
+                    // Process pending retracements
+                    if pendingRetracements.size() > 0
+                        // Find highest cycle high for even wave number
+                        int highestIndex = 0
+                        float highestClose = pendingRetracements.get(0).candleClose
+                        for i = 1 to pendingRetracements.size() - 1
+                            if pendingRetracements.get(i).candleClose > highestClose
+                                highestClose := pendingRetracements.get(i).candleClose
+                                highestIndex := i
 
-            if qualifiesAsImpulse
-                // Confirmed impulse wave
-                currentImpulseNumber += 2
+                        // Assign even number to highest
+                        PendingCycle winner = pendingRetracements.get(highestIndex)
+                        int evenNumber = currentImpulseNumber - 1
+                        label.new(x = winner.barIndex, y = high[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_down, color = NORD11, textcolor = NORD6)
+
+                        // Assign letters to others (starting with "b" since we omit "a")
+                        int letterIdx = 0  // Start at index 0 for 'b'
+                        for [i, pending] in pendingRetracements
+                            if i != highestIndex
+                                string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
+                                label.new(x = pending.barIndex, y = high[bar_index - pending.barIndex], text = letter, style = label.style_label_down, color = NORD12, textcolor = NORD6)
+                                letterIdx += 1
+
+                        pendingRetracements.clear()
+                else
+                    // Failed impulse wave
+                    int failedNumber = currentImpulseNumber + 2
+                    label.new(x = bar_index[1], y = low[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_up, color = NORD3, textcolor = NORD6)
+
+        // Completed a cycle HIGH → add to pending retracements (with size limit)
+        if completedCycleHigh and pendingRetracements.size() < MAX_PENDING_RETRACEMENTS
+            PendingCycle pendingRetracement = PendingCycle.new(candleOpen = previousCycleHigh.open, candleClose = previousCycleHigh.close, barIndex = bar_index[1])
+            pendingRetracements.push(pendingRetracement)
+
+    // UPTREND wave logic (inverted from downtrend)
+    if trend == TREND_UP
+        // Completed a cycle HIGH → check for impulse wave (1, 3, 5, 7...)
+        if completedCycleHigh
+            // Wave 1 ANCHOR: first cycle high after 50MA angles up
+            if not wave1Anchored
+                wave1Anchored := true
+                currentImpulseNumber := 1
                 lastImpulseCandle := previousCycleHigh
-                label.new(x = bar_index[1], y = high[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_down, color = NORD10, textcolor = NORD6)
-
-                // Process pending retracements (find lowest)
-                if pendingRetracements.size() > 0
-                    int lowestIndex = 0
-                    float lowestClose = pendingRetracements.get(0).candle.close
-                    for i = 1 to pendingRetracements.size() - 1
-                        if pendingRetracements.get(i).candle.close < lowestClose
-                            lowestClose := pendingRetracements.get(i).candle.close
-                            lowestIndex := i
-
-                    // Assign even number to lowest
-                    PendingCycle winner = pendingRetracements.get(lowestIndex)
-                    int evenNumber = currentImpulseNumber - 1
-                    label.new(x = winner.barIndex, y = low[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_up, color = NORD11, textcolor = NORD6)
-
-                    // Assign letters to others
-                    int letterIdx = 0
-                    for [i, pending] in pendingRetracements
-                        if i != lowestIndex
-                            string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
-                            label.new(x = pending.barIndex, y = low[bar_index - pending.barIndex], text = letter, style = label.style_label_up, color = NORD12, textcolor = NORD6)
-                            letterIdx += 1
-
-                    pendingRetracements.clear()
+                label.new(x = bar_index[1], y = high[1], text = "1", style = label.style_label_down, color = NORD10, textcolor = NORD6)
             else
-                // Failed impulse wave
-                int failedNumber = currentImpulseNumber + 2
-                label.new(x = bar_index[1], y = high[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_down, color = NORD3, textcolor = NORD6)
+                // Check if qualifies as next impulse (3, 5, 7...)
+                float previousHigh = getHigh(candle = lastImpulseCandle)
+                float currentClose = previousCycleHigh.close
+                float currentOpen = previousCycleHigh.open
 
-    // Completed a cycle LOW → add to pending retracements
-    if completedCycleLow and not na(previousCycleLow.close)
-        PendingCycle pendingRetracement = PendingCycle.new(candle = previousCycleLow, barIndex = bar_index[1])
-        pendingRetracements.push(pendingRetracement)
+                bool qualifiesAsImpulse = currentClose > previousHigh and currentOpen >= previousHigh
+
+                if qualifiesAsImpulse
+                    // Confirmed impulse wave
+                    currentImpulseNumber += 2
+                    lastImpulseCandle := previousCycleHigh
+                    label.new(x = bar_index[1], y = high[1], text = str.tostring(value = currentImpulseNumber), style = label.style_label_down, color = NORD10, textcolor = NORD6)
+
+                    // Process pending retracements (find lowest)
+                    if pendingRetracements.size() > 0
+                        int lowestIndex = 0
+                        float lowestClose = pendingRetracements.get(0).candleClose
+                        for i = 1 to pendingRetracements.size() - 1
+                            if pendingRetracements.get(i).candleClose < lowestClose
+                                lowestClose := pendingRetracements.get(i).candleClose
+                                lowestIndex := i
+
+                        // Assign even number to lowest
+                        PendingCycle winner = pendingRetracements.get(lowestIndex)
+                        int evenNumber = currentImpulseNumber - 1
+                        label.new(x = winner.barIndex, y = low[bar_index - winner.barIndex], text = str.tostring(value = evenNumber), style = label.style_label_up, color = NORD11, textcolor = NORD6)
+
+                        // Assign letters to others
+                        int letterIdx = 0
+                        for [i, pending] in pendingRetracements
+                            if i != lowestIndex
+                                string letter = str.substring(source = ALPHABET, begin_pos = letterIdx, end_pos = letterIdx + 1)
+                                label.new(x = pending.barIndex, y = low[bar_index - pending.barIndex], text = letter, style = label.style_label_up, color = NORD12, textcolor = NORD6)
+                                letterIdx += 1
+
+                        pendingRetracements.clear()
+                else
+                    // Failed impulse wave
+                    int failedNumber = currentImpulseNumber + 2
+                    label.new(x = bar_index[1], y = high[1], text = "F" + str.tostring(value = failedNumber), style = label.style_label_down, color = NORD3, textcolor = NORD6)
+
+        // Completed a cycle LOW → add to pending retracements (with size limit)
+        if completedCycleLow and pendingRetracements.size() < MAX_PENDING_RETRACEMENTS
+            PendingCycle pendingRetracement = PendingCycle.new(candleOpen = previousCycleLow.open, candleClose = previousCycleLow.close, barIndex = bar_index[1])
+            pendingRetracements.push(pendingRetracement)
 
 // === DEBUG LOGGING ===
 if barstate.islast
