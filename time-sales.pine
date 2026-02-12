@@ -1,0 +1,357 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Time & Sales Window - Tick-by-tick order flow tape
+
+//@version=6
+indicator(title = "Time & Sales", shorttitle = "📊 T&S", overlay = true, max_bars_back = 0)
+
+// ===================================================================
+// SECTION 1: CONSTANTS & THEME
+// ===================================================================
+
+// Nord Theme Colors (Complete Palette)
+const color NORD0  = #2E3440  // Polar Night - Darkest
+const color NORD1  = #3B4252  // Polar Night
+const color NORD2  = #434C5E  // Polar Night
+const color NORD3  = #4C566A  // Polar Night - Lightest
+const color NORD4  = #D8DEE9  // Snow Storm
+const color NORD5  = #E5E9F0  // Snow Storm
+const color NORD6  = #ECEFF4  // Snow Storm - Lightest
+const color NORD7  = #8FBCBB  // Frost - Teal
+const color NORD8  = #88C0D0  // Frost - Bright Teal
+const color NORD9  = #81A1C1  // Frost - Blue
+const color NORD10 = #5E81AC  // Frost - Dark Blue
+const color NORD11 = #BF616A  // Aurora - Red
+const color NORD12 = #D08770  // Aurora - Orange
+const color NORD13 = #EBCB8B  // Aurora - Yellow
+const color NORD14 = #A3BE8C  // Aurora - Green
+const color NORD15 = #B48EAD  // Aurora - Purple
+
+// Color Aliases for Tape Display
+const color TABLE_BACKGROUND_COLOR = NORD0
+const color DEFAULT_TEXT_COLOR = NORD4
+
+// ===================================================================
+// SECTION 2: TYPE DEFINITIONS
+// ===================================================================
+
+// Custom type to store complete tick data as a structured record
+type TickData
+    float price    // Execution price
+    float volume   // Order size (shares/contracts)
+    int   time     // Timestamp (milliseconds)
+    float bid      // Bid price at time of execution
+    float ask      // Ask price at time of execution
+
+// ===================================================================
+// SECTION 3: USER INPUTS
+// ===================================================================
+
+// Input Groups
+const string GROUP_GENERAL = "⚙️ General Settings"
+const string GROUP_TABLE = "📋 Table Settings"
+const string GROUP_LAYOUT = "📐 Layout & Sizing"
+const string GROUP_COLORS = "🎨 Color Settings"
+
+// General Settings
+tapeLength = input.int(defval = 20, title = "Tape Length", minval = 5, maxval = 50, tooltip = "Number of ticks to display (one tick = one order)", group = GROUP_GENERAL)
+timeFormat = input.string(defval = "hh:mm:ss a", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
+priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
+minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all)", group = GROUP_GENERAL)
+largeOrderSize = input.int(defval = 1000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted. Set to 0 to disable large order highlighting.", group = GROUP_GENERAL)
+showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Orders", tooltip = "Filter to show only orders above ask (aggressive buy) or below bid (aggressive sell). Hides mid-spread, at bid, and at ask orders.", group = GROUP_GENERAL)
+
+// Table Settings
+
+tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = GROUP_TABLE)
+textSize = input.string(defval = "normal", title = "Text Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_TABLE)
+fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], group = GROUP_TABLE)
+headerTextAlign = input.string(defval = "center", title = "Header Text Alignment", options = ["left", "center", "right"], tooltip = "Text alignment for header row", group = GROUP_TABLE)
+timeColumnAlign = input.string(defval = "center", title = "Time Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
+priceColumnAlign = input.string(defval = "center", title = "Price Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
+sizeColumnAlign = input.string(defval = "center", title = "Size Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
+condColumnAlign = input.string(defval = "center", title = "Cond Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
+
+// Layout Settings
+
+headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
+dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
+columnWidth = input.float(defval = 5.0, title = "Column Width (all columns)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Width applied to all columns", group = GROUP_LAYOUT)
+frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, inline = "frame", group = GROUP_LAYOUT)
+frameColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "frame", group = GROUP_LAYOUT)
+borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, inline = "border", group = GROUP_LAYOUT)
+borderColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "border", group = GROUP_LAYOUT)
+
+// Color Settings
+
+backgroundColor = input.color(defval = TABLE_BACKGROUND_COLOR, title = "Table Background", group = GROUP_COLORS)
+defaultTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Default Text", group = GROUP_COLORS)
+
+// Ask (at ask)
+askTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Ask Text", inline = "ask", group = GROUP_COLORS)
+askBackgroundColor = input.color(defval = color.new(#88C0D0, 90), title = "Ask BG", inline = "ask", group = GROUP_COLORS)
+
+// Above ask
+aboveAskTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Above Ask Text", inline = "above_ask", group = GROUP_COLORS)
+aboveAskBackgroundColor = input.color(defval = color.new(NORD8, 50), title = "Above Ask BG", inline = "above_ask", group = GROUP_COLORS)
+aboveAskBold = input.bool(defval = true, title = "Bold", inline = "above_ask", group = GROUP_COLORS)
+
+// Bid (at bid)
+bidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Bid Text", inline = "bid", group = GROUP_COLORS)
+bidBackgroundColor = input.color(defval = color.new(#BF616A, 90), title = "Bid BG", inline = "bid", group = GROUP_COLORS)
+
+// Below bid
+belowBidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Below Bid Text", inline = "below_bid", group = GROUP_COLORS)
+belowBidBackgroundColor = input.color(defval = color.new(NORD11, 50), title = "Below Bid BG", inline = "below_bid", group = GROUP_COLORS)
+belowBidBold = input.bool(defval = true, title = "Bold", inline = "below_bid", group = GROUP_COLORS)
+
+// Large order
+largeOrderTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Large Order Text", inline = "large", group = GROUP_COLORS)
+largeOrderBackgroundColor = input.color(defval = color.new(NORD10, 40), title = "Large Order BG", inline = "large", group = GROUP_COLORS)
+largeOrderBold = input.bool(defval = true, title = "Bold", inline = "large", group = GROUP_COLORS)
+
+// ===================================================================
+// SECTION 4: DATA FETCHING
+// ===================================================================
+
+// Request tick-level data from lower timeframe (1T = 1 tick)
+// Returns arrays of tick data for the current bar
+[tickPrices, tickVolumes, tickTimes, tickBids, tickAsks] = request.security_lower_tf(
+     symbol            = syminfo.tickerid,
+     timeframe         = "1T",
+     expression        = [close, volume, time, bid, ask],
+     ignore_invalid_symbol = true
+)
+
+// ===================================================================
+// SECTION 5: PERSISTENT STORAGE
+// ===================================================================
+
+// varip = variable that persists across script executions (real-time updates)
+// This array stores validated TickData records that survive script recalculations
+varip array<TickData> persistentTicks = array.new<TickData>()
+
+// Track the last processed tick count to avoid reprocessing the same ticks
+varip int lastProcessedTickCount = 0
+
+// Track previous stored tick count to detect state transitions
+varip int prevStoredTickCount = 0
+
+
+
+// ===================================================================
+// SECTION 6: TICK PROCESSING
+// ===================================================================
+
+// Clear array on new bar to prevent stale data from previous bars
+if barstate.isnew
+    array.clear(persistentTicks)
+    lastProcessedTickCount := 0
+
+// Get the number of ticks available in the current bar
+int availableTickCount = tickPrices.size()
+bool newTicksThisExec = availableTickCount > lastProcessedTickCount
+
+// Only process NEW ticks that we haven't seen yet
+// This prevents duplicate processing and performance issues
+if newTicksThisExec
+    int newTicksCount = availableTickCount - lastProcessedTickCount
+    int ticksAdded = 0
+    int ticksFilteredOut = 0
+
+    // Process only the NEW ticks (from lastProcessedTickCount to end)
+    for tickIndex = lastProcessedTickCount to availableTickCount - 1
+        // Step 1: Extract tick data from arrays
+        float currentTickPrice = tickPrices.get(tickIndex)
+        float currentTickVolume = tickVolumes.get(tickIndex)
+        int currentTickTime = tickTimes.get(tickIndex)
+        float currentTickBid = tickBids.get(tickIndex)
+        float currentTickAsk = tickAsks.get(tickIndex)
+
+        // Step 2: Validate - only add ticks with complete AND valid data
+        // Optimized: combine all checks in one boolean expression
+        bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and not na(currentTickBid) and not na(currentTickAsk) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickBid > 0 and currentTickAsk > 0 and currentTickTime > 0
+
+        if not isCompleteRecord
+            ticksFilteredOut += 1
+
+        if isCompleteRecord
+            // Step 3: Apply user-defined filters
+            bool passesMinimumSize = currentTickVolume >= minimumSize
+
+            // Determine if this is an aggressive order (above ask or below bid)
+            bool isAboveAsk = currentTickPrice > currentTickAsk
+            bool isBelowBid = currentTickPrice < currentTickBid
+            bool passesAggressiveFilter = not showAggressiveOnly or (isAboveAsk or isBelowBid)
+
+            // Step 4: Only add to persistent storage if passes all filters
+            if passesMinimumSize and passesAggressiveFilter
+                ticksAdded += 1
+                // Create structured TickData record
+                TickData newTick = TickData.new(
+                    price = currentTickPrice,
+                    volume = currentTickVolume,
+                    time = currentTickTime,
+                    bid = currentTickBid,
+                    ask = currentTickAsk
+                )
+
+                // Add to BEGINNING of array (index 0 = newest tick)
+                array.unshift(persistentTicks, newTick)
+
+                // Remove oldest tick from END if we exceed the tape length limit
+                while array.size(persistentTicks) > tapeLength
+                    array.pop(persistentTicks)
+            else
+                ticksFilteredOut += 1
+
+    // Update the last processed tick count to prevent reprocessing
+    lastProcessedTickCount := availableTickCount
+
+// ===================================================================
+// SECTION 7: PRECOMPUTED VALUES & HELPER FUNCTIONS
+// ===================================================================
+// Convert text alignment strings to constants
+headerAlignValue = headerTextAlign == "left" ? text.align_left : headerTextAlign == "center" ? text.align_center : text.align_right
+timeAlignValue = timeColumnAlign == "left" ? text.align_left : timeColumnAlign == "center" ? text.align_center : text.align_right
+priceAlignValue = priceColumnAlign == "left" ? text.align_left : priceColumnAlign == "center" ? text.align_center : text.align_right
+sizeAlignValue = sizeColumnAlign == "left" ? text.align_left : sizeColumnAlign == "center" ? text.align_center : text.align_right
+condAlignValue = condColumnAlign == "left" ? text.align_left : condColumnAlign == "center" ? text.align_center : text.align_right
+
+// Build price format string
+priceFormat = priceDecimals <= 1 ? "#,###.0" : priceDecimals == 2 ? "#,###.00" : priceDecimals == 3 ? "#,###.000" : "#,###.0000"
+
+// ===================================================================
+// SECTION 8: TABLE RENDERING
+// ===================================================================
+// Convert table position string to position constant
+tablePos = switch tablePosition
+    "Top Left"       => position.top_left
+    "Top Center"     => position.top_center
+    "Top Right"      => position.top_right
+    "Middle Left"    => position.middle_left
+    "Middle Center"  => position.middle_center
+    "Middle Right"   => position.middle_right
+    "Bottom Left"    => position.bottom_left
+    "Bottom Center"  => position.bottom_center
+    "Bottom Right"   => position.bottom_right
+    => position.top_right
+
+// Create table (var = initialized once, persists across bars)
+// Note: Will be recreated if needed to reset merge state
+var table tapeTable = table.new(position = tablePos, columns = 4, rows = tapeLength + 3, bgcolor = backgroundColor, border_width = borderWidth, border_color = borderColor, frame_width = frameWidth, frame_color = frameColor)
+
+// Render initial headers
+table.cell(table_id = tapeTable, column = 0, row = 0, text = "TIME", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+table.cell(table_id = tapeTable, column = 1, row = 0, text = "PRICE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+table.cell(table_id = tapeTable, column = 2, row = 0, text = "SIZE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+table.cell(table_id = tapeTable, column = 3, row = 0, text = "COND", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+
+// ===================================================================
+// PERFORMANCE OPTIMIZATION: Only render table on the last bar
+// This avoids wasted work on historical bars
+// ===================================================================
+if barstate.islast
+    // Get current tick count
+    int storedTickCount = array.size(persistentTicks)
+    bool transitionedToData = prevStoredTickCount == 0 and storedTickCount > 0
+
+    if transitionedToData
+        // Recreate table to clear merged waiting row state
+        table.delete(tapeTable)
+        tapeTable := table.new(position = tablePos, columns = 4, rows = tapeLength + 3, bgcolor = backgroundColor, border_width = borderWidth, border_color = borderColor, frame_width = frameWidth, frame_color = frameColor)
+        // Render headers after recreation
+        table.cell(table_id = tapeTable, column = 0, row = 0, text = "TIME", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+        table.cell(table_id = tapeTable, column = 1, row = 0, text = "PRICE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+        table.cell(table_id = tapeTable, column = 2, row = 0, text = "SIZE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+        table.cell(table_id = tapeTable, column = 3, row = 0, text = "COND", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily)
+    // Render table
+    if storedTickCount == 0
+        // Show waiting message when no ticks have been stored yet (merged row)
+        table.cell(table_id = tapeTable, column = 0, row = 1, text = "Waiting for tick data...", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = 1, end_column = 3, end_row = 1)
+        // Clear remaining data rows to prevent stale text
+        for clearRow = 2 to tapeLength
+            table.cell(table_id = tapeTable, column = 0, row = clearRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+            table.cell(table_id = tapeTable, column = 1, row = clearRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+            table.cell(table_id = tapeTable, column = 2, row = clearRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+            table.cell(table_id = tapeTable, column = 3, row = clearRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+    else
+        // Iterate through persistent tick array and render table
+        // Index 0 = newest tick, higher indices = older ticks
+        int displayedRows = 0
+        for tickIndex = 0 to math.min(storedTickCount - 1, tapeLength - 1)
+            // Get TickData record from persistent storage
+            TickData currentTick = array.get(persistentTicks, tickIndex)
+
+            // Safety check: skip ticks with invalid data (defensive programming)
+            bool tickHasAllData = not na(currentTick.price) and not na(currentTick.volume) and not na(currentTick.time) and not na(currentTick.bid) and not na(currentTick.ask)
+            bool tickDataIsValid = currentTick.price > 0 and currentTick.volume > 0 and currentTick.bid > 0 and currentTick.ask > 0 and currentTick.time > 0
+
+            if not (tickHasAllData and tickDataIsValid)
+                continue  // Skip this tick and move to the next one
+
+            // Calculate table row (row 0 = header, row 1+ = data)
+            int tableRow = displayedRows + 1
+            displayedRows += 1
+
+            // Determine tick condition (where price executed relative to bid/ask)
+            string conditionText = ""
+            color tickTextColor = defaultTextColor
+            color tickBgColor = backgroundColor
+            bool isBold = false
+
+            if currentTick.price > currentTick.ask
+                conditionText := "above ask"
+                tickTextColor := aboveAskTextColor
+                tickBgColor := aboveAskBackgroundColor
+                if aboveAskBold
+                    isBold := true
+            else if currentTick.price == currentTick.ask
+                conditionText := "at ask"
+                tickTextColor := askTextColor
+                tickBgColor := askBackgroundColor
+            else if currentTick.price < currentTick.bid
+                conditionText := "below bid"
+                tickTextColor := belowBidTextColor
+                tickBgColor := belowBidBackgroundColor
+                if belowBidBold
+                    isBold := true
+            else if currentTick.price == currentTick.bid
+                conditionText := "at bid"
+                tickTextColor := bidTextColor
+                tickBgColor := bidBackgroundColor
+            else
+                conditionText := "mid"
+                tickTextColor := defaultTextColor
+                tickBgColor := backgroundColor
+
+            // Large order highlighting (overrides condition-based colors)
+            if largeOrderSize > 0 and currentTick.volume >= largeOrderSize
+                tickTextColor := largeOrderTextColor
+                tickBgColor := largeOrderBackgroundColor
+                if largeOrderBold
+                    isBold := true
+
+            // Format display values
+            string timeText = str.format_time(time = currentTick.time, format = timeFormat, timezone = syminfo.timezone)
+            string priceText = str.tostring(currentTick.price, priceFormat)
+            string volumeText = str.tostring(currentTick.volume)
+
+            // Render table cells for this tick
+            if isBold
+                table.cell(table_id = tapeTable, column = 0, row = tableRow, text = timeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_bold, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 1, row = tableRow, text = priceText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_bold, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 2, row = tableRow, text = volumeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_bold, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 3, row = tableRow, text = conditionText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_bold, bgcolor = tickBgColor)
+            else
+                table.cell(table_id = tapeTable, column = 0, row = tableRow, text = timeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 1, row = tableRow, text = priceText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 2, row = tableRow, text = volumeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
+                table.cell(table_id = tapeTable, column = 3, row = tableRow, text = conditionText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
+
+    // Update state tracker for next execution
+    prevStoredTickCount := storedTickCount
+
+
+// Performance summary removed

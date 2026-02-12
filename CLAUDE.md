@@ -73,6 +73,46 @@ This applies to ALL Pine Script functions including:
 3. **DO NOT assume parameter order** - Different functions have different parameter orders
 4. **DO NOT mix positional and named arguments** - Use named arguments exclusively
 
+### ALWAYS Use Meaningful Variable Names
+
+**CRITICAL**: Never use single-letter or cryptic variable names. All variables must have clear, descriptive names that convey their purpose.
+
+**❌ WRONG - Cryptic, single-letter variable names:**
+```pine
+var table t = table.new(position.top_right, 5, 20)
+for i = 0 to prices.size() - 1
+    p = prices.get(i)
+    v = volumes.get(i)
+    tm = times.get(i)
+    b = bids.get(i)
+    a = asks.get(i)
+    table.cell(table_id = t, column = 0, row = i, text = str.tostring(p))
+```
+
+**✅ CORRECT - Clear, meaningful variable names:**
+```pine
+var table tapeTable = table.new(position = position.top_right, columns = 5, rows = 20)
+for tickIndex = 0 to prices.size() - 1
+    tickPrice = prices.get(tickIndex)
+    tickVolume = volumes.get(tickIndex)
+    tickTime = times.get(tickIndex)
+    tickBid = bids.get(tickIndex)
+    tickAsk = asks.get(tickIndex)
+    table.cell(table_id = tapeTable, column = 0, row = tickIndex, text = str.tostring(tickPrice))
+```
+
+**Variable Naming Guidelines:**
+- Use full words, not abbreviations (e.g., `tickPrice` not `p`, `tickVolume` not `v`)
+- Use camelCase for multi-word variables (e.g., `tickIndex`, `tableRow`, `footprintBuyVolume`)
+- Loop indices should be descriptive (e.g., `tickIndex`, `rowIndex`, `columnIndex` instead of `i`, `j`, `k`)
+- Temporary variables should still be meaningful (e.g., `currentPrice` not `tmp`, `priceColor` not `clr`)
+- Boolean variables should be descriptive (e.g., `isAboveAsk`, `showFootprint`, `hasValidData`)
+
+**The only acceptable short names are:**
+- Standard mathematical/financial abbreviations: `ema`, `sma`, `rsi`, `atr`, `roc`
+- Well-known acronyms: `vwap`, `macd`, `eps`, `roe`
+- Common time units: `ms` (milliseconds), `sec` (seconds) - but prefer `milliseconds`, `seconds` when possible
+
 ## Code Architecture
 
 ### Core Design Pattern
