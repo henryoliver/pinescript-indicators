@@ -1,9 +1,12 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Time & Sales Window - Tick-by-tick order flow tape
+// Ticker Tape - Tick-by-tick order flow tape
 
 //@version=6
-indicator(title = "Time & Sales", shorttitle = "📊 T&S", overlay = true, max_bars_back = 0)
+indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_bars_back = 0)
+
+// Ticker tape, introduced in 1867 by Edward Calahan and perfected by Thomas Edison,
+// was the first mechanical system for transmitting stock prices over telegraph lines.
 
 // ===================================================================
 // SECTION 1: CONSTANTS & THEME
