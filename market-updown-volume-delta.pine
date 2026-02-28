@@ -1,0 +1,93 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Market Up-Down Volume Delta", shorttitle = "Vol Δ", overlay = false)
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// === INPUTS ===
+string market = input.string(
+     defval = "NASDAQ 100",
+     title = "Market (Index)",
+     options = ["NASDAQ 100", "S&P 500", "Dow Jones", "Russell 2000"],
+     tooltip = "Uses USI:UPVOL/DNVOL with suffix .NQ (NASDAQ 100), .SP (S&P 500), .DJ (Dow Jones), .RL (Russell 2000)."
+ )
+string displayMode = input.string(defval = "Candles", title = "Plot Style", options = ["Candles", "Line"])
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line")
+
+// === DATA FETCHING ===
+string upVolSymbol = switch market
+    "NASDAQ 100" => "USI:UPVOL.NQ"
+    "S&P 500"    => "USI:UPVOL.SP"
+    "Dow Jones"  => "USI:UPVOL.DJ"
+    "Russell 2000" => "USI:UPVOL.RL"
+    => "USI:UPVOL.NQ"
+
+string downVolSymbol = switch market
+    "NASDAQ 100" => "USI:DNVOL.NQ"
+    "S&P 500"    => "USI:DNVOL.SP"
+    "Dow Jones"  => "USI:DNVOL.DJ"
+    "Russell 2000" => "USI:DNVOL.RL"
+    => "USI:DNVOL.NQ"
+
+string upVolSymbolExt = ticker.modify(upVolSymbol, session = session.extended)
+string downVolSymbolExt = ticker.modify(downVolSymbol, session = session.extended)
+
+[upVolOpen, upVolHigh, upVolLow, upVolClose] = request.security(symbol = upVolSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+[downVolOpen, downVolHigh, downVolLow, downVolClose] = request.security(symbol = downVolSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+
+// Calculate volume delta for each OHLC component
+float deltaOpen = upVolOpen - downVolOpen
+float deltaHigh = upVolHigh - downVolHigh
+float deltaLow = upVolLow - downVolLow
+float deltaClose = upVolClose - downVolClose
+
+// === VISUALIZATION ===
+// Determine candle color based on open vs close
+bool isUpCandle = deltaClose >= deltaOpen
+color candleBodyColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
+color candleWickColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
+color candleBorderColor = isUpCandle ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
+bool useCandles = displayMode == "Candles"
+
+color lineColor = deltaClose >= nz(deltaClose[1], deltaClose) ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
+
+plotcandle(
+     open = useCandles ? deltaOpen : na,
+     high = useCandles ? deltaHigh : na,
+     low = useCandles ? deltaLow : na,
+     close = useCandles ? deltaClose : na,
+     title = "Volume Delta (Candles)",
+     color = candleBodyColor,
+     wickcolor = candleWickColor,
+     bordercolor = candleBorderColor,
+     editable = true
+ )
+plot(
+     useCandles ? na : deltaClose,
+     title = "Volume Delta (Line)",
+     color = lineColor,
+     style = plot.style_line,
+     linewidth = 3
+ )
+
+// Plot zero line
+hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linestyle = hline.style_solid, linewidth = 3, editable = true)

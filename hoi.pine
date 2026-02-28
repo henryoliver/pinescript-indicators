@@ -1,0 +1,174 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Hindenburg Omen Indicator", shorttitle = "HOI", overlay = true)
+
+// Nord Theme Color Constants
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Market dropdown labels
+const string MARKET_SPX = "SPX"
+const string MARKET_IXIC = "IXIC"
+const string MARKET_DJI = "DJI"
+const string MARKET_RUT = "RUT"
+
+// Symbol Constants
+const string IDX_SPX = "SP:SPX"
+const string IDX_IXIC = "NASDAQ:IXIC"
+const string IDX_DJI = "DJ:DJI"
+const string IDX_RUT = "TVC:RUT"
+
+// SPX breadth (NYSE)
+const string ADV_SPX = "USI:ADVN.NY"
+const string DEC_SPX = "USI:DECL.NY"
+const string UNC_SPX = "USI:UNCH.NY"
+const string NH_SPX = "INDEX:HIGN"
+const string NL_SPX = "INDEX:LOWN"
+
+// IXIC breadth (NASDAQ)
+const string ADV_IXIC = "USI:ADVN.NQ"
+const string DEC_IXIC = "USI:DECL.NQ"
+const string UNC_IXIC = "USI:UNCH.NQ"
+const string NH_IXIC = "INDEX:NAHO"
+const string NL_IXIC = "INDEX:NALO"
+
+// DJI breadth (NYSE)
+const string ADV_DJI = "USI:ADVN.NY"
+const string DEC_DJI = "USI:DECL.NY"
+const string UNC_DJI = "USI:UNCH.NY"
+const string NH_DJI = "INDEX:HIGN"
+const string NL_DJI = "INDEX:LOWN"
+
+// RUT breadth (NYSE)
+const string ADV_RUT = "USI:ADVN.NY"
+const string DEC_RUT = "USI:DECL.NY"
+const string UNC_RUT = "USI:UNCH.NY"
+const string NH_RUT = "INDEX:HIGN"
+const string NL_RUT = "INDEX:LOWN"
+
+// Input Settings
+// Market Selection
+string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], group = "Market")
+
+// Resolve symbols based on market selection
+string indexSymbol = IDX_SPX
+string advSymbol = ADV_SPX
+string decSymbol = DEC_SPX
+string uncSymbol = UNC_SPX
+string newHighSymbol = NH_SPX
+string newLowSymbol = NL_SPX
+
+if marketIndex == MARKET_IXIC
+    // NASDAQ breadth and index
+    indexSymbol := IDX_IXIC
+    advSymbol := ADV_IXIC
+    decSymbol := DEC_IXIC
+    uncSymbol := UNC_IXIC
+    newHighSymbol := NH_IXIC
+    newLowSymbol := NL_IXIC
+else if marketIndex == MARKET_DJI
+    // Dow Jones uses NYSE breadth
+    indexSymbol := IDX_DJI
+    advSymbol := ADV_DJI
+    decSymbol := DEC_DJI
+    uncSymbol := UNC_DJI
+    newHighSymbol := NH_DJI
+    newLowSymbol := NL_DJI
+else if marketIndex == MARKET_RUT
+    // Russell 2000 uses NYSE breadth
+    indexSymbol := IDX_RUT
+    advSymbol := ADV_RUT
+    decSymbol := DEC_RUT
+    uncSymbol := UNC_RUT
+    newHighSymbol := NH_RUT
+    newLowSymbol := NL_RUT
+
+// Conditions
+float newLowHighThreshold = input.float(defval = 1, title = "New Lows/Highs Threshold (%)",
+     minval = 0, step = 0.1, tooltip = "Percentage threshold for new highs and lows",
+     group = "Conditions")
+int posTrendLookback = input.int(defval = 50, title = "Positive Trend Lookback (Days)",
+     minval = 1, maxval = 252, step = 1, tooltip = "Index must be >= its value X days ago",
+     group = "Conditions")
+
+// Display
+int signalPeriod = input.int(defval = 10, title = "Signal Period (Days)",
+     minval = 1, maxval = 90, step = 1, tooltip = "Background highlight period after signal",
+     group = "Display")
+bool showBackground = input.bool(defval = true, title = "Show Background",
+     tooltip = "Show background color during signal period", group = "Display")
+color backgroundColor = input.color(defval = color.new(NORD11, 90), title = "Background Color",
+     group = "Display")
+
+// Get breadth and index data (daily)
+float advIssues = request.security(advSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float decIssues = request.security(decSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float uncIssues = request.security(uncSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float newHighs = request.security(newHighSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float newLows = request.security(newLowSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+float marketIndexValue = request.security(indexSymbol, "D", close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+
+// Calculations
+// Total number of issues (like the reference codes)
+float total = advIssues + decIssues + uncIssues
+
+// Condition 1: % of issues hitting new 52W highs and 52W lows >= threshold
+bool cond1 = not na(total) and total > 0 and not na(newHighs) and not na(newLows) and
+     (newHighs / total * 100 >= newLowHighThreshold) and
+     (newLows / total * 100 >= newLowHighThreshold)
+
+// Condition 2: Index is higher or equal in value than when it was X days ago
+bool cond2 = not na(marketIndexValue) and not na(marketIndexValue[posTrendLookback]) and
+     marketIndexValue >= marketIndexValue[posTrendLookback]
+
+// Condition 3: McClellan Oscillator must be negative
+float rana = not na(advIssues) and not na(decIssues) and (advIssues + decIssues) > 0 ?
+     1000 * ((advIssues - decIssues) / (advIssues + decIssues)) : na
+float mccMa1 = ta.ema(rana, 19)
+float mccMa2 = ta.ema(rana, 39)
+float mcc = mccMa1 - mccMa2
+bool cond3 = not na(mcc) and mcc < 0
+
+// Condition 4: Ratio of new 52W highs to new 52W lows < 2
+bool cond4 = not na(newHighs) and not na(newLows) and newLows > 0 and
+     (newHighs / newLows) < 2
+
+// Hindenburg Omen Signal - all four conditions must be met on confirmed bars
+bool homenSignal = barstate.isconfirmed and cond1 and cond2 and cond3 and cond4
+
+
+// Calculate bars since signal on every bar for consistency
+int barsSinceSignal = ta.barssince(homenSignal)
+
+// Background Color for Signal Period (30 days)
+bgcolor(showBackground and barsSinceSignal <= signalPeriod ? 
+     backgroundColor : na, title = "Signal Period Background")

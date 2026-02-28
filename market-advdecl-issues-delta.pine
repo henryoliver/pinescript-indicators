@@ -1,0 +1,93 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Market Advance-Decline Issues Delta", shorttitle = "A/D Issues Δ", overlay = false)
+
+// === CONSTANTS ===
+// Nord Theme Color
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// === INPUTS ===
+string market = input.string(
+     defval = "NASDAQ 100",
+     title = "Market (Index)",
+     options = ["NASDAQ 100", "S&P 500", "Dow Jones", "Russell 2000"],
+     tooltip = "Uses USI:ADVN/DECL with suffix .NQ (NASDAQ 100), .SP (S&P 500), .DJ (Dow Jones), .RL (Russell 2000)."
+ )
+string displayMode = input.string(defval = "Candles", title = "Plot Style", options = ["Candles", "Line"])
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line")
+
+// === DATA FETCHING ===
+string advSymbol = switch market
+    "NASDAQ 100" => "USI:ADVN.NQ"
+    "S&P 500"    => "USI:ADVN.SP"
+    "Dow Jones"  => "USI:ADVN.DJ"
+    "Russell 2000" => "USI:ADVN.RL"
+    => "USI:ADVN.NQ"
+
+string declSymbol = switch market
+    "NASDAQ 100" => "USI:DECL.NQ"
+    "S&P 500"    => "USI:DECL.SP"
+    "Dow Jones"  => "USI:DECL.DJ"
+    "Russell 2000" => "USI:DECL.RL"
+    => "USI:DECL.NQ"
+
+string advSymbolExt = ticker.modify(advSymbol, session = session.extended)
+string declSymbolExt = ticker.modify(declSymbol, session = session.extended)
+
+[advOpen, advHigh, advLow, advClose] = request.security(symbol = advSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+[declOpen, declHigh, declLow, declClose] = request.security(symbol = declSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+
+// Calculate advance-decline delta for each OHLC component
+float deltaOpen = advOpen - declOpen
+float deltaHigh = advHigh - declHigh
+float deltaLow = advLow - declLow
+float deltaClose = advClose - declClose
+
+// === VISUALIZATION ===
+// Determine candle color based on open vs close
+bool isUpCandle = deltaClose >= deltaOpen
+color candleBodyColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
+color candleWickColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
+color candleBorderColor = isUpCandle ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
+bool useCandles = displayMode == "Candles"
+
+color lineColor = deltaClose >= nz(deltaClose[1], deltaClose) ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
+
+plotcandle(
+     open = useCandles ? deltaOpen : na,
+     high = useCandles ? deltaHigh : na,
+     low = useCandles ? deltaLow : na,
+     close = useCandles ? deltaClose : na,
+     title = "Advance-Decline Delta (Candles)",
+     color = candleBodyColor,
+     wickcolor = candleWickColor,
+     bordercolor = candleBorderColor,
+     editable = true
+ )
+plot(
+     useCandles ? na : deltaClose,
+     title = "Advance-Decline Delta (Line)",
+     color = lineColor,
+     style = plot.style_line,
+     linewidth = 3
+ )
+
+// Plot zero line
+hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linestyle = hline.style_solid, linewidth = 3, editable = true)
