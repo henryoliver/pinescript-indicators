@@ -146,5 +146,54 @@ stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
 bool dCrossAbove45 = ta.crossover(stochD, 45)
 bool dCrossBelow55 = ta.crossunder(stochD, 55)
 
+// === WAVE 1 (IMPULSE) ONLY ===
+var Trend previousTrend = Trend.FLAT
+var bool wave1Armed = false
+var bool wave1Plotted = false
+var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na)
+var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na)
+float waveLabelOffset = syminfo.mintick * 10.0
+
+// Arm wave-1 when trend turns up or down
+if trend != previousTrend
+    wave1Armed := trend == Trend.UP or trend == Trend.DOWN
+    wave1Plotted := false
+    previousTrend := trend
+
+// Track half-cycles and place Wave 1 at the first cycle extreme after trend turns
+if barstate.isconfirmed
+    switch cycleZone
+        CycleZone.NONE =>
+            if dCrossAbove45 or stochD > 55
+                cycleZone := CycleZone.HIGH
+                currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
+            else if dCrossBelow55 or stochD < 45
+                cycleZone := CycleZone.LOW
+                currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
+        CycleZone.HIGH =>
+            if stochD < 55
+                // Cycle high completes here
+                if wave1Armed and not wave1Plotted and trend == Trend.UP
+                    label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffset, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
+                    wave1Plotted := true
+                    wave1Armed := false
+                cycleZone := CycleZone.LOW
+                currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
+            else
+                if na(currentCycleHigh.high) or high > currentCycleHigh.high
+                    currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
+        CycleZone.LOW =>
+            if stochD > 45
+                // Cycle low completes here
+                if wave1Armed and not wave1Plotted and trend == Trend.DOWN
+                    label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffset, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
+                    wave1Plotted := true
+                    wave1Armed := false
+                cycleZone := CycleZone.HIGH
+                currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
+            else
+                if na(currentCycleLow.low) or low < currentCycleLow.low
+                    currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
+
 // === PLOT ===
 plot(series = sma, title = "SMA", color = smaColor, linewidth = 3, offset = smaOffset)
