@@ -9,6 +9,8 @@
 - Odd Wave = Impulse Wave (with trend).
 - Even Wave = Retrace Wave (against trend).
 - Complex retrace wave letters use `a` through `z`.
+- Extreme bar: The bar that sets the cycle high/low.
+- Half-cycle confirmation bar: The bar that ends the half-cycle (D crosses back through 45/55).
 
 ## Cycle Rules
 - Cycle high: Highest high after %D goes above 45 and before it drops below 55.
@@ -19,6 +21,7 @@
 - Wave 1 DOWN = first cycle LOW after 50 SMA starts angling DOWN.
 - Wave 1 UP = first cycle HIGH after 50 SMA starts angling UP.
 - This is not based on higher highs/lows.
+- The extreme bar must be entirely above (uptrend) or below (downtrend) the 50 SMA.
 
 ## Impulse Waves (Odd)
 - Downtrend: wave lows are 1,3,5,7,9...
