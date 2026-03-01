@@ -1,6 +1,12 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
 // Moving Average with Trend Indicator
+// Concepts:
+// - Trend: Determined by SMA slope over lookback; used to classify waves.
+// - Wave: A label assigned at cycle transitions; odd waves are impulses, even waves are retraces.
+// - Impulse (odd): Must progress beyond the prior impulse in the trend direction.
+// - Retrace (even): No progression rule relative to prior retrace.
+// - Cycle: Complete cycle is HIGH→LOW→HIGH or LOW→HIGH→LOW; a half-cycle is HIGH→LOW or LOW→HIGH.
 
 //@version=6
 indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
@@ -199,7 +205,7 @@ if trendChanged
         previousTrend := trend
 
 // === CYCLE STATE ===
-// Detect when cycles complete and assign wave labels (confirmed bars only)
+// Detect when half-cycles complete and assign wave labels (confirmed bars only)
 bool completedCycleLow = false
 bool completedCycleHigh = false
 if barstate.isconfirmed
