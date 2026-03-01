@@ -160,7 +160,7 @@ var label impulseLabel = na
 var label retraceLabel = na
 float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
-f_resetWaveState() =>
+if trend != previousTrend
     impulseNumber := 0
     lastImpulse := CyclePoint.new(na, na, na, na, na, na)
     retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
@@ -170,9 +170,6 @@ f_resetWaveState() =>
     if not na(retraceLabel)
         label.delete(retraceLabel)
         retraceLabel := na
-
-if trend != previousTrend
-    f_resetWaveState()
     previousTrend := trend
 
 // Track half-cycles and place wave numbers as soon as possible (provisional until confirmed)
