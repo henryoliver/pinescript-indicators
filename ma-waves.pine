@@ -160,6 +160,7 @@ var label impulseLabel = na
 var label retraceLabel = na
 float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
+// Reset waves only on UP↔DOWN flips (ignore FLAT transitions)
 if (trend == Trend.UP and previousTrend == Trend.DOWN) or (trend == Trend.DOWN and previousTrend == Trend.UP)
     cycleZone := CycleZone.NONE
     currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
