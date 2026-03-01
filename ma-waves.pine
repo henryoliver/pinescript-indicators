@@ -148,14 +148,17 @@ if barstate.isconfirmed
                 // Half-cycle high completes
                 bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
                 bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
+
                 if trend == Trend.UP and highBarAboveSma and qualifiesImpulseUp
                     int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
                     label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
+
                     if impulseNumber >= 1 and not na(retraceCandidate.high)
                         label.new(x = retraceCandidate.barIndex, y = retraceCandidate.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber - 1), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
                     impulseNumber := nextImpulseNumber
                     lastImpulse := currentCycleHigh
                     retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+
                 cycleZone := CycleZone.LOW
                 currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
             else
@@ -170,6 +173,7 @@ if barstate.isconfirmed
                 // Half-cycle low completes
                 bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
                 bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
+
                 if trend == Trend.DOWN and lowBarBelowSma and qualifiesImpulseDown
                     int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
                     label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
@@ -178,6 +182,7 @@ if barstate.isconfirmed
                     impulseNumber := nextImpulseNumber
                     lastImpulse := currentCycleLow
                     retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+
                 cycleZone := CycleZone.HIGH
                 currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
             else
