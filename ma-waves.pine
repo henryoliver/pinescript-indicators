@@ -78,7 +78,7 @@ smaOffset = input.int(defval = 0, title = "Offset", minval = -500, maxval = 500,
 // Trend Detection Settings
 trendLookback = input.int(defval = 1, title = "Lookback Period (Bars)", minval = 1, maxval = 20,
      tooltip = "Number of bars to look back when calculating the slope", group = GROUP_TREND)
-flatThreshold = input.float(defval = 0.001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
+flatThreshold = input.float(defval = 0.0001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
      tooltip = "Per-bar SMA slope threshold; values between -threshold and +threshold are flat", group = GROUP_TREND)
 
 // Trend Colors (fixed defaults)
