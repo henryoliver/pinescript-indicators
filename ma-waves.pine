@@ -5,9 +5,7 @@
 //@version=6
 indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
 
-// Constants
-
-// Nord Theme Colors (Complete Palette)
+// 🧱 CONSTANTS
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
 const color NORD2  = #434C5E
@@ -25,18 +23,14 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Trend States
+const string CYCLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+
+// 🧩 TYPE DEFINITIONS
 enum Trend
     UP
     DOWN
     FLAT
 
-// Alphabet for cycle letters
-const string CYCLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
-
-// Type Definition
-
-// Custom type to store cycle extremes
 type CyclePoint
     float open
     float close
@@ -45,14 +39,12 @@ type CyclePoint
     float sma
     int barIndex
 
-// Enum for cycle zone states
 enum CycleZone
     NONE
     HIGH
     LOW
 
-// User Input Settings
-
+// 🎛️ USER INPUT SETTINGS
 const string GROUP_GENERAL = "⚙️ General Settings"
 const string GROUP_TREND = "📈 Trend Detection"
 const string GROUP_STOCH = "📉 Stochastic Cycles"
@@ -96,10 +88,9 @@ cycleLabelSize = switch cycleLabelSizeOpt
     "Large" => size.large
     => size.huge
 
-// Trend
+// 📈 TREND
 sma = ta.sma(source = src, length = smaLength)
 
-// Per-bar SMA slope
 smaSlope = (sma - sma[trendLookback]) / trendLookback
 
 Trend trend = math.abs(number = smaSlope) < flatThreshold ? Trend.FLAT : smaSlope > 0 ? Trend.UP : Trend.DOWN
@@ -109,7 +100,11 @@ smaColor = switch trend
     Trend.DOWN => color.new(color = NORD9, transp = 60)
     => NORD2
 
-// Cycle
+// 🔄 CYCLE
+var CycleZone cycleZone = CycleZone.NONE
+var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na, na)
+var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na, na)
+
 stochK = ta.stoch(source = close, high = high, low = low, length = stochLength)
 stochKSmoothed = ta.sma(source = stochK, length = stochSmooth)
 stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
@@ -117,11 +112,7 @@ stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
 bool dCrossAbove45 = ta.crossover(stochD, 45)
 bool dCrossBelow55 = ta.crossunder(stochD, 55)
 
-var CycleZone cycleZone = CycleZone.NONE
-var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na, na)
-var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na, na)
-
-// Waves
+// 🌊 WAVES
 var Trend previousTrend = Trend.FLAT
 var int impulseNumber = 0
 var CyclePoint lastImpulse = CyclePoint.new(na, na, na, na, na, na)
@@ -129,20 +120,21 @@ var CyclePoint retraceCandidate = CyclePoint.new(na, na, na, na, na, na)
 
 float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
-// Reset waves on confirmed trend change
-if barstate.isconfirmed and trend != previousTrend
-    cycleZone := CycleZone.NONE
-    currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
-    currentCycleLow := CyclePoint.new(na, na, na, na, na, na)
-    impulseNumber := 0
-    lastImpulse := CyclePoint.new(na, na, na, na, na, na)
-    retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+if barstate.isconfirmed
+    // Reset on confirmed trend change
+    if trend != previousTrend
+        cycleZone := CycleZone.NONE
+        currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
+        currentCycleLow := CyclePoint.new(na, na, na, na, na, na)
+
+        impulseNumber := 0
+        lastImpulse := CyclePoint.new(na, na, na, na, na, na)
+        retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
 
     previousTrend := trend
 
-// Extreme bar sets the cycle high/low
-// Half-cycle confirmation ends the half-cycle
-if barstate.isconfirmed
+    // Extreme bar sets the cycle high/low
+    // Half-cycle confirmation ends the half-cycle
     switch cycleZone
         CycleZone.NONE =>
             if dCrossAbove45 or stochD > 55
@@ -196,5 +188,5 @@ if barstate.isconfirmed
                     if na(retraceCandidate.low) or currentCycleLow.low < retraceCandidate.low
                         retraceCandidate := currentCycleLow
 
-// === PLOT ===
+// 📊 PLOT
 plot(series = sma, title = "SMA", color = smaColor, linewidth = 3, offset = smaOffset)
