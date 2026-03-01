@@ -3,7 +3,8 @@
 ## Concepts
 - Trend: 50 SMA slope defines up, down, or flat.
 - Cycle: Defined by Stoch %D crossing the 45/55 zone.
-- Half-cycle: HIGH→LOW or LOW→HIGH.
+- Half-cycle: Cycle high → cycle low or cycle low → cycle high.
+- Complete cycle: Cycle high → cycle low → cycle high (or the inverse).
 - Wave: Assigned on half-cycle transitions.
 - Odd Wave = Impulse Wave (with trend).
 - Even Wave = Retrace Wave (against trend).
@@ -29,6 +30,8 @@
 
 ## Retrace Waves (Even)
 - No real-body rule.
+- Simple retrace: Only one cycle high/low between two impulse waves.
+- Complex retrace: Two or more cycle highs/lows between two impulse waves; only the most extreme qualifies for the wave number.
 - Downtrend:
   - Wave 2 = highest cycle high between wave 1 and wave 3.
   - Wave 4 = highest cycle high between wave 3 and wave 5.
