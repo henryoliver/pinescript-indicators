@@ -149,17 +149,21 @@ bool dCrossBelow55 = ta.crossunder(stochD, 55)
 
 // === FIRST IMPULSE WAVE ONLY ===
 var Trend previousTrend = Trend.FLAT
-var bool wave1Armed = false
-var bool wave1Plotted = false
+var bool firstImpulseArmed = false
+var bool firstImpulsePlotted = false
 var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na, na)
 var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na, na)
-float waveLabelOffset = syminfo.mintick * 10.0
+waveLabelOffset = input.float(defval = 10.0, title = "Wave Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_LABELS)
+float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
-// Arm first impulse wave when trend turns up or down
+// Trend-change interface
+f_onTrendChange(Trend newTrend) =>
+    firstImpulseArmed := newTrend == Trend.UP or newTrend == Trend.DOWN
+    firstImpulsePlotted := false
+    previousTrend := newTrend
+
 if trend != previousTrend
-    wave1Armed := trend == Trend.UP or trend == Trend.DOWN
-    wave1Plotted := false
-    previousTrend := trend
+    f_onTrendChange(trend)
 
 // Track half-cycles and place the first impulse wave at the first cycle extreme after trend turns
 // Extreme bar: bar that sets the cycle high/low.
@@ -177,10 +181,10 @@ if barstate.isconfirmed
             if stochD < 55
                 // Cycle high completes here
                 bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
-                if wave1Armed and not wave1Plotted and trend == Trend.UP and highBarAboveSma
-                    label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffset, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-                    wave1Plotted := true
-                    wave1Armed := false
+                if firstImpulseArmed and not firstImpulsePlotted and trend == Trend.UP and highBarAboveSma
+                    label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
+                    firstImpulsePlotted := true
+                    firstImpulseArmed := false
                 cycleZone := CycleZone.LOW
                 currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
             else
@@ -190,10 +194,10 @@ if barstate.isconfirmed
             if stochD > 45
                 // Cycle low completes here
                 bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
-                if wave1Armed and not wave1Plotted and trend == Trend.DOWN and lowBarBelowSma
-                    label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffset, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-                    wave1Plotted := true
-                    wave1Armed := false
+                if firstImpulseArmed and not firstImpulsePlotted and trend == Trend.DOWN and lowBarBelowSma
+                    label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = "1", style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
+                    firstImpulsePlotted := true
+                    firstImpulseArmed := false
                 cycleZone := CycleZone.HIGH
                 currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
             else
