@@ -185,7 +185,7 @@ switch cycleZone
             currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
     CycleZone.HIGH =>
         if stochD < 55
-            // Cycle high completes here
+            // Half-cycle high completes here
             bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
             bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
             if trend == Trend.UP and highBarAboveSma and qualifiesImpulseUp
@@ -229,7 +229,7 @@ switch cycleZone
                 label.set_textcolor(retraceLabel, waveLabelProvisionalColor)
     CycleZone.LOW =>
         if stochD > 45
-            // Cycle low completes here
+            // Half-cycle low completes here
             bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
             bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
             if trend == Trend.DOWN and lowBarBelowSma and qualifiesImpulseDown
