@@ -192,6 +192,9 @@ if trendChanged
         previousTrend := trend
         trendResetPending := false
     else
+        // Trend changed mid-cycle: align the current cycle trend to the new trend so
+        // the next wave label reflects the current cycle trend.
+        currentCycleTrend := trend
         trendResetPending := true
         previousTrend := trend
 
