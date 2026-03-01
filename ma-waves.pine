@@ -161,6 +161,9 @@ var label retraceLabel = na
 float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
 if trend != previousTrend
+    cycleZone := CycleZone.NONE
+    currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
+    currentCycleLow := CyclePoint.new(na, na, na, na, na, na)
     impulseNumber := 0
     lastImpulse := CyclePoint.new(na, na, na, na, na, na)
     retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
@@ -175,102 +178,103 @@ if trend != previousTrend
 // Track half-cycles and place wave numbers as soon as possible (provisional until confirmed)
 // Extreme bar: bar that sets the cycle high/low.
 // Half-cycle confirmation bar: bar that ends the half-cycle (D crosses back through 45/55).
-switch cycleZone
-    CycleZone.NONE =>
-        if dCrossAbove45 or stochD > 55
-            cycleZone := CycleZone.HIGH
-            currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-        else if dCrossBelow55 or stochD < 45
-            cycleZone := CycleZone.LOW
-            currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
-    CycleZone.HIGH =>
-        if stochD < 55
-            // Half-cycle high completes here
-            bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
-            bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
-            if trend == Trend.UP and highBarAboveSma and qualifiesImpulseUp
-                int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
-                if na(impulseLabel)
-                    impulseLabel := label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                label.set_textcolor(impulseLabel, waveLabelColor)
-                impulseNumber := nextImpulseNumber
-                lastImpulse := currentCycleHigh
-                if not na(retraceLabel)
-                    label.set_textcolor(retraceLabel, waveLabelColor)
-                    retraceLabel := na
-                retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
-            cycleZone := CycleZone.LOW
-            currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
-        else
-            if na(currentCycleHigh.high) or high > currentCycleHigh.high
+if trend != Trend.FLAT
+    switch cycleZone
+        CycleZone.NONE =>
+            if dCrossAbove45 or stochD > 55
+                cycleZone := CycleZone.HIGH
                 currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-
-            // Provisional impulse label (uptrend)
-            if trend == Trend.UP
+            else if dCrossBelow55 or stochD < 45
+                cycleZone := CycleZone.LOW
+                currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
+        CycleZone.HIGH =>
+            if stochD < 55
+                // Half-cycle high completes here
                 bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
                 bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
-                if highBarAboveSma and qualifiesImpulseUp
+                if trend == Trend.UP and highBarAboveSma and qualifiesImpulseUp
                     int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
                     if na(impulseLabel)
                         impulseLabel := label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                    label.set_xy(impulseLabel, currentCycleHigh.barIndex, currentCycleHigh.high + waveLabelOffsetPrice)
-                    label.set_text(impulseLabel, str.tostring(nextImpulseNumber))
-                    label.set_textcolor(impulseLabel, waveLabelProvisionalColor)
-
-            // Provisional retrace label (downtrend)
-            if trend == Trend.DOWN and impulseNumber >= 1
-                int nextRetraceNumber = impulseNumber + 1
-                if na(retraceLabel)
-                    retraceLabel := label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextRetraceNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                if na(retraceCandidate.high) or currentCycleHigh.high > retraceCandidate.high
-                    retraceCandidate := currentCycleHigh
-                label.set_xy(retraceLabel, retraceCandidate.barIndex, retraceCandidate.high + waveLabelOffsetPrice)
-                label.set_text(retraceLabel, str.tostring(nextRetraceNumber))
-                label.set_textcolor(retraceLabel, waveLabelProvisionalColor)
-    CycleZone.LOW =>
-        if stochD > 45
-            // Half-cycle low completes here
-            bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
-            bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
-            if trend == Trend.DOWN and lowBarBelowSma and qualifiesImpulseDown
-                int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
-                if na(impulseLabel)
-                    impulseLabel := label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                label.set_textcolor(impulseLabel, waveLabelColor)
-                impulseNumber := nextImpulseNumber
-                lastImpulse := currentCycleLow
-                if not na(retraceLabel)
-                    label.set_textcolor(retraceLabel, waveLabelColor)
-                    retraceLabel := na
-                retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
-            cycleZone := CycleZone.HIGH
-            currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-        else
-            if na(currentCycleLow.low) or low < currentCycleLow.low
+                    label.set_textcolor(impulseLabel, waveLabelColor)
+                    impulseNumber := nextImpulseNumber
+                    lastImpulse := currentCycleHigh
+                    if not na(retraceLabel)
+                        label.set_textcolor(retraceLabel, waveLabelColor)
+                        retraceLabel := na
+                    retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+                cycleZone := CycleZone.LOW
                 currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
+            else
+                if na(currentCycleHigh.high) or high > currentCycleHigh.high
+                    currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
 
-            // Provisional impulse label (downtrend)
-            if trend == Trend.DOWN
+                // Provisional impulse label (uptrend)
+                if trend == Trend.UP
+                    bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
+                    bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
+                    if highBarAboveSma and qualifiesImpulseUp
+                        int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
+                        if na(impulseLabel)
+                            impulseLabel := label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
+                        label.set_xy(impulseLabel, currentCycleHigh.barIndex, currentCycleHigh.high + waveLabelOffsetPrice)
+                        label.set_text(impulseLabel, str.tostring(nextImpulseNumber))
+                        label.set_textcolor(impulseLabel, waveLabelProvisionalColor)
+
+                // Provisional retrace label (downtrend)
+                if trend == Trend.DOWN and impulseNumber >= 1
+                    int nextRetraceNumber = impulseNumber + 1
+                    if na(retraceLabel)
+                        retraceLabel := label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextRetraceNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
+                    if na(retraceCandidate.high) or currentCycleHigh.high > retraceCandidate.high
+                        retraceCandidate := currentCycleHigh
+                    label.set_xy(retraceLabel, retraceCandidate.barIndex, retraceCandidate.high + waveLabelOffsetPrice)
+                    label.set_text(retraceLabel, str.tostring(nextRetraceNumber))
+                    label.set_textcolor(retraceLabel, waveLabelProvisionalColor)
+        CycleZone.LOW =>
+            if stochD > 45
+                // Half-cycle low completes here
                 bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
                 bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
-                if lowBarBelowSma and qualifiesImpulseDown
+                if trend == Trend.DOWN and lowBarBelowSma and qualifiesImpulseDown
                     int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
                     if na(impulseLabel)
                         impulseLabel := label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                    label.set_xy(impulseLabel, currentCycleLow.barIndex, currentCycleLow.low - waveLabelOffsetPrice)
-                    label.set_text(impulseLabel, str.tostring(nextImpulseNumber))
-                    label.set_textcolor(impulseLabel, waveLabelProvisionalColor)
+                    label.set_textcolor(impulseLabel, waveLabelColor)
+                    impulseNumber := nextImpulseNumber
+                    lastImpulse := currentCycleLow
+                    if not na(retraceLabel)
+                        label.set_textcolor(retraceLabel, waveLabelColor)
+                        retraceLabel := na
+                    retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+                cycleZone := CycleZone.HIGH
+                currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
+            else
+                if na(currentCycleLow.low) or low < currentCycleLow.low
+                    currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
 
-            // Provisional retrace label (uptrend)
-            if trend == Trend.UP and impulseNumber >= 1
-                int nextRetraceNumber = impulseNumber + 1
-                if na(retraceLabel)
-                    retraceLabel := label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextRetraceNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
-                if na(retraceCandidate.low) or currentCycleLow.low < retraceCandidate.low
-                    retraceCandidate := currentCycleLow
-                label.set_xy(retraceLabel, retraceCandidate.barIndex, retraceCandidate.low - waveLabelOffsetPrice)
-                label.set_text(retraceLabel, str.tostring(nextRetraceNumber))
-                label.set_textcolor(retraceLabel, waveLabelProvisionalColor)
+                // Provisional impulse label (downtrend)
+                if trend == Trend.DOWN
+                    bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
+                    bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
+                    if lowBarBelowSma and qualifiesImpulseDown
+                        int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
+                        if na(impulseLabel)
+                            impulseLabel := label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
+                        label.set_xy(impulseLabel, currentCycleLow.barIndex, currentCycleLow.low - waveLabelOffsetPrice)
+                        label.set_text(impulseLabel, str.tostring(nextImpulseNumber))
+                        label.set_textcolor(impulseLabel, waveLabelProvisionalColor)
+
+                // Provisional retrace label (uptrend)
+                if trend == Trend.UP and impulseNumber >= 1
+                    int nextRetraceNumber = impulseNumber + 1
+                    if na(retraceLabel)
+                        retraceLabel := label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextRetraceNumber), style = label.style_none, color = na, textcolor = waveLabelProvisionalColor, size = waveLabelSize)
+                    if na(retraceCandidate.low) or currentCycleLow.low < retraceCandidate.low
+                        retraceCandidate := currentCycleLow
+                    label.set_xy(retraceLabel, retraceCandidate.barIndex, retraceCandidate.low - waveLabelOffsetPrice)
+                    label.set_text(retraceLabel, str.tostring(nextRetraceNumber))
+                    label.set_textcolor(retraceLabel, waveLabelProvisionalColor)
 
 // === PLOT ===
 plot(series = sma, title = "SMA", color = smaColor, linewidth = 3, offset = smaOffset)
