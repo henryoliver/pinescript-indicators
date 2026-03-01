@@ -121,7 +121,7 @@ float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
 if barstate.isconfirmed
     // Reset on confirmed trend change
-    if trend != previousTrend and trend != Trend.FLAT and previousTrend != Trend.FLAT
+    if trend != previousTrend
         cycleZone := CycleZone.NONE
         currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
         currentCycleLow := CyclePoint.new(na, na, na, na, na, na)
