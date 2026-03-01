@@ -98,6 +98,8 @@ waveLabelSizeOpt = input.string(defval = "Normal", title = "Wave Label Size", op
 cycleShowLetters = input.bool(defval = false, title = "Show Cycle Letters", group = GROUP_LABELS)
 cycleLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Cycle Label Color", group = GROUP_LABELS)
 cycleLabelSizeOpt = input.string(defval = "Normal", title = "Cycle Label Size (Letters)", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_LABELS)
+waveLabelOffset = input.float(defval = 10.0, title = "Wave Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_LABELS)
+waveLabelProvisionalColor = input.color(defval = color.new(color = NORD4, transp = 70), title = "Wave Label Provisional Color", group = GROUP_LABELS)
 
 waveLabelSize = switch waveLabelSizeOpt
     "Tiny" => size.tiny
@@ -154,8 +156,6 @@ var bool firstImpulsePlotted = false
 var label firstImpulseLabel = na
 var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na, na)
 var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na, na)
-waveLabelOffset = input.float(defval = 10.0, title = "Wave Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_LABELS)
-waveLabelProvisionalColor = input.color(defval = color.new(color = NORD4, transp = 70), title = "Wave Label Provisional Color", group = GROUP_LABELS)
 float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
 
 // Trend-change interface
