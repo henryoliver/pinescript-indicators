@@ -8,7 +8,7 @@
 - Wave: Assigned on half-cycle transitions.
 - Odd Wave = Impulse Wave (with trend).
 - Even Wave = Retrace Wave (against trend).
-- Wave letters for complex retrace sequences use `a` through `z`.
+- Complex retrace wave letters use `a` through `z`.
 
 ## Cycle Rules
 - Cycle high: Highest high after %D goes above 45 and before it drops below 55.
