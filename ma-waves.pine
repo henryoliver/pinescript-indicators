@@ -3,7 +3,7 @@
 // Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300)
+indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
 
 // ===================================================================
 // SECTION 1: CONSTANTS & THEME
@@ -149,7 +149,6 @@ bool trendChanged = trend != previousTrend
 
 // Cycle state variables
 var CycleZone cycleZone = CycleZone.NONE
-var CycleZone previousCycleZone = CycleZone.NONE
 var CycleZone priorZone = CycleZone.NONE
 var string currentCycleTrend = TREND_FLAT
 var string previousCycleTrend = TREND_FLAT
@@ -174,13 +173,10 @@ var array<PendingCycle> pendingRetracements = array.new<PendingCycle>()
 var int cycleLetterIdx = 0
 float labelOffset = syminfo.mintick * 10.0
 float letterExtraOffset = syminfo.mintick * 16.0
-log.info("Init: offsets set | labelOffset=" + str.tostring(labelOffset) + " | letterExtraOffset=" + str.tostring(letterExtraOffset))
-
 // Reset ALL cycle and wave variables when trend changes
 if trendChanged
     if cycleZone == CycleZone.NONE
         cycleZone := CycleZone.NONE
-        previousCycleZone := CycleZone.NONE
         priorZone := CycleZone.NONE
         currentCycleTrend := TREND_FLAT
         previousCycleTrend := TREND_FLAT
@@ -195,21 +191,16 @@ if trendChanged
         cycleLetterIdx := 0
         previousTrend := trend
         trendResetPending := false
-        log.info("Reset: trendChanged -> full reset (no active cycle) | trend=" + trend)
     else
         trendResetPending := true
         previousTrend := trend
-        log.info("Reset: trendChanged during active cycle -> defer reset | trend=" + trend)
 
 // === CYCLE STATE ===
 // Detect when cycles complete and assign wave labels (confirmed bars only)
 bool completedCycleLow = false
 bool completedCycleHigh = false
-log.info("CycleState: flags init | completedHigh=" + str.tostring(completedCycleHigh) + " | completedLow=" + str.tostring(completedCycleLow))
-
 if barstate.isconfirmed
     priorZone := cycleZone
-    log.info("CycleState: enter | Zone=" + str.tostring(cycleZone) + " | D=" + str.tostring(stochD))
 
     switch cycleZone
         CycleZone.NONE =>
@@ -217,12 +208,10 @@ if barstate.isconfirmed
                 cycleZone := CycleZone.HIGH
                 currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
                 currentCycleTrend := trend
-                log.info("CycleState: NONE->HIGH | idx=" + str.tostring(bar_index))
             else if dCrossBelow55 or stochD < 45
                 cycleZone := CycleZone.LOW
                 currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
                 currentCycleTrend := trend
-                log.info("CycleState: NONE->LOW | idx=" + str.tostring(bar_index))
 
         CycleZone.HIGH =>
             if stochD < 55
@@ -232,11 +221,9 @@ if barstate.isconfirmed
                 currentCycleHigh := CyclePoint.new(na, na, na, na, na)
                 currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
                 currentCycleTrend := trend
-                log.info("CycleState: HIGH->LOW | prevHighIdx=" + str.tostring(previousCycleHigh.barIndex))
             else
                 if na(currentCycleHigh.high) or high > currentCycleHigh.high
                     currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
-                    log.info("CycleState: HIGH update extreme | idx=" + str.tostring(bar_index))
 
         CycleZone.LOW =>
             if stochD > 45
@@ -246,11 +233,9 @@ if barstate.isconfirmed
                 currentCycleLow := CyclePoint.new(na, na, na, na, na)
                 currentCycleHigh := CyclePoint.new(open, close, high, low, bar_index)
                 currentCycleTrend := trend
-                log.info("CycleState: LOW->HIGH | prevLowIdx=" + str.tostring(previousCycleLow.barIndex))
             else
                 if na(currentCycleLow.low) or low < currentCycleLow.low
                     currentCycleLow := CyclePoint.new(open, close, high, low, bar_index)
-                    log.info("CycleState: LOW update extreme | idx=" + str.tostring(bar_index))
 
     completedCycleLow := cycleZone == CycleZone.HIGH and priorZone == CycleZone.LOW
     completedCycleHigh := cycleZone == CycleZone.LOW and priorZone == CycleZone.HIGH
@@ -260,9 +245,9 @@ if barstate.isconfirmed
 // Only execute wave logic on confirmed bars (bar close, not every tick)
 if barstate.isconfirmed
     bool resetLettersThisCycle = false
-    log.info("WaveLogic: enter | Trend=" + trend + " | CompletedHigh=" + str.tostring(completedCycleHigh) + " | CompletedLow=" + str.tostring(completedCycleLow))
 
     // DOWNTREND wave logic
+    // ODD WAVE = IMPULSE WAVE (must progress)
     if previousCycleTrend == TREND_DOWN
         // Completed a cycle LOW → check for impulse wave (1, 3, 5, 7...)
         if completedCycleLow
@@ -273,21 +258,19 @@ if barstate.isconfirmed
                 pendingRetracements.clear()
                 resetLettersThisCycle := true
                 label.new(x = previousCycleLow.barIndex, y = previousCycleLow.low - labelOffset, text = "1", style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                log.info("WaveLogic: DOWN anchor wave1 @ " + str.tostring(previousCycleLow.barIndex))
             else
                 float previousLow = lastImpulseCandle.low
                 float currentClose = previousCycleLow.close
                 float currentOpen = previousCycleLow.open
                 bool qualifiesAsImpulse = currentClose < previousLow and currentOpen <= previousLow
-                log.info("WaveLogic: DOWN impulse check | qualifies=" + str.tostring(qualifiesAsImpulse))
 
                 if qualifiesAsImpulse
                     currentImpulseNumber += 2
                     lastImpulseCandle := previousCycleLow
                     resetLettersThisCycle := true
                     label.new(x = previousCycleLow.barIndex, y = previousCycleLow.low - labelOffset, text = str.tostring(value = currentImpulseNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                    log.info("WaveLogic: DOWN impulse " + str.tostring(currentImpulseNumber) + " @ " + str.tostring(previousCycleLow.barIndex))
 
+                    // EVEN WAVE = RETRACE WAVE (no progression rule)
                     if pendingRetracements.size() > 0
                         int highestIndex = 0
                         float highestHigh = pendingRetracements.get(0).high
@@ -302,16 +285,13 @@ if barstate.isconfirmed
                         label.new(x = winner.barIndex, y = winner.high, text = str.tostring(value = evenNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
 
                         pendingRetracements.clear()
-                else
-                    int failedNumber = currentImpulseNumber + 2
-                    label.new(x = previousCycleLow.barIndex, y = previousCycleLow.low - labelOffset, text = "F" + str.tostring(value = failedNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                    log.info("WaveLogic: DOWN failed " + str.tostring(failedNumber) + " @ " + str.tostring(previousCycleLow.barIndex))
 
         if wave1Anchored and completedCycleHigh and pendingRetracements.size() < MAX_PENDING_RETRACEMENTS
             PendingCycle pendingRetracement = PendingCycle.new(high = previousCycleHigh.high, low = previousCycleHigh.low, barIndex = previousCycleHigh.barIndex)
             pendingRetracements.push(pendingRetracement)
 
     // UPTREND wave logic (inverted from downtrend)
+    // ODD WAVE = IMPULSE WAVE (must progress)
     if previousCycleTrend == TREND_UP
         if completedCycleHigh
             if not wave1Anchored
@@ -321,21 +301,19 @@ if barstate.isconfirmed
                 pendingRetracements.clear()
                 resetLettersThisCycle := true
                 label.new(x = previousCycleHigh.barIndex, y = previousCycleHigh.high + labelOffset, text = "1", style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                log.info("WaveLogic: UP anchor wave1 @ " + str.tostring(previousCycleHigh.barIndex))
             else
                 float previousHigh = lastImpulseCandle.high
                 float currentClose = previousCycleHigh.close
                 float currentOpen = previousCycleHigh.open
                 bool qualifiesAsImpulse = currentClose > previousHigh and currentOpen >= previousHigh
-                log.info("WaveLogic: UP impulse check | qualifies=" + str.tostring(qualifiesAsImpulse))
 
                 if qualifiesAsImpulse
                     currentImpulseNumber += 2
                     lastImpulseCandle := previousCycleHigh
                     resetLettersThisCycle := true
                     label.new(x = previousCycleHigh.barIndex, y = previousCycleHigh.high + labelOffset, text = str.tostring(value = currentImpulseNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                    log.info("WaveLogic: UP impulse " + str.tostring(currentImpulseNumber) + " @ " + str.tostring(previousCycleHigh.barIndex))
 
+                    // EVEN WAVE = RETRACE WAVE (no progression rule)
                     if pendingRetracements.size() > 0
                         int lowestIndex = 0
                         float lowestLow = pendingRetracements.get(0).low
@@ -350,10 +328,6 @@ if barstate.isconfirmed
                         label.new(x = winner.barIndex, y = winner.low, text = str.tostring(value = evenNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
 
                         pendingRetracements.clear()
-                else
-                    int failedNumber = currentImpulseNumber + 2
-                    label.new(x = previousCycleHigh.barIndex, y = previousCycleHigh.high + labelOffset, text = "F" + str.tostring(value = failedNumber), style = label.style_none, color = na, textcolor = labelColor, size = waveLabelSize)
-                    log.info("WaveLogic: UP failed " + str.tostring(failedNumber) + " @ " + str.tostring(previousCycleHigh.barIndex))
 
         if wave1Anchored and completedCycleLow and pendingRetracements.size() < MAX_PENDING_RETRACEMENTS
             PendingCycle pendingRetracement = PendingCycle.new(high = previousCycleLow.high, low = previousCycleLow.low, barIndex = previousCycleLow.barIndex)
@@ -380,16 +354,6 @@ if barstate.isconfirmed
         pendingRetracements.clear()
         cycleLetterIdx := 0
         trendResetPending := false
-        log.info("Reset: applied deferred reset after cycle completion")
 
 // === PLOT ===
 plot(series = sma, title = "SMA", color = smaColor, linewidth = 3, offset = smaOffset)
-
-// === DEBUG LOGGING ===
-log.info("=== MAs & Waves Debug Summary ===")
-log.info("Trend: " + trend + " | Slope: " + str.tostring(smaSlope))
-log.info("StochD: " + str.tostring(stochD) + " | D>45=" + str.tostring(dCrossAbove45) + " | D<55=" + str.tostring(dCrossBelow55))
-log.info("Zone: " + str.tostring(cycleZone) + " | Prior: " + str.tostring(priorZone))
-log.info("Completed High: " + str.tostring(completedCycleHigh) + " | Completed Low: " + str.tostring(completedCycleLow))
-log.info("Wave1 Anchored: " + str.tostring(wave1Anchored) + " | Impulse#: " + str.tostring(currentImpulseNumber))
-log.info("Pending Retracements: " + str.tostring(pendingRetracements.size()))
