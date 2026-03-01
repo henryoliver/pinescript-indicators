@@ -146,7 +146,7 @@ stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
 bool dCrossAbove45 = ta.crossover(stochD, 45)
 bool dCrossBelow55 = ta.crossunder(stochD, 55)
 
-// === WAVE 1 (IMPULSE) ONLY ===
+// === FIRST IMPULSE WAVE ONLY ===
 var Trend previousTrend = Trend.FLAT
 var bool wave1Armed = false
 var bool wave1Plotted = false
@@ -154,13 +154,13 @@ var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na)
 var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na)
 float waveLabelOffset = syminfo.mintick * 10.0
 
-// Arm wave-1 when trend turns up or down
+// Arm first impulse wave when trend turns up or down
 if trend != previousTrend
     wave1Armed := trend == Trend.UP or trend == Trend.DOWN
     wave1Plotted := false
     previousTrend := trend
 
-// Track half-cycles and place Wave 1 at the first cycle extreme after trend turns
+// Track half-cycles and place the first impulse wave at the first cycle extreme after trend turns
 if barstate.isconfirmed
     switch cycleZone
         CycleZone.NONE =>
