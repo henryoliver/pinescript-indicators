@@ -34,9 +34,10 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // Trend States
-const string TREND_UP   = "up"
-const string TREND_DOWN = "down"
-const string TREND_FLAT = "flat"
+enum Trend
+    UP
+    DOWN
+    FLAT
 
 // Alphabet for cycle letters
 const string CYCLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
@@ -125,13 +126,17 @@ smaSlope = (sma - sma[trendLookback]) / trendLookback
 // If absolute slope is less than threshold: FLAT
 // If slope is positive: UPTREND
 // If slope is negative: DOWNTREND
-trend = math.abs(number = smaSlope) < flatThreshold ? TREND_FLAT : smaSlope > 0 ? TREND_UP : TREND_DOWN
+Trend trend = math.abs(number = smaSlope) < flatThreshold ? Trend.FLAT : smaSlope > 0 ? Trend.UP : Trend.DOWN
 
 // Select Color Based on Trend
 smaColor = switch trend
-    TREND_UP => colorTrendUp
-    TREND_DOWN => colorTrendDown
+    Trend.UP => colorTrendUp
+    Trend.DOWN => colorTrendDown
     => colorTrendFlat
+
+// === SCaffolded State (types in use; wave logic to follow) ===
+var CycleZone cycleZone = CycleZone.NONE
+var CyclePoint lastCyclePoint = CyclePoint.new(na, na, na, na, na)
 
 // === STOCHASTIC CYCLES ===
 // Calculate Stochastic %K and %D
