@@ -3,9 +3,16 @@
 // MACD & Waves - Momentum wave counting based on MACD structure (HH/HL/LL/LH)
 
 //@version=6
-indicator(title = "MACD & Waves", shorttitle = "MACD&Waves", calc_on_every_tick = calcOnEveryTick)
+indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", calc_on_every_tick = calcOnEveryTick)
 
-// === CONSTANTS ===
+// 🧱 CONSTANTS
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_MACD = "📈 MACD Settings"
+const string GROUP_DISPLAY = "🖥️ Display"
+const string GROUP_COLORS = "🎨 Colors"
+const string GROUP_STYLING = "🧱 Styling"
+const string GROUP_WAVES = "🌊 Wave Counting"
+
 // Nord Theme Color
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -31,60 +38,52 @@ const string TREND_NONE = "none"
 
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
-// === INPUTS ===
-const string g0 = "General"
-const string g1 = "MACD Settings"
-const string g2 = "Display"
-const string g3 = "Colors"
-const string g4 = "Styling"
-const string g5 = "Wave Counting"
-
-// General
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = g0, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+// 🎛️ USER INPUT SETTINGS
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Source
-src = input.source(defval = close, title = "Source", group = g1)
+src = input.source(defval = close, title = "Source", group = GROUP_MACD)
 
 // Lengths
-fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = g1)
-slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = g1)
-signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = g1)
+fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = GROUP_MACD)
+slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = GROUP_MACD)
+signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = GROUP_MACD)
 
 // MA Types
-oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = g1)
-signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = g1)
+oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = GROUP_MACD)
+signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = GROUP_MACD)
 
 // Visual Settings
-showHistogram = input.bool(defval = false, title = "Show Histogram", group = g2)
-showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = g2)
-showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = g2)
-showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = g2)
+showHistogram = input.bool(defval = false, title = "Show Histogram", group = GROUP_DISPLAY)
+showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = GROUP_DISPLAY)
+showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = GROUP_DISPLAY)
+showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = GROUP_DISPLAY)
 
 // Colors
-histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = g3)
-histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = g3)
-histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = g3)
-histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = g3)
-macdColor = input.color(defval = NORD3, title = "MACD Line", group = g3)
-signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = g3)
-signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = g3)
-signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = g3)
-zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = g3)
+histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = GROUP_COLORS)
+histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = GROUP_COLORS)
+histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = GROUP_COLORS)
+histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = GROUP_COLORS)
+macdColor = input.color(defval = NORD3, title = "MACD Line", group = GROUP_COLORS)
+signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = GROUP_COLORS)
+signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = GROUP_COLORS)
+signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = GROUP_COLORS)
+zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = GROUP_COLORS)
 
 // Line Widths
-macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = g4)
-signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = g4)
+macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
+signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
 
 // Wave Counting Settings
-showWaves = input.bool(defval = true, title = "Show Wave Count", group = g5)
+showWaves = input.bool(defval = true, title = "Show Wave Count", group = GROUP_WAVES)
 pivotLookback = input.int(defval = 3, title = "Pivot Lookback", minval = 1, maxval = 10,
-     tooltip = "Bars to left and right for pivot detection on MACD", group = g5)
-signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = g5,
+     tooltip = "Bars to left and right for pivot detection on MACD", group = GROUP_WAVES)
+signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = GROUP_WAVES,
      tooltip = "Number of bars to determine signal line angle (for color only, not wave counting)")
-signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = g5,
+signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = GROUP_WAVES,
      tooltip = "Angle threshold for signal line color (not used for wave counting)")
-waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = g5)
-waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = g5)
+waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = GROUP_WAVES)
+waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_WAVES)
 
 // Map wave label size string to size constant
 waveLabelSizeConst = switch waveLabelSize
@@ -96,7 +95,7 @@ waveLabelSizeConst = switch waveLabelSize
     "huge"   => size.huge
     => size.normal  // fallback
 
-// === CALCULATIONS ===
+// 🧮 CALCULATIONS
 // Calculate fast and slow moving averages
 fastMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = fastLength) : ta.ema(source = src, length = fastLength)
 slowMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = slowLength) : ta.ema(source = src, length = slowLength)

@@ -2,9 +2,12 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Market Up-Down Volume Delta", shorttitle = "Vol Δ", overlay = false)
+indicator(title = "Market Up-Down Volume Delta", shorttitle = "📊 Vol Δ", overlay = false)
 
-// === CONSTANTS ===
+// 🧱 CONSTANTS
+const string GROUP_MARKET = "🌐 Market"
+const string GROUP_DISPLAY = "🖥️ Display"
+
 // Nord Theme Color
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -23,17 +26,18 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// === INPUTS ===
+// 🎛️ USER INPUT SETTINGS
 string market = input.string(
      defval = "NASDAQ 100",
      title = "Market (Index)",
      options = ["NASDAQ 100", "S&P 500", "Dow Jones", "Russell 2000"],
-     tooltip = "Uses USI:UPVOL/DNVOL with suffix .NQ (NASDAQ 100), .SP (S&P 500), .DJ (Dow Jones), .RL (Russell 2000)."
+     tooltip = "Uses USI:UPVOL/DNVOL with suffix .NQ (NASDAQ 100), .SP (S&P 500), .DJ (Dow Jones), .RL (Russell 2000).",
+     group = GROUP_MARKET
  )
-string displayMode = input.string(defval = "Candles", title = "Plot Style", options = ["Candles", "Line"])
-bool showZeroLine = input.bool(defval = true, title = "Show Zero Line")
+string displayMode = input.string(defval = "Candles", title = "Plot Style", options = ["Candles", "Line"], group = GROUP_DISPLAY)
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = GROUP_DISPLAY)
 
-// === DATA FETCHING ===
+// 🧮 DATA FETCHING
 string upVolSymbol = switch market
     "NASDAQ 100" => "USI:UPVOL.NQ"
     "S&P 500"    => "USI:UPVOL.SP"
@@ -60,7 +64,7 @@ float deltaHigh = upVolHigh - downVolHigh
 float deltaLow = upVolLow - downVolLow
 float deltaClose = upVolClose - downVolClose
 
-// === VISUALIZATION ===
+// 📊 VISUALIZATION
 // Determine candle color based on open vs close
 bool isUpCandle = deltaClose >= deltaOpen
 color candleBodyColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)

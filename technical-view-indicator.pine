@@ -2,9 +2,23 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Technical View Indicator", shorttitle = "TVI", overlay = true, calc_on_every_tick = calcOnEveryTick, dynamic_requests = false)
+indicator(title = "Technical View Indicator", shorttitle = "🧭 TVI", overlay = true, calc_on_every_tick = calcOnEveryTick, dynamic_requests = false)
 
-// === CONSTANTS ===
+// 🧱 CONSTANTS
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_TABLE = "📋 Table"
+const string GROUP_TEXT = "🔤 Text"
+const string GROUP_STRENGTH = "💪 Strength"
+const string GROUP_MKT_CAP = "🏦 Market Capitalization"
+const string GROUP_FLOAT = "🧊 Float Shares Outstanding"
+const string GROUP_ADV_VOL = "📈 Average Daily Volume"
+const string GROUP_DOLLAR_VOL = "💵 Average Dollar Volume"
+const string GROUP_PE = "🧮 PE Ratio"
+const string GROUP_PS = "🧮 PS Ratio"
+const string GROUP_ADR = "📏 ADR"
+const string GROUP_ATR = "📏 ATR"
+const string GROUP_RPS = "🏁 RPS"
+
 // Calculation Constants
 const float THOUSAND = 1e3
 const float MILLION = 1e6
@@ -29,44 +43,45 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// General
-var calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+// 🎛️ USER INPUT SETTINGS
+var calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Table
 var string tablePosition = input.string(defval = position.top_right, title = "Position", 
      options=[position.top_left, position.top_center, position.top_right, 
      position.middle_left, position.middle_center, position.middle_right, 
-     position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
-var color tableBackgroundColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Background Color", group = "Table")
+     position.bottom_left, position.bottom_center, position.bottom_right], group = GROUP_TABLE)
+var color tableBackgroundColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Background Color", group = GROUP_TABLE)
 
-var int tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group="Table")
-var color tableFrameColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Frame Color", group = "Table")
+var int tableFrameSize = input.int(defval = 0, title = "Frame Size", minval = 0, maxval = 10, group = GROUP_TABLE)
+var color tableFrameColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Frame Color", group = GROUP_TABLE)
 
-var int tableBorderSize = input.int(defval = 2, title = "Border Size", minval = 0, maxval = 10, group="Table")
-var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Border Color", group = "Table")
+var int tableBorderSize = input.int(defval = 2, title = "Border Size", minval = 0, maxval = 10, group = GROUP_TABLE)
+var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 100), title = "Border Color", group = GROUP_TABLE)
 
-var bool tableSpacerLeft = input.bool(defval = false, title = "Spacer Left", group = "Table")
-var bool tableSpacerRight = input.bool(defval = true, title = "Spacer Right", group = "Table")
+var bool tableSpacerLeft = input.bool(defval = false, title = "Spacer Left", group = GROUP_TABLE)
+var bool tableSpacerRight = input.bool(defval = true, title = "Spacer Right", group = GROUP_TABLE)
 
 // Text
-var color textColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Text")
-var int textSize = input.int(defval = 14, title = "Text Size", minval = 8, maxval = 32, group = "Text")
+var color textColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = GROUP_TEXT)
+var int textSize = input.int(defval = 14, title = "Text Size", minval = 8, maxval = 32, group = GROUP_TEXT)
 var string textFontFamily = input.string(defval = font.family_default, title = "Font Family", 
-     options=[font.family_default, font.family_monospace], group="Text")
+     options=[font.family_default, font.family_monospace], group = GROUP_TEXT)
 var string textHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", 
-     options=[text.align_left, text.align_center, text.align_right], group="Text")
+     options=[text.align_left, text.align_center, text.align_right], group = GROUP_TEXT)
 var string textValign = input.string(defval = text.align_center, title = "Vertical Alignment", 
-     options=[text.align_top, text.align_center, text.align_bottom], group="Text")
+     options=[text.align_top, text.align_center, text.align_bottom], group = GROUP_TEXT)
 
 // Strength Colors
-var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = "Strength")
-var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = "Strength")
+var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = GROUP_STRENGTH)
+var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = GROUP_STRENGTH)
 
+// 🧮 DATA & CALCULATIONS
 // Technical Indicators
 // Market Capitalization
-var bool mktCapVisible = input.bool(true, "Visible", group = "Market Capitalization")
+var bool mktCapVisible = input.bool(true, "Visible", group = GROUP_MKT_CAP)
 var float mktCapBelow = input.float(10, "Sweet Spot (Below $B)", minval = 1, step = 1, 
-     tooltip = "Market cap below this value (in billions) indicates higher breakout potential", group = "Market Capitalization")
+     tooltip = "Market cap below this value (in billions) indicates higher breakout potential", group = GROUP_MKT_CAP)
 
 float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
 float mktCap = na(tso) ? na : tso * close
@@ -78,12 +93,12 @@ color mktCapColor = na(mktCapBillions) ? textColor :
 string mktCapTooltip = str.format("Market cap. Below ${0}B is ideal for explosive momentum moves", mktCapBelow)
 
 // Float Shares Outstanding
-var bool floatSharesVisible = input.bool(true, "Visible", group = "Float Shares Outstanding")
+var bool floatSharesVisible = input.bool(true, "Visible", group = GROUP_FLOAT)
 var float floatSharesAbove = input.float(25, "Ideal (Below M)", minval = 1, step = 5, 
-     inline = "FloatShares Strength", group = "Float Shares Outstanding")
+     inline = "FloatShares Strength", group = GROUP_FLOAT)
 var float floatSharesBelow = input.float(100, "▲ - ▼ High (Above M)", minval = 25, step = 10, 
      tooltip = "Float at or below ideal indicates highest breakout potential. Above high threshold suggests slower moves", 
-     inline = "FloatShares Strength", group = "Float Shares Outstanding")
+     inline = "FloatShares Strength", group = GROUP_FLOAT)
 
 float floatShares = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = syminfo.shares_outstanding_float, lookahead = barmerge.lookahead_on)
 float floatSharesMillions = na(floatShares) ? na : floatShares / MILLION
@@ -96,13 +111,13 @@ string floatSharesTooltip = str.format("Float shares. At or below {0}M is ideal 
      floatSharesAbove, floatSharesBelow)
 
 // Average Daily Volume
-var bool volumeVisible = input.bool(true, "Visible", group = "Average Daily Volume")
-var int volumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Daily Volume")
+var bool volumeVisible = input.bool(true, "Visible", group = GROUP_ADV_VOL)
+var int volumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = GROUP_ADV_VOL)
 var float volumeAbove = input.float(500000, "Strong (Above)", minval = 0, step = 100000, 
-     inline = "Volume Strength", group = "Average Daily Volume")
+     inline = "Volume Strength", group = GROUP_ADV_VOL)
 var float volumeBelow = input.float(200000, "▲ - ▼ Weak (Below)", minval = 0, step = 100000, 
      tooltip = "Volume above threshold indicates good liquidity. Below threshold suggests low liquidity", 
-     inline = "Volume Strength", group = "Average Daily Volume")
+     inline = "Volume Strength", group = GROUP_ADV_VOL)
 
 float volumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume, length = volumePeriod), lookahead = barmerge.lookahead_on)
 
@@ -113,13 +128,13 @@ string volumeTooltip = str.format("{0}-day average daily volume. Above {1, numbe
      volumePeriod, volumeAbove)
 
 // Average Dollar Volume
-var bool dollarVolumeVisible = input.bool(true, "Visible", group = "Average Dollar Volume")
-var int dollarVolumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "Average Dollar Volume")
+var bool dollarVolumeVisible = input.bool(true, "Visible", group = GROUP_DOLLAR_VOL)
+var int dollarVolumePeriod = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = GROUP_DOLLAR_VOL)
 var float dollarVolumeAbove = input.float(50000000, "Strong (Above)", minval = 0, step = 10000000, 
-     inline = "Dollar Volume Strength", group = "Average Dollar Volume")
+     inline = "Dollar Volume Strength", group = GROUP_DOLLAR_VOL)
 var float dollarVolumeBelow = input.float(10000000, "▲ - ▼ Weak (Below)", minval = 0, step = 5000000, 
      tooltip = "Dollar volume above threshold indicates institutional interest. Below threshold suggests retail-only stock", 
-     inline = "Dollar Volume Strength", group = "Average Dollar Volume")
+     inline = "Dollar Volume Strength", group = GROUP_DOLLAR_VOL)
 
 float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume * close, length = dollarVolumePeriod), lookahead = barmerge.lookahead_on)
 
@@ -131,12 +146,12 @@ string dollarVolumeTooltip = str.format("{0}-day average dollar volume. Above ${
      dollarVolumePeriod, dollarVolumeAbove)
 
 // PE Ratio
-var bool peVisible = input.bool(true, "Visible", group = "PE Ratio")
+var bool peVisible = input.bool(true, "Visible", group = GROUP_PE)
 var float peAbove = input.float(40, "High (Above)", minval = 0, step = 5, 
-     inline = "PE Strength", group = "PE Ratio")
+     inline = "PE Strength", group = GROUP_PE)
 var float peBelow = input.float(15, "▲ - ▼ Low (Below)", minval = 0, step = 5, 
      tooltip = "P/E above threshold may indicate overvaluation. Below threshold may indicate undervaluation or value opportunity", 
-     inline = "PE Strength", group = "PE Ratio")
+     inline = "PE Strength", group = GROUP_PE)
 
 float peRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_EARNINGS_FORWARD", period = "FY")
 string peFormatted = na(peRatio) ? "-" : str.format("{0, number, #.0}", peRatio)
@@ -149,12 +164,12 @@ string peTooltip = str.format("Forward P/E ratio. Above {0} suggests premium val
      peAbove, peBelow)
 
 // PS Ratio
-var bool psVisible = input.bool(true, "Visible", group = "PS Ratio")
+var bool psVisible = input.bool(true, "Visible", group = GROUP_PS)
 var float psAbove = input.float(10, "Reasonable (Above)", minval = 0, step = 5, 
-     inline = "PS Strength", group = "PS Ratio")
+     inline = "PS Strength", group = GROUP_PS)
 var float psBelow = input.float(50, "▲ - ▼ Overvalued (Above)", minval = 10, step = 5, 
      tooltip = "P/S between reasonable and overvalued range (10-50) is acceptable. Below or above this range may indicate risk", 
-     inline = "PS Strength", group = "PS Ratio")
+     inline = "PS Strength", group = GROUP_PS)
 
 float psRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_SALES_FORWARD", period = "FY")
 string psFormatted = na(psRatio) ? "-" : str.format("{0, number, #.0}", psRatio)
@@ -166,13 +181,13 @@ string psTooltip = str.format("Forward P/S ratio. Between {0} and {1} is reasona
      psAbove, psBelow)
 
 // Average Daily Range (ADR) %
-var bool adrVisible = input.bool(true, "Visible", group = "ADR")
-var int adrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ADR")
+var bool adrVisible = input.bool(true, "Visible", group = GROUP_ADR)
+var int adrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = GROUP_ADR)
 var float adrAbove = input.float(0.05, "High Volatility (Above)", minval = 0, maxval = 1, step = 0.01, 
-     inline = "ADR Strength", group = "ADR")
+     inline = "ADR Strength", group = GROUP_ADR)
 var float adrBelow = input.float(0.03, "▲ - ▼ Low Volatility (Below)", minval = 0, maxval = 1, step = 0.01, 
      tooltip = "ADR above threshold indicates high volatility ideal for swing trading. Below threshold suggests choppy or slow price action", 
-     inline = "ADR Strength", group = "ADR")
+     inline = "ADR Strength", group = GROUP_ADR)
 
 float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = (high / low), length = adrRange), lookahead = barmerge.lookahead_on)
 float adrRounded = math.round(adrTicker - 1, 4)
@@ -185,10 +200,10 @@ string adrTooltip = str.format("{0}-day average daily range. Above {1, number, #
      adrRange, adrAbove * 100)
 
 // Average True Range (ATR) $
-var bool atrVisible = input.bool(true, "Visible", group = "ATR")
-var int atrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = "ATR")
+var bool atrVisible = input.bool(true, "Visible", group = GROUP_ATR)
+var int atrRange = input.int(20, "Period (Days)", minval = 1, maxval = 100, step = 1, group = GROUP_ATR)
 var float atrAbove = input.float(2.0, "High Volatility (Above $)", minval = 0, step = 0.5, 
-     tooltip = "ATR above this value indicates high volatility in dollar terms", group = "ATR")
+     tooltip = "ATR above this value indicates high volatility in dollar terms", group = GROUP_ATR)
 
 float atrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.atr(length = atrRange), lookahead = barmerge.lookahead_on)
 float atrRounded = math.round(atrTicker, 2)
@@ -200,15 +215,15 @@ string atrTooltip = str.format("{0}-day average true range. Above ${1, number, #
      atrRange, atrAbove)
 
 // Relative Price Strength (RPS)
-var bool rpsVisible = input.bool(true, "Visible", group = "RPS")
+var bool rpsVisible = input.bool(true, "Visible", group = GROUP_RPS)
 var int rpsPeriod = input.int(63, "Lookback Period (Days)", minval = 20, maxval = 252, step = 1, 
-     tooltip = "Period for measuring relative performance (63 days ≈ 3 months)", group = "RPS")
-var string rpsIndex = input.symbol("IXIC", title = "Base Index", tooltip = "Benchmark index for relative strength comparison", group = "RPS")
+     tooltip = "Period for measuring relative performance (63 days ≈ 3 months)", group = GROUP_RPS)
+var string rpsIndex = input.symbol("IXIC", title = "Base Index", tooltip = "Benchmark index for relative strength comparison", group = GROUP_RPS)
 var float rpsAbove = input.float(1.1, "Strong (Above)", minval = 0, step = 0.05, 
-     inline = "RPS Strength", group = "RPS")
+     inline = "RPS Strength", group = GROUP_RPS)
 var float rpsBelow = input.float(0.9, "▲ - ▼ Weak (Below)", minval = 0, step = 0.05, 
      tooltip = "RPS above 1.0 shows outperformance. Below 1.0 shows underperformance vs benchmark", 
-     inline = "RPS Strength", group = "RPS")
+     inline = "RPS Strength", group = GROUP_RPS)
 
 // Get benchmark data
 float rpsBenchmarkCurrent = request.security(symbol = rpsIndex, timeframe = timeframe.period, expression = close, lookahead = barmerge.lookahead_on)

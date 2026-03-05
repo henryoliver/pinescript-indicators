@@ -2,9 +2,14 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Stochastic", shorttitle = "Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true, calc_on_every_tick = calcOnEveryTick)
+indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true, calc_on_every_tick = calcOnEveryTick)
 
-// === CONSTANTS ===
+// 🧱 CONSTANTS
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_STOCH = "📈 Stochastic"
+const string GROUP_STYLE = "🎨 Style"
+const string GROUP_BANDS = "📏 Bands"
+
 // Nord Theme Color
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -23,47 +28,43 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Input group names
-const string g0 = "General"
-const string g1 = "Stochastic"
-const string g2 = "Style"
-const string g3 = "Bands"
-
-// General
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = g0, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+// 🎛️ USER INPUT SETTINGS
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Stochastic Input Settings
-int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = g1)
-int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = g1)
-int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = g1)
+int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_STOCH)
+int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_STOCH)
+int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_STOCH)
 
 // Stochastic Colors & Width
-color colorK = input.color(defval = NORD3, title = "%K Color", group = g2)
-int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = g2)
-color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = g2)
-int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = g2)
+color colorK = input.color(defval = NORD3, title = "%K Color", group = GROUP_STYLE)
+int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = GROUP_STYLE)
+color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = GROUP_STYLE)
+int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = GROUP_STYLE)
 
 // Band Settings
-bool showUpperBand = input.bool(defval = true, title = "Show Upper Band", group = g3)
-float upperBand = input.float(defval = 80, title = "Upper Band", minval = 50, maxval = 100, group = g3)
-bool showUpperMidBand = input.bool(defval = true, title = "Show Upper Mid Band", group = g3)
-float upperMidBand = input.float(defval = 55, title = "Upper Mid Band", minval = 50, maxval = 100, group = g3)
-bool showMiddleBand = input.bool(defval = false, title = "Show Middle Band", group = g3)
-float middleBand = input.float(defval = 50, title = "Middle Band", minval = 0, maxval = 100, group = g3)
-bool showLowerMidBand = input.bool(defval = true, title = "Show Lower Mid Band", group = g3)
-float lowerMidBand = input.float(defval = 45, title = "Lower Mid Band", minval = 0, maxval = 50, group = g3)
-bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group = g3)
-float lowerBand = input.float(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = g3)
-color bandColor = input.color(defval = NORD3, title = "Band Color", group = g3)
-int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = g3)
-bool showFill = input.bool(defval = true, title = "Show Background Fill", group = g3)
-color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = g3)
+bool showUpperBand = input.bool(defval = true, title = "Show Upper Band", group = GROUP_BANDS)
+float upperBand = input.float(defval = 80, title = "Upper Band", minval = 50, maxval = 100, group = GROUP_BANDS)
+bool showUpperMidBand = input.bool(defval = true, title = "Show Upper Mid Band", group = GROUP_BANDS)
+float upperMidBand = input.float(defval = 55, title = "Upper Mid Band", minval = 50, maxval = 100, group = GROUP_BANDS)
+bool showMiddleBand = input.bool(defval = false, title = "Show Middle Band", group = GROUP_BANDS)
+float middleBand = input.float(defval = 50, title = "Middle Band", minval = 0, maxval = 100, group = GROUP_BANDS)
+bool showLowerMidBand = input.bool(defval = true, title = "Show Lower Mid Band", group = GROUP_BANDS)
+float lowerMidBand = input.float(defval = 45, title = "Lower Mid Band", minval = 0, maxval = 50, group = GROUP_BANDS)
+bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group = GROUP_BANDS)
+float lowerBand = input.float(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = GROUP_BANDS)
+color bandColor = input.color(defval = NORD3, title = "Band Color", group = GROUP_BANDS)
+int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = GROUP_BANDS)
+bool showFill = input.bool(defval = true, title = "Show Background Fill", group = GROUP_BANDS)
+color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = GROUP_BANDS)
 
 
+// 🧮 CALCULATIONS
 // Calculate Stochastic
 float k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
 float d = ta.sma(source = k, length = periodD)
 
+// 📊 PLOT
 // Plot Stochastic Lines
 plot(series = d, title = "%D", color = colorD, linewidth = widthD)
 plot(series = k, title = "%K", color = colorK, linewidth = widthK)
@@ -77,4 +78,3 @@ h1 = hline(price = showLowerBand ? lowerBand : na, title = "Lower Band", color =
 
 // Background fill between upper and lower bands
 fill(hline1 = h0, hline2 = h1, color = showFill ? fillColor : na, title = "Background")
-

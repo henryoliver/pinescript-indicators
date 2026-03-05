@@ -2,9 +2,15 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Fundamental View Indicator", shorttitle = "FVI", overlay = true, calc_on_every_tick = calcOnEveryTick)
+indicator(title = "Fundamental View Indicator", shorttitle = "🧾 FVI", overlay = true, calc_on_every_tick = calcOnEveryTick)
 
-// === CONSTANTS ===
+// 🧱 CONSTANTS
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_TABLE = "📋 Table"
+const string GROUP_LABEL = "🏷️ Label"
+const string GROUP_VALUE = "🔢 Value"
+const string GROUP_STRENGTH = "💪 Strength"
+
 // Nord Theme Color
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -23,42 +29,42 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// General
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = "General", tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
-
-// General Style
-// Table
-var string tablePosition = input.string(defval = position.bottom_right, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group="Table")
-var color tableBackgroundColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Background Color", group = "Table")
-
-var int tableFrameSize = input.int(defval = 6, title = "Frame Size", group="Table")
-var color tableFrameColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Frame Color", group = "Table")
-
-var int tableBorderSize = input.int(defval = 2, title = "Border Size", group="Table")
-var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Border Color", group = "Table")
-
-// Label
-var color labelColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Label")
-var int labelSize = input.int(defval = 14, title = "Label Size", minval = 8, maxval = 32, group = "Label")
-var string labelFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Label")
-var string labelHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Label")
-var string labelValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Label")
-
-// Value
-var color valueColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = "Value")
-var int valueSize = input.int(defval = 14, title = "Value Size", minval = 8, maxval = 32, group = "Value")
-var string valueFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group="Value")
-var string valueHalign = input.string(defval = text.align_right, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group="Value")
-var string valueValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group="Value")
-
-// Strength
-var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = "Strength")
-var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = "Strength")
-
-// Constants
 const float MILLION = 1000000.0
 const float BILLION = 1000000000.0
 
+// 🎛️ USER INPUT SETTINGS
+calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
+
+// General Style
+// Table
+var string tablePosition = input.string(defval = position.bottom_right, title = "Position", options=[position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_center, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right], group = GROUP_TABLE)
+var color tableBackgroundColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Background Color", group = GROUP_TABLE)
+
+var int tableFrameSize = input.int(defval = 6, title = "Frame Size", group = GROUP_TABLE)
+var color tableFrameColor = input.color(defval = color.new(color = NORD2, transp = 0), title = "Frame Color", group = GROUP_TABLE)
+
+var int tableBorderSize = input.int(defval = 2, title = "Border Size", group = GROUP_TABLE)
+var color tableBorderColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Border Color", group = GROUP_TABLE)
+
+// Label
+var color labelColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = GROUP_LABEL)
+var int labelSize = input.int(defval = 14, title = "Label Size", minval = 8, maxval = 32, group = GROUP_LABEL)
+var string labelFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group = GROUP_LABEL)
+var string labelHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group = GROUP_LABEL)
+var string labelValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group = GROUP_LABEL)
+
+// Value
+var color valueColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = GROUP_VALUE)
+var int valueSize = input.int(defval = 14, title = "Value Size", minval = 8, maxval = 32, group = GROUP_VALUE)
+var string valueFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], group = GROUP_VALUE)
+var string valueHalign = input.string(defval = text.align_right, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], group = GROUP_VALUE)
+var string valueValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], group = GROUP_VALUE)
+
+// Strength
+var color aboveColor = input.color(defval = color.new(color = NORD8, transp = 0), title = "Above Color", group = GROUP_STRENGTH)
+var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Below Color", group = GROUP_STRENGTH)
+
+// 🧮 DATA & CALCULATIONS
 // Fetch company data
 string ticker = syminfo.ticker
 string description = syminfo.description

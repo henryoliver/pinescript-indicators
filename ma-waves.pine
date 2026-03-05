@@ -3,7 +3,7 @@
 // Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
+indicator(title = "MAs & Waves", shorttitle = "🌊 MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
 
 // 🧱 CONSTANTS
 const string GROUP_TREND = "📈 Trend"

@@ -2,7 +2,10 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Hindenburg Omen Indicator", shorttitle = "HOI", overlay = true)
+indicator(title = "Hindenburg Omen Indicator", shorttitle = "⚠️ HOI", overlay = true)
+
+// 🧱 CONSTANTS
+const string GROUP_MARKET = "🏛️ Market"
 
 // Nord Theme Color Constants
 // Polar Night
@@ -69,10 +72,11 @@ const string UNC_RUT = "USI:UNCH.NY"
 const string NH_RUT = "INDEX:HIGN"
 const string NL_RUT = "INDEX:LOWN"
 
-// Input Settings
+// 🎛️ USER INPUT SETTINGS
 // Market Selection
-string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], group = "Market")
+string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], group = GROUP_MARKET)
 
+// 🧮 DATA & CALCULATIONS
 // Resolve symbols based on market selection
 string indexSymbol = IDX_SPX
 string advSymbol = ADV_SPX
