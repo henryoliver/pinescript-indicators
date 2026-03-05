@@ -6,6 +6,10 @@
 indicator(title = "MAs & Waves", shorttitle = "MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
 
 // 🧱 CONSTANTS
+const string GROUP_TREND = "📈 Trend"
+const string GROUP_CYCLE = "🔄 Cycle"
+const string GROUP_WAVES = "🌊 Waves"
+
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
 const color NORD2  = #434C5E
@@ -23,39 +27,46 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-const string CYCLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
+const color TREND_FLAT_COLOR = NORD2
+
+const string ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 // 🧩 TYPE DEFINITIONS
-enum Trend
+enum TrendDir
     UP
     DOWN
     FLAT
 
-type CyclePoint
-    float open
-    float close
-    float high
-    float low
-    float sma
-    int barIndex
+type Trend
+    TrendDir direction
+    color plotColor
 
-enum CycleZone
-    NONE
-    HIGH
-    LOW
+type Cycle
+    int XXXXX
+
+type Wave
+    int number
+    int letter
+    float lastImpulseHigh
+    float lastImpulseLow
+
+type Price
+    float close
+    bool isExtreme
+    bool isHigherHigh
+    bool isLowerLow
 
 // 🎛️ USER INPUT SETTINGS
-const string GROUP_TREND = "📈 Trend"
-const string GROUP_CYCLE = "🔄 Cycle"
-const string GROUP_WAVES = "🌊 Waves"
 
 // Trend Settings
-src = input.source(defval = close, title = "Source", group = GROUP_TREND)
-smaLength = input.int(defval = 50, title = "SMA Length", minval = 1, group = GROUP_TREND)
-smaOffset = input.int(defval = 0, title = "SMA Offset", minval = -500, maxval = 500, display = display.none, group = GROUP_TREND)
-trendLookback = input.int(defval = 1, title = "Slope Lookback (Bars)", minval = 1, maxval = 20,
+trendSource = input.source(defval = close, title = "Source", group = GROUP_TREND)
+trendSmaLength = input.int(defval = 50, title = "SMA Length", minval = 1, group = GROUP_TREND)
+trendSmaOffset = input.int(defval = 0, title = "SMA Offset", minval = -500, maxval = 500, display = display.none, group = GROUP_TREND)
+trendSlopeLookback = input.int(defval = 1, title = "Slope Lookback (Bars)", minval = 1, maxval = 20,
      tooltip = "Number of bars to look back when calculating the slope", group = GROUP_TREND)
-flatThreshold = input.float(defval = 0.0001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
+trendFlatThreshold = input.float(defval = 0.0001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
      tooltip = "Per-bar SMA slope threshold; values between -threshold and +threshold are flat", group = GROUP_TREND)
 
 // Cycle Settings
@@ -66,13 +77,8 @@ stochDLength = input.int(defval = 3, title = "D Length", minval = 1, group = GRO
 // Wave Settings
 waveLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Color", group = GROUP_WAVES)
 waveLabelSizeOpt = input.string(defval = "Normal", title = "Label Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_WAVES)
-waveLabelOffset = input.float(defval = 10.0, title = "Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
-
-// Cycle Letters (optional)
-cycleShowLetters = input.bool(defval = false, title = "Show Cycle Letters", group = GROUP_WAVES)
-cycleLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Cycle Label Color", group = GROUP_WAVES)
-cycleLabelSizeOpt = input.string(defval = "Normal", title = "Cycle Label Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_WAVES)
-
+waveLabelOffsetTop = input.float(defval = 10.0, title = "Top Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
+waveLabelOffsetBottom = input.float(defval = 10.0, title = "Bottom Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelSize = switch waveLabelSizeOpt
     "Tiny" => size.tiny
     "Small" => size.small
@@ -80,7 +86,11 @@ waveLabelSize = switch waveLabelSizeOpt
     "Large" => size.large
     => size.huge
 
-cycleLabelSize = switch cycleLabelSizeOpt
+// Complex Retrace Settings
+complexRetraceShow = input.bool(defval = false, title = "Show Complex Retrace Letters", group = GROUP_WAVES)
+complexRetraceLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Complex Retrace Label Color", group = GROUP_WAVES)
+complexRetraceLabelSizeOpt = input.string(defval = "Normal", title = "Complex Retrace Label Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_WAVES)
+complexRetraceLabelSize = switch complexRetraceLabelSizeOpt
     "Tiny" => size.tiny
     "Small" => size.small
     "Normal" => size.normal
@@ -88,110 +98,43 @@ cycleLabelSize = switch cycleLabelSizeOpt
     => size.huge
 
 // 📈 TREND
-sma = ta.sma(source = src, length = smaLength)
-
-smaSlope = (sma - sma[trendLookback]) / trendLookback
-
-Trend trend = math.abs(number = smaSlope) < flatThreshold ? Trend.FLAT : smaSlope > 0 ? Trend.UP : Trend.DOWN
-
-smaColor = switch trend
-    Trend.UP => color.new(color = NORD8, transp = 20)
-    Trend.DOWN => color.new(color = NORD9, transp = 60)
-    => NORD2
+var Trend trend = Trend.new(TrendDir.FLAT, TREND_FLAT_COLOR)
+trendSma = ta.sma(source = trendSource, length = trendSmaLength)
+trendSmaSlope = (trendSma - trendSma[trendSlopeLookback]) / trendSlopeLookback
 
 // 🔄 CYCLE
-var CycleZone cycleZone = CycleZone.NONE
-var CyclePoint currentCycleHigh = CyclePoint.new(na, na, na, na, na, na)
-var CyclePoint currentCycleLow = CyclePoint.new(na, na, na, na, na, na)
-
+// var Cycle cycle = Cycle.new(CycleZone.NONE, CyclePoint.new(0, 0), CyclePoint.new(0, 0))
 stochK = ta.stoch(source = close, high = high, low = low, length = stochLength)
 stochKSmoothed = ta.sma(source = stochK, length = stochSmooth)
 stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
 
-bool dCrossAbove45 = ta.crossover(stochD, 45)
-bool dCrossBelow55 = ta.crossunder(stochD, 55)
-
 // 🌊 WAVES
-var Trend previousTrend = Trend.FLAT
-var int impulseNumber = 0
-var CyclePoint lastImpulse = CyclePoint.new(na, na, na, na, na, na)
-var CyclePoint retraceCandidate = CyclePoint.new(na, na, na, na, na, na)
+// var Wave wave = Wave.new(0, false, 0, ALPHABET[0])
+// var Price price = Price.new(close = close, isExtreme = false, isHigherHigh = false, isLowerLow = false)
 
-float waveLabelOffsetPrice = syminfo.mintick * waveLabelOffset
-
+// Current bar confirmed
 if barstate.isconfirmed
-    // Reset on confirmed trend change
-    if trend != previousTrend
-        cycleZone := CycleZone.NONE
-        currentCycleHigh := CyclePoint.new(na, na, na, na, na, na)
-        currentCycleLow := CyclePoint.new(na, na, na, na, na, na)
+    // 1. TREND
+    TrendDir currTrendDir = math.abs(number = trendSmaSlope) < trendFlatThreshold ? TrendDir.FLAT : trendSmaSlope > 0 ? TrendDir.UP : TrendDir.DOWN
+    color currTrendColor = switch currTrendDir
+        TrendDir.UP => TREND_UP_COLOR
+        TrendDir.DOWN => TREND_DOWN_COLOR
+        TrendDir.FLAT => TREND_FLAT_COLOR
+    trend := Trend.new(currTrendDir, currTrendColor)
 
-        impulseNumber := 0
-        lastImpulse := CyclePoint.new(na, na, na, na, na, na)
-        retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
+    // 2. CYCLE
+    // bool dCrossAbove45 = ta.crossover(stochD, 45)
+    // bool dCrossBelow45 = ta.crossunder(stochD, 45)
+    // bool dCrossAbove55 = ta.crossover(stochD, 55)
+    // bool dCrossBelow55 = ta.crossunder(stochD, 55)
 
-    if trend != Trend.FLAT
-        previousTrend := trend
+    // 3. WAVE
+    // float waveLabelOffsetTopPrice = syminfo.mintick * waveLabelOffsetTop
+    // float waveLabelOffsetBottomPrice = syminfo.mintick * waveLabelOffsetBottom
 
-    // Extreme bar sets the cycle high/low
-    // Half-cycle confirmation ends the half-cycle
-    switch cycleZone
-        CycleZone.NONE =>
-            if dCrossAbove45 or stochD > 55
-                cycleZone := CycleZone.HIGH
-                currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-            else if dCrossBelow55 or stochD < 45
-                cycleZone := CycleZone.LOW
-                currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
-        CycleZone.HIGH =>
-            if stochD < 55
-                // Half-cycle high completes
-                bool highBarAboveSma = currentCycleHigh.low > currentCycleHigh.sma
-                bool qualifiesImpulseUp = impulseNumber == 0 ? true : (currentCycleHigh.close > lastImpulse.high and currentCycleHigh.open >= lastImpulse.high)
-
-                if trend == Trend.UP and highBarAboveSma and qualifiesImpulseUp
-                    int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
-                    label.new(x = currentCycleHigh.barIndex, y = currentCycleHigh.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-
-                    if impulseNumber >= 1 and not na(retraceCandidate.high)
-                        label.new(x = retraceCandidate.barIndex, y = retraceCandidate.high + waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber - 1), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-                    impulseNumber := nextImpulseNumber
-                    lastImpulse := currentCycleHigh
-                    retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
-
-                cycleZone := CycleZone.LOW
-                currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
-            else
-                if na(currentCycleHigh.high) or high > currentCycleHigh.high
-                    currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-
-                if trend == Trend.DOWN and impulseNumber >= 1
-                    if na(retraceCandidate.high) or currentCycleHigh.high > retraceCandidate.high
-                        retraceCandidate := currentCycleHigh
-        CycleZone.LOW =>
-            if stochD > 45
-                // Half-cycle low completes
-                bool lowBarBelowSma = currentCycleLow.high < currentCycleLow.sma
-                bool qualifiesImpulseDown = impulseNumber == 0 ? true : (currentCycleLow.close < lastImpulse.low and currentCycleLow.open <= lastImpulse.low)
-
-                if trend == Trend.DOWN and lowBarBelowSma and qualifiesImpulseDown
-                    int nextImpulseNumber = impulseNumber == 0 ? 1 : impulseNumber + 2
-                    label.new(x = currentCycleLow.barIndex, y = currentCycleLow.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-                    if impulseNumber >= 1 and not na(retraceCandidate.low)
-                        label.new(x = retraceCandidate.barIndex, y = retraceCandidate.low - waveLabelOffsetPrice, text = str.tostring(nextImpulseNumber - 1), style = label.style_none, color = na, textcolor = waveLabelColor, size = waveLabelSize)
-                    impulseNumber := nextImpulseNumber
-                    lastImpulse := currentCycleLow
-                    retraceCandidate := CyclePoint.new(na, na, na, na, na, na)
-
-                cycleZone := CycleZone.HIGH
-                currentCycleHigh := CyclePoint.new(open, close, high, low, sma, bar_index)
-            else
-                if na(currentCycleLow.low) or low < currentCycleLow.low
-                    currentCycleLow := CyclePoint.new(open, close, high, low, sma, bar_index)
-
-                if trend == Trend.UP and impulseNumber >= 1
-                    if na(retraceCandidate.low) or currentCycleLow.low < retraceCandidate.low
-                        retraceCandidate := currentCycleLow
+    // 4. CURRENT BAR close
+        // a. Is that BAR the EXTREME bar?
+        // b. Is that BAR the HH or LL?
 
 // 📊 PLOT
-plot(series = sma, title = "SMA", color = smaColor, linewidth = 3, offset = smaOffset)
+plot(series = trendSma, title = "SMA", color = trend.plotColor, linewidth = 3, offset = trendSmaOffset)
