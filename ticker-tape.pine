@@ -8,31 +8,30 @@ indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_b
 // Ticker tape, introduced in 1867 by Edward Calahan and perfected by Thomas Edison,
 // was the first mechanical system for transmitting stock prices over telegraph lines.
 
-// ===================================================================
-// SECTION 1: CONSTANTS & THEME
-// ===================================================================
+// 🧱 CONSTANTS
+// Nord Theme Color
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
 
-// Nord Theme Colors (Complete Palette)
-const color NORD0  = #2E3440  // Polar Night - Darkest
-const color NORD1  = #3B4252  // Polar Night
-const color NORD2  = #434C5E  // Polar Night
-const color NORD3  = #4C566A  // Polar Night - Lightest
-const color NORD4  = #D8DEE9  // Snow Storm
-const color NORD5  = #E5E9F0  // Snow Storm
-const color NORD6  = #ECEFF4  // Snow Storm - Lightest
-const color NORD7  = #8FBCBB  // Frost - Teal
-const color NORD8  = #88C0D0  // Frost - Bright Teal
-const color NORD9  = #81A1C1  // Frost - Blue
-const color NORD10 = #5E81AC  // Frost - Dark Blue
-const color NORD11 = #BF616A  // Aurora - Red
-const color NORD12 = #D08770  // Aurora - Orange
-const color NORD13 = #EBCB8B  // Aurora - Yellow
-const color NORD14 = #A3BE8C  // Aurora - Green
-const color NORD15 = #B48EAD  // Aurora - Purple
-
-// ===================================================================
-// SECTION 2: TYPE DEFINITIONS
-// ===================================================================
+// 🧩 TYPE DEFINITIONS
 
 // Custom type to store complete tick data as a structured record
 type TickData
@@ -42,9 +41,7 @@ type TickData
     float bid      // Bid price at time of execution
     float ask      // Ask price at time of execution
 
-// ===================================================================
-// SECTION 3: USER INPUTS
-// ===================================================================
+// 🎛️ USER INPUT SETTINGS
 
 // Input Groups
 const string GROUP_TABLE = "📋 Table Settings"
@@ -119,9 +116,7 @@ clusterBackgroundColor = input.color(defval = color.new(NORD15, 0), title = "Clu
 clusterTextColor = input.color(defval = color.new(NORD6, 0), title = "Cluster Text", inline = "cluster_colors", group = GROUP_CLUSTER)
 clusterBold = input.bool(defval = true, title = "Bold", inline = "cluster_colors", group = GROUP_CLUSTER)
 
-// ===================================================================
-// SECTION 4: DERIVED DISPLAY SETTINGS
-// ===================================================================
+// 🧮 DATA & CALCULATIONS
 int instRowsActive = showInstitutional ? institutionalRows : 0
 int retailRowsActive = showRetail ? retailRows : 0
 bool showGap = showInstitutional and showRetail
@@ -130,10 +125,7 @@ int totalRows = math.max(1, (showInstitutional ? (2 + instRowsActive) : 0) + (sh
 f_inRange(float value, int minValue, int maxValue) =>
     value >= minValue and (maxValue <= 0 or value <= maxValue)
 
-// ===================================================================
-// SECTION 5: DATA FETCHING
-// ===================================================================
-
+// DATA FETCHING
 // Request tick-level data from lower timeframe (1T = 1 tick)
 // Returns arrays of tick data for the current bar
 [tickPrices, tickVolumes, tickTimes, tickBids, tickAsks] = request.security_lower_tf(
@@ -143,10 +135,7 @@ f_inRange(float value, int minValue, int maxValue) =>
      ignore_invalid_symbol = true
 )
 
-// ===================================================================
-// SECTION 6: PERSISTENT STORAGE
-// ===================================================================
-
+// PERSISTENT STORAGE
 // varip = variable that persists across script executions (real-time updates)
 // These arrays store validated TickData records that survive script recalculations
 varip array<TickData> institutionalTicks = array.new<TickData>()
@@ -155,10 +144,7 @@ varip array<TickData> retailTicks = array.new<TickData>()
 // Track the last processed tick count to avoid reprocessing the same ticks
 varip int lastProcessedTickCount = 0
 
-// ===================================================================
-// SECTION 7: TICK PROCESSING
-// ===================================================================
-
+// TICK PROCESSING
 // Clear array on new bar to prevent stale data from previous bars
 if barstate.isnew
     array.clear(institutionalTicks)
@@ -224,9 +210,7 @@ if newTicksThisExec
     // Update the last processed tick count to prevent reprocessing
     lastProcessedTickCount := availableTickCount
 
-// ===================================================================
-// SECTION 8: PRECOMPUTED VALUES & HELPER FUNCTIONS
-// ===================================================================
+// PRECOMPUTED VALUES & HELPERS
 // Convert text alignment strings to constants
 headerAlignValue = headerTextAlign == "left" ? text.align_left : headerTextAlign == "center" ? text.align_center : text.align_right
 timeAlignValue = timeColumnAlign == "left" ? text.align_left : timeColumnAlign == "center" ? text.align_center : text.align_right
@@ -262,9 +246,7 @@ f_clusterCount(array<TickData> ticks, int idx, int minClusterSize) =>
                     count += 1
             count
 
-// ===================================================================
-// SECTION 8: TABLE RENDERING
-// ===================================================================
+// 📊 RENDERING
 // Convert table position string to position constant
 tablePos = switch tablePosition
     "Top Left"       => position.top_left

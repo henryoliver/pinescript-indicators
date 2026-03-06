@@ -9,17 +9,21 @@ const string GROUP_MARKET = "🌐 Market"
 const string GROUP_DISPLAY = "🖥️ Display"
 
 // Nord Theme Color
-const color NORD0  = #2E3440
-const color NORD1  = #3B4252
-const color NORD2  = #434C5E
-const color NORD3  = #4C566A
-const color NORD4  = #D8DEE9
-const color NORD5  = #E5E9F0
-const color NORD6  = #ECEFF4
-const color NORD7  = #8FBCBB
-const color NORD8  = #88C0D0
-const color NORD9  = #81A1C1
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B

@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Technical View Indicator", shorttitle = "🧭 TVI", overlay = true, calc_on_every_tick = calcOnEveryTick, dynamic_requests = false)
+indicator(title = "Technical View Indicator", shorttitle = "🧭 TVI", overlay = true, dynamic_requests = false)
 
 // 🧱 CONSTANTS
 const string GROUP_GENERAL = "⚙️ General"
@@ -26,17 +26,21 @@ const float BILLION = 1e9
 const float TRILLION = 1e12
 
 // Nord Theme Color
-const color NORD0  = #2E3440
-const color NORD1  = #3B4252
-const color NORD2  = #434C5E
-const color NORD3  = #4C566A
-const color NORD4  = #D8DEE9
-const color NORD5  = #E5E9F0
-const color NORD6  = #ECEFF4
-const color NORD7  = #8FBCBB
-const color NORD8  = #88C0D0
-const color NORD9  = #81A1C1
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
@@ -44,7 +48,6 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // 🎛️ USER INPUT SETTINGS
-var calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Table
 var string tablePosition = input.string(defval = position.top_right, title = "Position", 
@@ -83,7 +86,7 @@ var bool mktCapVisible = input.bool(true, "Visible", group = GROUP_MKT_CAP)
 var float mktCapBelow = input.float(10, "Sweet Spot (Below $B)", minval = 1, step = 1, 
      tooltip = "Market cap below this value (in billions) indicates higher breakout potential", group = GROUP_MKT_CAP)
 
-float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")
+float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ", ignore_invalid_symbol = true)
 float mktCap = na(tso) ? na : tso * close
 float mktCapBillions = na(mktCap) ? na : mktCap / BILLION
 
@@ -138,7 +141,7 @@ var float dollarVolumeBelow = input.float(10000000, "▲ - ▼ Weak (Below)", mi
 
 float dollarVolumeTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = volume * close, length = dollarVolumePeriod), lookahead = barmerge.lookahead_on)
 
-string dollarVolumeText = "DVOL " + (na(dollarVolumeTicker) ? "-" : str.tostring(dollarVolumeTicker, format.currency))
+string dollarVolumeText = "DVOL " + (na(dollarVolumeTicker) ? "-" : str.format("${0}", math.round(dollarVolumeTicker, 2)))
 color dollarVolumeColor = dollarVolumeTicker >= dollarVolumeAbove ? aboveColor : 
      dollarVolumeTicker <= dollarVolumeBelow ? belowColor : textColor
 string dollarVolumeTooltip = str.format("{0}-day average dollar volume. Above ${1, number, #,###} indicates strong institutional participation",
@@ -153,7 +156,7 @@ var float peBelow = input.float(15, "▲ - ▼ Low (Below)", minval = 0, step = 
      tooltip = "P/E above threshold may indicate overvaluation. Below threshold may indicate undervaluation or value opportunity", 
      inline = "PE Strength", group = GROUP_PE)
 
-float peRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_EARNINGS_FORWARD", period = "FY")
+float peRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_EARNINGS_FORWARD", period = "FY", ignore_invalid_symbol = true)
 string peFormatted = na(peRatio) ? "-" : str.format("{0, number, #.0}", peRatio)
 
 string peText = "P/E" + peFormatted
@@ -171,7 +174,7 @@ var float psBelow = input.float(50, "▲ - ▼ Overvalued (Above)", minval = 10,
      tooltip = "P/S between reasonable and overvalued range (10-50) is acceptable. Below or above this range may indicate risk", 
      inline = "PS Strength", group = GROUP_PS)
 
-float psRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_SALES_FORWARD", period = "FY")
+float psRatio = request.financial(symbol = syminfo.tickerid, financial_id = "PRICE_SALES_FORWARD", period = "FY", ignore_invalid_symbol = true)
 string psFormatted = na(psRatio) ? "-" : str.format("{0, number, #.0}", psRatio)
 
 string psText = "P/S" + psFormatted
@@ -189,8 +192,8 @@ var float adrBelow = input.float(0.03, "▲ - ▼ Low Volatility (Below)", minva
      tooltip = "ADR above threshold indicates high volatility ideal for swing trading. Below threshold suggests choppy or slow price action", 
      inline = "ADR Strength", group = GROUP_ADR)
 
-float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = (high / low), length = adrRange), lookahead = barmerge.lookahead_on)
-float adrRounded = math.round(adrTicker - 1, 4)
+float adrTicker = request.security(symbol = syminfo.tickerid, timeframe = "D", expression = ta.sma(source = (high - low) / close, length = adrRange), lookahead = barmerge.lookahead_on)
+float adrRounded = math.round(adrTicker, 4)
 string adrFormatted = str.format("{0, number, #.00}%", adrRounded * 100)
 
 string adrText = "ADR" + adrFormatted

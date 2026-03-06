@@ -3,7 +3,7 @@
 // MACD & Waves - Momentum wave counting based on MACD structure (HH/HL/LL/LH)
 
 //@version=6
-indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", calc_on_every_tick = calcOnEveryTick)
+indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", max_labels_count = 500)
 
 // 🧱 CONSTANTS
 const string GROUP_GENERAL = "⚙️ General"
@@ -14,17 +14,21 @@ const string GROUP_STYLING = "🧱 Styling"
 const string GROUP_WAVES = "🌊 Wave Counting"
 
 // Nord Theme Color
-const color NORD0  = #2E3440
-const color NORD1  = #3B4252
-const color NORD2  = #434C5E
-const color NORD3  = #4C566A
-const color NORD4  = #D8DEE9
-const color NORD5  = #E5E9F0
-const color NORD6  = #ECEFF4
-const color NORD7  = #8FBCBB
-const color NORD8  = #88C0D0
-const color NORD9  = #81A1C1
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
@@ -39,7 +43,6 @@ const string TREND_NONE = "none"
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
 // 🎛️ USER INPUT SETTINGS
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Source
 src = input.source(defval = close, title = "Source", group = GROUP_MACD)
@@ -84,6 +87,7 @@ signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshol
      tooltip = "Angle threshold for signal line color (not used for wave counting)")
 waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = GROUP_WAVES)
 waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_WAVES)
+minBarsBetweenLabels = input.int(defval = 5, title = "Min Bars Between Labels", minval = 0, maxval = 200, group = GROUP_WAVES)
 
 // Map wave label size string to size constant
 waveLabelSizeConst = switch waveLabelSize
@@ -150,9 +154,13 @@ varip float wave1Value = na
 varip int wave1Bar = na
 varip bool wave1Confirmed = false
 varip bool macdHooked = false
+varip int lastLabelBar = na
+
+f_canLabel(int labelBar) =>
+    showWaves and (minBarsBetweenLabels == 0 or na(lastLabelBar) or math.abs(labelBar - lastLabelBar) >= minBarsBetweenLabels)
 
 // Detect structure and count waves
-if newMacdHigh
+if barstate.isconfirmed and newMacdHigh
     currentHigh = pivotHighValue
     currentHighBar = pivotHighBar
 
@@ -179,11 +187,12 @@ if newMacdHigh
                 lastHighBar := currentHighBar
                 macdHooked := false
 
-                if showWaves
+                if f_canLabel(currentHighBar)
                     label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
                          style = label.style_label_down, color = color.new(waveColor, 100),
                          textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                          textalign = text.align_center)
+                    lastLabelBar := currentHighBar
 
         else if currentHigh < lastHigh
             // Lower High (LH)
@@ -199,26 +208,28 @@ if newMacdHigh
                 if not wave1Confirmed and waveNumber == 1
                     // NOW we can label wave 1 retroactively
                     wave1Confirmed := true
-                    if showWaves
+                    if f_canLabel(wave1Bar)
                         label.new(x = wave1Bar, y = wave1Value, text = "1",
                              style = label.style_label_up, color = color.new(waveColor, 100),
                              textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                              textalign = text.align_center)
+                        lastLabelBar := wave1Bar
 
                 waveNumber += 1
                 lastHigh := currentHigh
                 lastHighBar := currentHighBar
 
-                if showWaves
+                if f_canLabel(currentHighBar)
                     label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
                          style = label.style_label_down, color = color.new(waveColor, 100),
                          textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                          textalign = text.align_center)
+                    lastLabelBar := currentHighBar
     else
         lastHigh := currentHigh
         lastHighBar := currentHighBar
 
-if newMacdLow
+if barstate.isconfirmed and newMacdLow
     currentLow = pivotLowValue
     currentLowBar = pivotLowBar
 
@@ -245,11 +256,12 @@ if newMacdLow
                 lastLowBar := currentLowBar
                 macdHooked := false
 
-                if showWaves
+                if f_canLabel(currentLowBar)
                     label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
                          style = label.style_label_up, color = color.new(waveColor, 100),
                          textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                          textalign = text.align_center)
+                    lastLabelBar := currentLowBar
 
         else if currentLow > lastLow
             // Higher Low (HL)
@@ -265,32 +277,34 @@ if newMacdLow
                 if not wave1Confirmed and waveNumber == 1
                     // NOW we can label wave 1 retroactively
                     wave1Confirmed := true
-                    if showWaves
+                    if f_canLabel(wave1Bar)
                         label.new(x = wave1Bar, y = wave1Value, text = "1",
                              style = label.style_label_down, color = color.new(waveColor, 100),
                              textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                              textalign = text.align_center)
+                        lastLabelBar := wave1Bar
 
                 waveNumber += 1
                 lastLow := currentLow
                 lastLowBar := currentLowBar
 
-                if showWaves
+                if f_canLabel(currentLowBar)
                     label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
                          style = label.style_label_up, color = color.new(waveColor, 100),
                          textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
                          textalign = text.align_center)
+                    lastLabelBar := currentLowBar
     else
         lastLow := currentLow
         lastLowBar := currentLowBar
 
 // Check for MACD hooking (required between impulse waves)
-if macdTrend == TREND_UP and not na(lastHigh) and waveNumber % 2 == 1
+if barstate.isconfirmed and macdTrend == TREND_UP and not na(lastHigh) and waveNumber % 2 == 1
     // After odd wave in uptrend, check if MACD hooked down
     if macd < lastHigh
         macdHooked := true
 
-if macdTrend == TREND_DOWN and not na(lastLow) and waveNumber % 2 == 1
+if barstate.isconfirmed and macdTrend == TREND_DOWN and not na(lastLow) and waveNumber % 2 == 1
     // After odd wave in downtrend, check if MACD hooked up
     if macd > lastLow
         macdHooked := true

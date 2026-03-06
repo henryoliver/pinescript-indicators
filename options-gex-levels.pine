@@ -1,0 +1,381 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Options GEX Levels - Manual paste parser
+
+//@version=6
+indicator(title = "Options GEX Levels", shorttitle = "🧬 GEX", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 100)
+
+// 🧱 CONSTANTS
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_DATA = "📝 Data Input"
+const string GROUP_ZONES = "🧱 Zones"
+const string GROUP_METRICS = "📊 Metrics"
+const string GROUP_STYLE = "🎨 Style"
+const string GROUP_PROFILE = "📌 Profiles"
+const string GROUP_DEBUG = "🧪 Debug"
+
+// Nord Theme Color Constants
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// 🎛️ USER INPUT SETTINGS
+string dataText = input.text_area(defval = "", title = "Options Data (CSV)", group = GROUP_DATA, tooltip = "Paste the lines exactly as provided.\nExample:\nSPY,20260305,ZONES,NEG_SQUEEZE:672,...")
+bool requireSymbolMatch = input.bool(defval = true, title = "Require Symbol Match", group = GROUP_GENERAL)
+bool requireDateMatch = input.bool(defval = true, title = "Require Date Match", group = GROUP_GENERAL)
+bool showDebug = input.bool(defval = false, title = "Show Debug Label", group = GROUP_DEBUG)
+
+bool showHvl = input.bool(defval = true, title = "Show HVL Line", group = GROUP_ZONES)
+bool showFlipZone = input.bool(defval = true, title = "Show Flip Zone", group = GROUP_ZONES)
+
+bool showNetGexLines = input.bool(defval = true, title = "Show NETGEX Levels", group = GROUP_METRICS)
+int maxNetGexLevels = input.int(defval = 5, title = "Max NETGEX Levels", minval = 1, maxval = 20, group = GROUP_METRICS)
+float minNetGexAbsPercent = input.float(defval = 10, title = "Min NETGEX Abs %", minval = 0, maxval = 100, step = 1, group = GROUP_METRICS)
+
+bool showAbsProfile = input.bool(defval = true, title = "Show ABSGEX Profile", group = GROUP_PROFILE)
+bool showDexProfile = input.bool(defval = false, title = "Show NETDEX Profile", group = GROUP_PROFILE)
+bool showVolProfile = input.bool(defval = false, title = "Show NETVOL Profile", group = GROUP_PROFILE)
+float profileMinAbsPercent = input.float(defval = 0, title = "Min Abs % For Profile", minval = 0, maxval = 100, step = 1, group = GROUP_PROFILE)
+string profileSide = input.string(defval = "Right", title = "Profile Side", options = ["Right", "Left"], group = GROUP_PROFILE)
+int profileOffsetBars = input.int(defval = 3, title = "Profile Offset (Bars)", minval = 0, maxval = 50, group = GROUP_PROFILE)
+int profileSpacingBars = input.int(defval = 3, title = "Profile Spacing (Bars)", minval = 0, maxval = 50, group = GROUP_PROFILE)
+int profileWidthBars = input.int(defval = 20, title = "Profile Max Width (Bars)", minval = 5, maxval = 100, group = GROUP_PROFILE)
+int profileHeightTicks = input.int(defval = 6, title = "Profile Height (Ticks)", minval = 1, maxval = 50, group = GROUP_PROFILE)
+int profileOpacity = input.int(defval = 70, title = "Profile Opacity", minval = 0, maxval = 100, group = GROUP_PROFILE)
+int profileZeroOpacity = input.int(defval = 50, title = "Profile Zero Opacity", minval = 0, maxval = 100, group = GROUP_PROFILE)
+int labelRightOffsetBars = input.int(defval = 3, title = "Label Right Offset (Bars)", minval = 1, maxval = 50, group = GROUP_STYLE)
+
+int baseLineWidth = input.int(defval = 1, title = "Base Line Width", minval = 1, maxval = 5, group = GROUP_STYLE)
+int widthScale = input.int(defval = 3, title = "Width Scale (0-5)", minval = 0, maxval = 5, group = GROUP_STYLE)
+bool showLabels = input.bool(defval = true, title = "Show Labels", group = GROUP_STYLE)
+color labelTextColor = input.color(defval = color.new(NORD6, 0), title = "Label Text", group = GROUP_STYLE)
+color labelBgColor = input.color(defval = color.new(NORD0, 70), title = "Label Background", group = GROUP_STYLE)
+
+color hvlLineColor = input.color(defval = color.new(NORD13, 0), title = "HVL Line", group = GROUP_ZONES)
+color flipLineColor = input.color(defval = color.new(NORD13, 0), title = "Flip Lines", group = GROUP_ZONES)
+color flipFillColor = input.color(defval = color.new(NORD13, 85), title = "Flip Fill", group = GROUP_ZONES)
+
+color netGexPosColor = input.color(defval = color.new(NORD14, 0), title = "NETGEX Positive", group = GROUP_METRICS)
+color netGexNegColor = input.color(defval = color.new(NORD11, 0), title = "NETGEX Negative", group = GROUP_METRICS)
+
+color profilePosColor = input.color(defval = color.new(NORD14, 0), title = "Profile Positive", group = GROUP_PROFILE)
+color profileNegColor = input.color(defval = color.new(NORD11, 0), title = "Profile Negative", group = GROUP_PROFILE)
+color profileNeutralColor = input.color(defval = color.new(NORD8, 0), title = "Profile Neutral", group = GROUP_PROFILE)
+
+// 🧩 TYPE DEFINITIONS
+// None
+
+// 🧮 HELPERS
+f_clearLines(array<line> lines) =>
+    if array.size(lines) > 0
+        for i = 0 to array.size(lines) - 1
+            line.delete(array.get(lines, i))
+        array.clear(lines)
+
+f_clearLabels(array<label> labels) =>
+    if array.size(labels) > 0
+        for i = 0 to array.size(labels) - 1
+            label.delete(array.get(labels, i))
+        array.clear(labels)
+
+f_clearBoxes(array<box> boxes) =>
+    if array.size(boxes) > 0
+        for i = 0 to array.size(boxes) - 1
+            box.delete(array.get(boxes, i))
+        array.clear(boxes)
+
+f_safeFloat(string s) =>
+    float v = str.tonumber(s)
+    na(v) ? na : v
+
+f_hasZone(float v) =>
+    not na(v) and v != 0
+
+f_levelWidth(float absVal) =>
+    int scaled = widthScale <= 0 ? 0 : int(math.round(absVal / 100.0 * widthScale))
+    math.min(5, baseLineWidth + scaled)
+
+f_drawLevel(array<line> lines, array<label> labels, float price, float absVal, int extraWidth, color lineColor, string labelText, bool dashed) =>
+    int width = math.min(5, f_levelWidth(absVal) + extraWidth)
+    line ln = line.new(x1 = bar_index, y1 = price, x2 = bar_index + 1, y2 = price, extend = extend.both, color = lineColor, width = width, style = dashed ? line.style_dashed : line.style_solid)
+    array.push(lines, ln)
+    if showLabels
+        label lb = label.new(x = bar_index + labelRightOffsetBars, y = price, text = labelText, style = label.style_label_right, textcolor = labelTextColor, color = labelBgColor, size = size.small)
+        array.push(labels, lb)
+
+f_maxIndex(array<float> values) =>
+    int maxIdx = na
+    float maxVal = -1.0
+    for i = 0 to array.size(values) - 1
+        float v = array.get(values, i)
+        if v > maxVal
+            maxVal := v
+            maxIdx := i
+    maxIdx
+
+f_pctText(float strike) =>
+    if na(close) or close == 0
+        "0.0%"
+    else
+        float pct = (strike - close) / close * 100.0
+        string sign = pct > 0 ? "+" : ""
+        sign + str.tostring(math.round(pct, 1)) + "%"
+
+f_netGexSign(array<float> strikes, array<float> values, float strike) =>
+    float sign = 0
+    for i = 0 to array.size(strikes) - 1
+        float s = array.get(strikes, i)
+        if math.abs(s - strike) <= syminfo.mintick
+            float v = array.get(values, i)
+            sign := v > 0 ? 1 : v < 0 ? -1 : 0
+            break
+    sign
+
+f_drawProfileBars(array<box> boxes, array<float> strikes, array<float> values, float maxAbs, int offsetBars, string title, bool useSignFromNetGex, array<float> netGexStrikes, array<float> netGexValues) =>
+    if array.size(strikes) > 0 and maxAbs > 0
+        for i = 0 to array.size(strikes) - 1
+            float strike = array.get(strikes, i)
+            float val = array.get(values, i)
+            float absVal = math.abs(val)
+            if absVal < profileMinAbsPercent
+                color barColor = profileNeutralColor
+                int left = profileSide == "Right" ? bar_index + offsetBars : bar_index - offsetBars - 1
+                int right = profileSide == "Right" ? bar_index + offsetBars + 1 : bar_index - offsetBars
+                float halfHeight = syminfo.mintick * profileHeightTicks
+                box bx = box.new(left = left, right = right, bottom = strike - halfHeight, top = strike + halfHeight,
+                     bgcolor = color.new(barColor, profileZeroOpacity), border_color = color.new(barColor, 0))
+                array.push(boxes, bx)
+                continue
+            float sign = useSignFromNetGex ? f_netGexSign(netGexStrikes, netGexValues, strike) : (val > 0 ? 1 : val < 0 ? -1 : 0)
+            color barColor = sign > 0 ? profilePosColor : sign < 0 ? profileNegColor : profileNeutralColor
+            int lengthBars = int(math.max(1, math.round(profileWidthBars * absVal / maxAbs)))
+            int left = profileSide == "Right" ? bar_index + offsetBars : bar_index - offsetBars - lengthBars
+            int right = profileSide == "Right" ? bar_index + offsetBars + lengthBars : bar_index - offsetBars
+            float halfHeight = syminfo.mintick * profileHeightTicks
+            box bx = box.new(left = left, right = right, bottom = strike - halfHeight, top = strike + halfHeight,
+                 bgcolor = color.new(barColor, profileOpacity), border_color = color.new(barColor, 0))
+            array.push(boxes, bx)
+
+// 📈 MAIN
+var array<line> g_lines = array.new<line>()
+var array<label> g_labels = array.new<label>()
+var array<box> g_boxes = array.new<box>()
+var string lastDataText = ""
+var int lastRenderDate = na
+var string tickerIdSymbol = syminfo.ticker
+var label debugLabel = na
+
+int todayInt = year * 10000 + month * 100 + dayofmonth
+
+bool dateChanged = requireDateMatch and not na(lastRenderDate) and todayInt != lastRenderDate
+bool shouldRebuild = barstate.islast and (dataText != lastDataText or dateChanged)
+
+if shouldRebuild
+    f_clearLines(g_lines)
+    f_clearLabels(g_labels)
+    f_clearBoxes(g_boxes)
+    if not na(debugLabel)
+        label.delete(debugLabel)
+        debugLabel := na
+
+    int totalLines = 0
+    int matchedLines = 0
+    int parsedZones = 0
+    int parsedMetrics = 0
+    int parsedFlips = 0
+
+    float zoneNegSqueeze = na
+    float zoneNegGamma = na
+    float zoneNegTrans = na
+    float zoneHvl = na
+    float zonePosTrans = na
+    float zonePosGamma = na
+    float zonePosSqueeze = na
+    string regime = ""
+
+    float flipLow = na
+    float flipMid = na
+    float flipHigh = na
+
+    array<float> netGexStrikes = array.new<float>()
+    array<float> netGexValues = array.new<float>()
+    array<float> absGexStrikes = array.new<float>()
+    array<float> absGexValues = array.new<float>()
+    array<float> netDexStrikes = array.new<float>()
+    array<float> netDexValues = array.new<float>()
+    array<float> netVolStrikes = array.new<float>()
+    array<float> netVolValues = array.new<float>()
+
+    array<string> lines = str.split(dataText, "\n")
+    totalLines := array.size(lines)
+    for i = 0 to array.size(lines) - 1
+        string rawLine = str.trim(array.get(lines, i))
+        if rawLine == ""
+            continue
+        array<string> tokens = str.split(rawLine, ",")
+        if array.size(tokens) < 3
+            continue
+        string symbol = str.trim(array.get(tokens, 0))
+        string dateStr = str.trim(array.get(tokens, 1))
+        string recordType = str.trim(array.get(tokens, 2))
+        float dateFloat = f_safeFloat(dateStr)
+        int dateInt = na(dateFloat) ? na : int(dateFloat)
+
+        string symIn = str.upper(symbol)
+        string symTicker = str.upper(syminfo.ticker)
+        bool symbolOk = not requireSymbolMatch or symIn == symTicker
+        bool dateOk = not requireDateMatch or (not na(dateInt) and dateInt == todayInt)
+        if not symbolOk or not dateOk
+            continue
+        matchedLines += 1
+
+        if recordType == "ZONES"
+            parsedZones += 1
+            for t = 3 to array.size(tokens) - 1
+                string token = str.trim(array.get(tokens, t))
+                array<string> parts = str.split(token, ":")
+                if array.size(parts) < 2
+                    continue
+                string key = str.trim(array.get(parts, 0))
+                string valStr = str.trim(array.get(parts, 1))
+                float valNum = f_safeFloat(valStr)
+                if key == "NEG_SQUEEZE"
+                    zoneNegSqueeze := valNum
+                else if key == "NEG_GAMMA"
+                    zoneNegGamma := valNum
+                else if key == "NEG_TRANS"
+                    zoneNegTrans := valNum
+                else if key == "HVL"
+                    zoneHvl := valNum
+                else if key == "POS_TRANS"
+                    zonePosTrans := valNum
+                else if key == "POS_GAMMA"
+                    zonePosGamma := valNum
+                else if key == "POS_SQUEEZE"
+                    zonePosSqueeze := valNum
+                else if key == "REGIME"
+                    regime := valStr
+        else
+            int t = 3
+            while t < array.size(tokens)
+                string token = str.trim(array.get(tokens, t))
+                if str.startswith(token, "[FLIP:")
+                    parsedFlips += 1
+                    string inner = str.replace(token, "[FLIP:", "")
+                    inner := str.replace(inner, "]", "")
+                    array<string> flipParts = str.split(inner, ":")
+                    if array.size(flipParts) >= 1
+                        flipLow := f_safeFloat(array.get(flipParts, 0))
+                    if array.size(flipParts) >= 2
+                        flipMid := f_safeFloat(array.get(flipParts, 1))
+                    if array.size(flipParts) >= 3
+                        flipHigh := f_safeFloat(array.get(flipParts, 2))
+                    t += 1
+                else
+                    if t + 1 >= array.size(tokens)
+                        break
+                    float strike = f_safeFloat(token)
+                    float val = f_safeFloat(str.trim(array.get(tokens, t + 1)))
+                    if not na(strike) and not na(val)
+                        parsedMetrics += 1
+                        if recordType == "NETGEX"
+                            array.push(netGexStrikes, strike)
+                            array.push(netGexValues, val)
+                        else if recordType == "ABSGEX"
+                            array.push(absGexStrikes, strike)
+                            array.push(absGexValues, val)
+                        else if recordType == "NETDEX"
+                            array.push(netDexStrikes, strike)
+                            array.push(netDexValues, val)
+                        else if recordType == "NETVOL"
+                            array.push(netVolStrikes, strike)
+                            array.push(netVolValues, val)
+                    t += 2
+
+    // Plot HVL
+    if showHvl and f_hasZone(zoneHvl)
+        string hvlLabel = f_pctText(zoneHvl) + " | HVL"
+        f_drawLevel(g_lines, g_labels, zoneHvl, 100, 1, hvlLineColor, hvlLabel, true)
+
+    // Plot Flip Zone
+    if showFlipZone and f_hasZone(flipLow) and f_hasZone(flipHigh)
+        float bottom = math.min(flipLow, flipHigh)
+        float top = math.max(flipLow, flipHigh)
+        box bx = box.new(left = bar_index, right = bar_index + 1, bottom = bottom, top = top, bgcolor = flipFillColor, border_color = flipLineColor, extend = extend.right)
+        array.push(g_boxes, bx)
+        if f_hasZone(flipMid)
+            f_drawLevel(g_lines, g_labels, flipMid, 100, 0, flipLineColor, "FLIP " + str.tostring(flipMid), true)
+
+    // Plot NETGEX levels (top N)
+    if showNetGexLines and array.size(netGexStrikes) > 0
+        array<float> absVals = array.new<float>()
+        for i = 0 to array.size(netGexValues) - 1
+            array.push(absVals, math.abs(array.get(netGexValues, i)))
+
+        int limit = math.min(maxNetGexLevels, array.size(netGexStrikes))
+        for k = 0 to limit - 1
+            int idx = f_maxIndex(absVals)
+            if na(idx)
+                break
+            float absVal = array.get(absVals, idx)
+            if absVal < minNetGexAbsPercent
+                array.set(absVals, idx, -1)
+                continue
+            float strike = array.get(netGexStrikes, idx)
+            float val = array.get(netGexValues, idx)
+            string wallText = val > 0 ? "Call Wall" : val < 0 ? "Put Wall" : "Wall"
+            string labelText = f_pctText(strike) + " | " + wallText
+            color lineColor = val > 0 ? netGexPosColor : val < 0 ? netGexNegColor : netGexPosColor
+            bool isConfluence = f_hasZone(zoneHvl) and math.abs(strike - zoneHvl) <= syminfo.mintick
+            int extraWidth = isConfluence ? 2 : 0
+            f_drawLevel(g_lines, g_labels, strike, absVal, extraWidth, lineColor, labelText, false)
+            array.set(absVals, idx, -1)
+
+    // Profiles (horizontal bars by strike)
+    int profileOffset = profileOffsetBars
+    if showAbsProfile and array.size(absGexStrikes) > 0
+        float maxAbs = 0
+        for i = 0 to array.size(absGexValues) - 1
+            maxAbs := math.max(maxAbs, math.abs(array.get(absGexValues, i)))
+        f_drawProfileBars(g_boxes, absGexStrikes, absGexValues, maxAbs, profileOffset, "ABSGEX", true, netGexStrikes, netGexValues)
+        profileOffset += profileSpacingBars
+
+    if showDexProfile and array.size(netDexStrikes) > 0
+        float maxAbs = 0
+        for i = 0 to array.size(netDexValues) - 1
+            maxAbs := math.max(maxAbs, math.abs(array.get(netDexValues, i)))
+        f_drawProfileBars(g_boxes, netDexStrikes, netDexValues, maxAbs, profileOffset, "NETDEX", false, netGexStrikes, netGexValues)
+        profileOffset += profileSpacingBars
+
+    if showVolProfile and array.size(netVolStrikes) > 0
+        float maxAbs = 0
+        for i = 0 to array.size(netVolValues) - 1
+            maxAbs := math.max(maxAbs, math.abs(array.get(netVolValues, i)))
+        f_drawProfileBars(g_boxes, netVolStrikes, netVolValues, maxAbs, profileOffset, "NETVOL", false, netGexStrikes, netGexValues)
+
+    lastDataText := dataText
+    lastRenderDate := todayInt
+
+    if showDebug
+        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nRequireSymbol: {2}\nRequireDate: {3}\nToday: {4}\nLines: {5}\nMatched: {6}\nZones: {7}\nMetrics: {8}\nFlips: {9}", syminfo.tickerid, syminfo.ticker, str.tostring(requireSymbolMatch), str.tostring(requireDateMatch), str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips))
+        debugLabel := label.new(x = bar_index, y = high, text = dbg, style = label.style_label_left, textcolor = labelTextColor, color = labelBgColor, size = size.small)
+
+// 📊 STATUS
+plotchar(series = na, title = "GEX Levels", char = "")

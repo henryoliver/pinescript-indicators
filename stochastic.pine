@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true, calc_on_every_tick = calcOnEveryTick)
+indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true)
 
 // 🧱 CONSTANTS
 const string GROUP_GENERAL = "⚙️ General"
@@ -11,17 +11,21 @@ const string GROUP_STYLE = "🎨 Style"
 const string GROUP_BANDS = "📏 Bands"
 
 // Nord Theme Color
-const color NORD0  = #2E3440
-const color NORD1  = #3B4252
-const color NORD2  = #434C5E
-const color NORD3  = #4C566A
-const color NORD4  = #D8DEE9
-const color NORD5  = #E5E9F0
-const color NORD6  = #ECEFF4
-const color NORD7  = #8FBCBB
-const color NORD8  = #88C0D0
-const color NORD9  = #81A1C1
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
@@ -29,7 +33,6 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // 🎛️ USER INPUT SETTINGS
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // Stochastic Input Settings
 int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_STOCH)
@@ -55,8 +58,6 @@ bool showLowerBand = input.bool(defval = true, title = "Show Lower Band", group 
 float lowerBand = input.float(defval = 20, title = "Lower Band", minval = 0, maxval = 50, group = GROUP_BANDS)
 color bandColor = input.color(defval = NORD3, title = "Band Color", group = GROUP_BANDS)
 int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = GROUP_BANDS)
-bool showFill = input.bool(defval = true, title = "Show Background Fill", group = GROUP_BANDS)
-color fillColor = input.color(defval = color.new(color = NORD3, transp = 90), title = "Background Fill", group = GROUP_BANDS)
 
 
 // 🧮 CALCULATIONS
@@ -75,6 +76,3 @@ hline(price = showUpperMidBand ? upperMidBand : na, title = "Upper Mid Band", co
 hline(price = showMiddleBand ? middleBand : na, title = "Middle Band", color = color.new(color = bandColor, transp = 50), linewidth = bandWidth)
 hline(price = showLowerMidBand ? lowerMidBand : na, title = "Lower Mid Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
 h1 = hline(price = showLowerBand ? lowerBand : na, title = "Lower Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
-
-// Background fill between upper and lower bands
-fill(hline1 = h0, hline2 = h1, color = showFill ? fillColor : na, title = "Background")

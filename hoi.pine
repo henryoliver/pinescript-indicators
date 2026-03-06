@@ -6,6 +6,8 @@ indicator(title = "Hindenburg Omen Indicator", shorttitle = "⚠️ HOI", overla
 
 // 🧱 CONSTANTS
 const string GROUP_MARKET = "🏛️ Market"
+const string GROUP_CONDITIONS = "🧪 Conditions"
+const string GROUP_DISPLAY = "🖥️ Display"
 
 // Nord Theme Color Constants
 // Polar Night
@@ -13,18 +15,15 @@ const color NORD0 = #2E3440
 const color NORD1 = #3B4252
 const color NORD2 = #434C5E
 const color NORD3 = #4C566A
-
 // Snow Storm  
 const color NORD4 = #D8DEE9
 const color NORD5 = #E5E9F0
 const color NORD6 = #ECEFF4
-
 // Frost
 const color NORD7 = #8FBCBB
 const color NORD8 = #88C0D0
 const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
-
 // Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
@@ -76,6 +75,29 @@ const string NL_RUT = "INDEX:LOWN"
 // Market Selection
 string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], group = GROUP_MARKET)
 
+// Conditions
+int posTrendLookback = input.int(defval = 50, title = "Positive Trend Lookback (Days)",
+     minval = 1, maxval = 252, step = 1, tooltip = "Index must be >= its value X days ago",
+     group = GROUP_CONDITIONS)
+float newLowHighThreshold = input.float(defval = 2.2, title = "New Lows/Highs Threshold (%)",
+     minval = 0.1, maxval = 10, step = 0.1, tooltip = "Percentage threshold for new highs and lows",
+     group = GROUP_CONDITIONS)
+int clusterWindowDays = input.int(defval = 36, title = "Cluster Window (Days)",
+     minval = 1, maxval = 120, step = 1, tooltip = "Rolling days to count multiple signals",
+     group = GROUP_CONDITIONS)
+int clusterMinSignals = input.int(defval = 2, title = "Cluster Min Signals",
+     minval = 1, maxval = 10, step = 1, tooltip = "Signals required within the window to confirm",
+     group = GROUP_CONDITIONS)
+
+// Display
+int signalPeriod = input.int(defval = 10, title = "Signal Period (Days)",
+     minval = 1, maxval = 90, step = 1, tooltip = "Background highlight period after signal",
+     group = GROUP_DISPLAY)
+bool showBackground = input.bool(defval = true, title = "Show Background",
+     tooltip = "Show background color during signal period", group = GROUP_DISPLAY)
+color backgroundColor = input.color(defval = color.new(NORD11, 90), title = "Background Color",
+     group = GROUP_DISPLAY)
+
 // 🧮 DATA & CALCULATIONS
 // Resolve symbols based on market selection
 string indexSymbol = IDX_SPX
@@ -110,23 +132,6 @@ else if marketIndex == MARKET_RUT
     newHighSymbol := NH_RUT
     newLowSymbol := NL_RUT
 
-// Conditions
-float newLowHighThreshold = input.float(defval = 1, title = "New Lows/Highs Threshold (%)",
-     minval = 0, step = 0.1, tooltip = "Percentage threshold for new highs and lows",
-     group = "Conditions")
-int posTrendLookback = input.int(defval = 50, title = "Positive Trend Lookback (Days)",
-     minval = 1, maxval = 252, step = 1, tooltip = "Index must be >= its value X days ago",
-     group = "Conditions")
-
-// Display
-int signalPeriod = input.int(defval = 10, title = "Signal Period (Days)",
-     minval = 1, maxval = 90, step = 1, tooltip = "Background highlight period after signal",
-     group = "Display")
-bool showBackground = input.bool(defval = true, title = "Show Background",
-     tooltip = "Show background color during signal period", group = "Display")
-color backgroundColor = input.color(defval = color.new(NORD11, 90), title = "Background Color",
-     group = "Display")
-
 // Get breadth and index data (daily)
 float advIssues = request.security(advSymbol, "D", close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
@@ -144,11 +149,14 @@ float marketIndexValue = request.security(indexSymbol, "D", close,
 // Calculations
 // Total number of issues (like the reference codes)
 float total = advIssues + decIssues + uncIssues
+float nhPct = not na(total) and total > 0 ? (newHighs / total * 100) : na
+float nlPct = not na(total) and total > 0 ? (newLows / total * 100) : na
 
 // Condition 1: % of issues hitting new 52W highs and 52W lows >= threshold
-bool cond1 = not na(total) and total > 0 and not na(newHighs) and not na(newLows) and
-     (newHighs / total * 100 >= newLowHighThreshold) and
-     (newLows / total * 100 >= newLowHighThreshold)
+bool cond1 = not na(nhPct) and not na(nlPct) and
+     nhPct >= newLowHighThreshold and
+     nlPct >= newLowHighThreshold and
+     math.min(nhPct, nlPct) >= newLowHighThreshold
 
 // Condition 2: Index is higher or equal in value than when it was X days ago
 bool cond2 = not na(marketIndexValue) and not na(marketIndexValue[posTrendLookback]) and
@@ -166,13 +174,35 @@ bool cond3 = not na(mcc) and mcc < 0
 bool cond4 = not na(newHighs) and not na(newLows) and newLows > 0 and
      (newHighs / newLows) < 2
 
-// Hindenburg Omen Signal - all four conditions must be met on confirmed bars
-bool homenSignal = barstate.isconfirmed and cond1 and cond2 and cond3 and cond4
+// Confirmed daily bar flag (daily time)
+bool dailyConfirmed = request.security(indexSymbol, "D", barstate.isconfirmed, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
+// Hindenburg Omen Signal (confirmed daily bars only)
+bool homenSignalRaw = dailyConfirmed and cond1 and cond2 and cond3 and cond4
 
-// Calculate bars since signal on every bar for consistency
-int barsSinceSignal = ta.barssince(homenSignal)
+// Cluster confirmation: require multiple signals within a rolling 36-day window.
+var array<int> signalWindow = array.new<int>()
+var int clusterCount = 0
 
-// Background Color for Signal Period (30 days)
-bgcolor(showBackground and barsSinceSignal <= signalPeriod ? 
-     backgroundColor : na, title = "Signal Period Background")
+if dailyConfirmed and barstate.isconfirmed
+    array.push(signalWindow, homenSignalRaw ? 1 : 0)
+    if array.size(signalWindow) > clusterWindowDays
+        array.shift(signalWindow)
+    int sumSignals = 0
+    for i = 0 to array.size(signalWindow) - 1
+        sumSignals += array.get(signalWindow, i)
+    clusterCount := sumSignals
+
+bool homenSignal = homenSignalRaw and clusterCount >= clusterMinSignals
+
+// Track days since last signal using confirmed daily bars (not chart bars)
+var int daysSinceSignal = na
+if dailyConfirmed and barstate.isconfirmed
+    if homenSignal
+        daysSinceSignal := 0
+    else if not na(daysSinceSignal)
+        daysSinceSignal += 1
+
+// Background Color for Signal Period (days)
+bool inSignalWindow = not na(daysSinceSignal) and daysSinceSignal >= 0 and daysSinceSignal <= signalPeriod
+bgcolor(showBackground and inSignalWindow ? backgroundColor : na, title = "Signal Period Background")

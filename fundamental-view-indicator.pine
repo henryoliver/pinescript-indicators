@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Fundamental View Indicator", shorttitle = "🧾 FVI", overlay = true, calc_on_every_tick = calcOnEveryTick)
+indicator(title = "Fundamental View Indicator", shorttitle = "🧾 FVI", overlay = true)
 
 // 🧱 CONSTANTS
 const string GROUP_GENERAL = "⚙️ General"
@@ -12,17 +12,21 @@ const string GROUP_VALUE = "🔢 Value"
 const string GROUP_STRENGTH = "💪 Strength"
 
 // Nord Theme Color
-const color NORD0  = #2E3440
-const color NORD1  = #3B4252
-const color NORD2  = #434C5E
-const color NORD3  = #4C566A
-const color NORD4  = #D8DEE9
-const color NORD5  = #E5E9F0
-const color NORD6  = #ECEFF4
-const color NORD7  = #8FBCBB
-const color NORD8  = #88C0D0
-const color NORD9  = #81A1C1
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm  
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
@@ -33,7 +37,6 @@ const float MILLION = 1000000.0
 const float BILLION = 1000000000.0
 
 // 🎛️ USER INPUT SETTINGS
-calcOnEveryTick = input.bool(defval = false, title = "Calculate On Every Tick", group = GROUP_GENERAL, tooltip = "When checked, the script calculates on every incoming tick. When unchecked (default), it calculates only on bar close. Enabling this may lead to repainting and higher resource usage.")
 
 // General Style
 // Table
@@ -72,14 +75,14 @@ string sector = syminfo.sector
 string industry = syminfo.industry
 
 // Market data
-float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ")[1]
-float mktCap = na(tso) or na(close[1]) ? na : tso * close[1]
+float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ", ignore_invalid_symbol = true)
+float mktCap = na(tso) or na(close) ? na : tso * close
 string mktCapStr = na(mktCap) ? "N/A" : str.tostring(mktCap, format.volume)
 
-float roe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY")[1]
+float roe = request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", period = "FY", ignore_invalid_symbol = true)
 string roeStr = na(roe) ? "N/A" : str.format("{0}%", math.round(roe, 1))
 
-float floatShares = request.financial(symbol = syminfo.tickerid, financial_id = "FLOAT_SHARES_OUTSTANDING", period = "FY")[1]
+float floatShares = request.financial(symbol = syminfo.tickerid, financial_id = "FLOAT_SHARES_OUTSTANDING", period = "FY", ignore_invalid_symbol = true)
 string floatStr = na(floatShares) ? "N/A" : str.tostring(floatShares, format.volume)
 
 // IPO Date
@@ -121,9 +124,9 @@ string lowPrice = na(syminfo.target_price_low) ? "$0" : str.format("${0}", math.
 // Quarterly EPS Data using request.earnings - better method
 float currEpsActual = request.earnings(ticker = syminfo.tickerid, field = earnings.actual, ignore_invalid_symbol = true)
 float currEpsEstimate = request.earnings(ticker = syminfo.tickerid, field = earnings.estimate, ignore_invalid_symbol = true)
-int currEpsTime = request.earnings(ticker = syminfo.tickerid, field = earnings.time, ignore_invalid_symbol = true)
-
-bool isEpsEvent = ta.change(currEpsActual) != 0 and not na(currEpsActual)
+bool epsActualEvent = not na(currEpsActual) and na(currEpsActual[1])
+bool epsEstimateEvent = not na(currEpsEstimate) and na(currEpsEstimate[1])
+bool isEpsEvent = epsActualEvent or epsEstimateEvent
 
 // Get historical EPS using ta.valuewhen based on earnings events
 float epsQ0 = ta.valuewhen(isEpsEvent, currEpsActual, 0)
@@ -132,14 +135,15 @@ float epsQ2 = ta.valuewhen(isEpsEvent, currEpsActual, 2)
 float epsQ3 = ta.valuewhen(isEpsEvent, currEpsActual, 3)
 float epsQ4 = ta.valuewhen(isEpsEvent, currEpsActual, 4)
 float epsQ5 = ta.valuewhen(isEpsEvent, currEpsActual, 5)
+float epsQ6 = ta.valuewhen(isEpsEvent, currEpsActual, 6)
 
 // Get historical earnings dates
-int epsTime0 = ta.valuewhen(isEpsEvent, currEpsTime, 0)
-int epsTime1 = ta.valuewhen(isEpsEvent, currEpsTime, 1)
-int epsTime2 = ta.valuewhen(isEpsEvent, currEpsTime, 2)
-int epsTime3 = ta.valuewhen(isEpsEvent, currEpsTime, 3)
-int epsTime4 = ta.valuewhen(isEpsEvent, currEpsTime, 4)
-int epsTime5 = ta.valuewhen(isEpsEvent, currEpsTime, 5)
+int epsTime0 = ta.valuewhen(isEpsEvent, time, 0)
+int epsTime1 = ta.valuewhen(isEpsEvent, time, 1)
+int epsTime2 = ta.valuewhen(isEpsEvent, time, 2)
+int epsTime3 = ta.valuewhen(isEpsEvent, time, 3)
+int epsTime4 = ta.valuewhen(isEpsEvent, time, 4)
+int epsTime5 = ta.valuewhen(isEpsEvent, time, 5)
 
 // Get historical EPS Estimates
 float epsEst0 = ta.valuewhen(isEpsEvent, currEpsEstimate, 0)
@@ -184,8 +188,8 @@ if not na(epsQ6) and not na(epsQ10) and epsQ10 != 0
     epsYoy6 := ((epsQ6 - epsQ10) / math.abs(epsQ10)) * 100
 
 // Get next quarter estimate (for NEXT QTR row)
-float epsEstimate = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_ESTIMATE", period = "FQ")
-float epsYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC_ONE_YEAR_GROWTH", period = "FQ")
+float epsEstimate = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_ESTIMATE", period = "FQ", ignore_invalid_symbol = true)
+float epsYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "EARNINGS_PER_SHARE_BASIC_ONE_YEAR_GROWTH", period = "FQ", ignore_invalid_symbol = true)
 
 // Quarterly Revenue Data using request.financial synced with EPS events
 float currRevenueActual = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_REVENUE", period = "FQ", ignore_invalid_symbol = true)
@@ -245,7 +249,7 @@ if not na(revenueQ6) and not na(revenueQ10) and revenueQ10 != 0
 
 // Get next quarter estimate (for NEXT QTR row)
 float revenueEstimate = currRevenueEstimate
-float revenueYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "REVENUE_ONE_YEAR_GROWTH", period = "FQ")
+float revenueYoyGrowth = request.financial(symbol = syminfo.tickerid, financial_id = "REVENUE_ONE_YEAR_GROWTH", period = "FQ", ignore_invalid_symbol = true)
 
 // Helper function to get earnings date string
 f_getEarningsDateString(int timestamp) =>
@@ -440,7 +444,7 @@ if barstate.islastconfirmedhistory
     // Row 21: NEXT QTR
     string epsEstStr = na(epsEstimate) ? "XX" : str.format("{0}", math.round(epsEstimate, 2))
     string epsYoyStrNext = na(epsYoyGrowth) ? "XX" : str.format("{0}%", math.round(epsYoyGrowth, 1))
-    string revEstStr = na(revenueEstimate) ? "XX" : str.tostring(revenueEstimate, format.currency)
+    string revEstStr = na(revenueEstimate) ? "XX" : str.format("${0}", math.round(revenueEstimate, 2))
 
     string revYoyStrNext = na(revenueYoyGrowth) ? "XX" : str.format("{0}%", math.round(revenueYoyGrowth, 1))
     
@@ -496,8 +500,8 @@ if barstate.islastconfirmedhistory
         string epsSurpriseVal = na(epsSurprise) ? "XX" : str.format("{0}%", math.round(epsSurprise, 1))
         string epsYoyStr = na(epsYoyVal) ? "XX" : str.format("{0}%", math.round(epsYoyVal, 1))
         
-        string revenueEstVal = na(revenueEst) ? "XX" : str.tostring(revenueEst, format.currency)
-        string revenueVal = na(revenue) ? "XX" : str.tostring(revenue, format.currency)
+        string revenueEstVal = na(revenueEst) ? "XX" : str.format("${0}", math.round(revenueEst, 2))
+        string revenueVal = na(revenue) ? "XX" : str.format("${0}", math.round(revenue, 2))
         string revenueSurpriseVal = na(revenueSurprise) ? "XX" : str.format("{0}%", math.round(revenueSurprise, 1))
         string revenueYoyStr = na(revenueYoyVal) ? "XX" : str.format("{0}%", math.round(revenueYoyVal, 1))
         
