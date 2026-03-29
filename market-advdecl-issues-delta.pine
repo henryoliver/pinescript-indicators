@@ -2,81 +2,181 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Market Advance-Decline Issues Delta", shorttitle = "📈 A/D Δ", overlay = false)
+indicator(title = "Market Advance-Decline Issues Delta", shorttitle = "📈 A/D Δ", overlay = false, max_lines_count = 400, calc_bars_count = 5000)
 
 // 🧱 CONSTANTS
 const string GROUP_MARKET = "🌐 Market"
-const string GROUP_DISPLAY = "🖥️ Display"
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_INTRADAY = "📍 Intraday Support/Resistance"
 
-// Nord Theme Color
-// Polar Night
+// Nord Theme Colors
 const color NORD0 = #2E3440
 const color NORD1 = #3B4252
 const color NORD2 = #434C5E
 const color NORD3 = #4C566A
-// Snow Storm  
 const color NORD4 = #D8DEE9
 const color NORD5 = #E5E9F0
 const color NORD6 = #ECEFF4
-// Frost
 const color NORD7 = #8FBCBB
 const color NORD8 = #88C0D0
 const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
-// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
+const int MAX_INTRADAY_LEVELS = 80
+const int INTRADAY_LINE_WIDTH = 2
+
+// 🧩 TYPE DEFINITIONS
+type TrendSegment
+    int x1
+    float y1
+    int x2
+    float y2
+
 // 🎛️ USER INPUT SETTINGS
 string market = input.string(
      defval = "NASDAQ 100",
      title = "Market (Index)",
      options = ["NASDAQ 100", "S&P 500", "Dow Jones", "Russell 2000"],
-     tooltip = "Uses USI:ADVN/DECL with suffix .NQ (NASDAQ 100), .SP (S&P 500), .DJ (Dow Jones), .RL (Russell 2000).",
+     tooltip = "Selects the market-specific advance and decline issue symbols used to build the A/D delta index.",
      group = GROUP_MARKET
  )
-string displayMode = input.string(defval = "Candles", title = "Plot Style", options = ["Candles", "Line"], group = GROUP_DISPLAY)
-bool showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = GROUP_DISPLAY)
 
-// 🧮 DATA FETCHING
-string advSymbol = switch market
-    "NASDAQ 100" => "USI:ADVN.NQ"
-    "S&P 500"    => "USI:ADVN.SP"
-    "Dow Jones"  => "USI:ADVN.DJ"
-    "Russell 2000" => "USI:ADVN.RL"
-    => "USI:ADVN.NQ"
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line", tooltip = "Shows the zero reference line so you can quickly see whether advancing issues are dominating or lagging.", group = GROUP_GENERAL)
+string displayMode = input.string(defval = "Line", title = "Plot Style", options = ["Candles", "Line"], tooltip = "Displays the A/D delta index as candles or as a single closing-value line.", group = GROUP_GENERAL)
 
-string declSymbol = switch market
-    "NASDAQ 100" => "USI:DECL.NQ"
-    "S&P 500"    => "USI:DECL.SP"
-    "Dow Jones"  => "USI:DECL.DJ"
-    "Russell 2000" => "USI:DECL.RL"
-    => "USI:DECL.NQ"
+bool showIntradayStructure = input.bool(defval = true, title = "Show Intraday Support/Resistance", tooltip = "Draws right-extended intraday support and resistance lines only for the latest regular trading session from confirmed body pivots that set new session highs or lows in the A/D delta index.", group = GROUP_INTRADAY)
+int intradaySRPivotStrength = input.int(defval = 3, title = "S/R Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm an intraday body pivot before a support or resistance level can be drawn.", group = GROUP_INTRADAY)
+int intradaySRMaxLevels = input.int(defval = 20, title = "S/R Max Levels", minval = 5, maxval = MAX_INTRADAY_LEVELS, tooltip = "Maximum number of latest-session intraday support and resistance levels to keep on the chart.", group = GROUP_INTRADAY)
+int intradaySRLineWidth = input.int(defval = INTRADAY_LINE_WIDTH, title = "S/R Line Width", minval = 1, maxval = 4, tooltip = "Line width for intraday support and resistance levels.", group = GROUP_INTRADAY)
+bool showTrendLines = input.bool(defval = true, title = "Show Trend Lines", tooltip = "Draws intraday trend lines from confirmed higher lows and lower highs in the latest regular session.", group = GROUP_INTRADAY)
+int trendLinePivotStrength = input.int(defval = 3, title = "Trend Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm an intraday body pivot before it can be used to form a trend line.", group = GROUP_INTRADAY)
+int trendLineMaxCount = input.int(defval = 20, title = "Trend Max Count", minval = 5, maxval = MAX_INTRADAY_LEVELS, tooltip = "Maximum number of latest-session bullish and bearish trend lines to keep on the chart.", group = GROUP_INTRADAY)
+int trendLineWidth = input.int(defval = INTRADAY_LINE_WIDTH, title = "Trend Line Width", minval = 1, maxval = 4, tooltip = "Line width for intraday trend lines.", group = GROUP_INTRADAY)
 
-string advSymbolExt = ticker.modify(advSymbol, session = session.extended)
-string declSymbolExt = ticker.modify(declSymbol, session = session.extended)
+// 🧮 DATA & CALCULATIONS
+f_clearLines(array<line> lines) =>
+    if array.size(id = lines) > 0
+        for lineIndex = 0 to array.size(id = lines) - 1
+            line.delete(id = array.get(id = lines, index = lineIndex))
+    array.clear(id = lines)
 
-[advOpen, advHigh, advLow, advClose] = request.security(symbol = advSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
-[declOpen, declHigh, declLow, declClose] = request.security(symbol = declSymbolExt, timeframe = timeframe.period, expression = [open, high, low, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+string marketSuffix = switch market
+    "NASDAQ 100" => "NQ"
+    "S&P 500" => "SP"
+    "Dow Jones" => "DJ"
+    "Russell 2000" => "RL"
+    => "NQ"
 
-// Calculate advance-decline delta for each OHLC component
+string advSymbol = "USI:ADVN." + marketSuffix
+string declSymbol = "USI:DECL." + marketSuffix
+
+string advRegularSymbol = ticker.modify(advSymbol, session = session.regular)
+string declRegularSymbol = ticker.modify(declSymbol, session = session.regular)
+
+[advOpen, advClose] = request.security(symbol = advRegularSymbol, timeframe = timeframe.period, expression = [open, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+[declOpen, declClose] = request.security(symbol = declRegularSymbol, timeframe = timeframe.period, expression = [open, close], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+
 float deltaOpen = advOpen - declOpen
-float deltaHigh = advHigh - declHigh
-float deltaLow = advLow - declLow
 float deltaClose = advClose - declClose
+float deltaHigh = math.max(deltaOpen, deltaClose)
+float deltaLow = math.min(deltaOpen, deltaClose)
+
+bool inRegularSession = not na(time(timeframe.period, "0930-1600"))
+int regularSessionDayKey = year * 10000 + month * 100 + dayofmonth
+
+float intradaySRPivotHigh = ta.pivothigh(source = deltaHigh, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength)
+float intradaySRPivotLow = ta.pivotlow(source = deltaLow, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength)
+int intradaySRPivotHighBar = not na(intradaySRPivotHigh) ? bar_index - intradaySRPivotStrength : na
+int intradaySRPivotLowBar = not na(intradaySRPivotLow) ? bar_index - intradaySRPivotStrength : na
+float trendPivotHigh = ta.pivothigh(source = deltaHigh, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength)
+float trendPivotLow = ta.pivotlow(source = deltaLow, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength)
+int trendPivotHighBar = not na(trendPivotHigh) ? bar_index - trendLinePivotStrength : na
+int trendPivotLowBar = not na(trendPivotLow) ? bar_index - trendLinePivotStrength : na
+
+var int sessionStartBarIndex = na
+var int latestRegularSessionDayKey = na
+var float sessionExtremePivotHigh = na
+var float sessionExtremePivotLow = na
+var float previousTrendHighLevel = na
+var int previousTrendHighBar = na
+var float previousTrendLowLevel = na
+var int previousTrendLowBar = na
+
+var array<float> intradayResistanceLevels = array.new<float>()
+var array<int> intradayResistanceBars = array.new<int>()
+var array<float> intradaySupportLevels = array.new<float>()
+var array<int> intradaySupportBars = array.new<int>()
+var array<TrendSegment> bearishTrends = array.new<TrendSegment>()
+var array<TrendSegment> bullishTrends = array.new<TrendSegment>()
+
+var array<line> renderedLines = array.new<line>()
+
+if inRegularSession and (na(latestRegularSessionDayKey) or regularSessionDayKey != latestRegularSessionDayKey)
+    latestRegularSessionDayKey := regularSessionDayKey
+    sessionStartBarIndex := bar_index
+    sessionExtremePivotHigh := na
+    sessionExtremePivotLow := na
+    previousTrendHighLevel := na
+    previousTrendHighBar := na
+    previousTrendLowLevel := na
+    previousTrendLowBar := na
+    array.clear(id = intradayResistanceLevels)
+    array.clear(id = intradayResistanceBars)
+    array.clear(id = intradaySupportLevels)
+    array.clear(id = intradaySupportBars)
+    array.clear(id = bearishTrends)
+    array.clear(id = bullishTrends)
+
+if inRegularSession and barstate.isconfirmed
+    if showIntradayStructure and not na(intradaySRPivotHigh)
+        if not na(sessionStartBarIndex) and intradaySRPivotHighBar >= sessionStartBarIndex and (na(sessionExtremePivotHigh) or intradaySRPivotHigh > sessionExtremePivotHigh)
+            sessionExtremePivotHigh := intradaySRPivotHigh
+            array.push(id = intradayResistanceLevels, value = intradaySRPivotHigh)
+            array.push(id = intradayResistanceBars, value = intradaySRPivotHighBar)
+            while array.size(id = intradayResistanceLevels) > intradaySRMaxLevels
+                array.shift(id = intradayResistanceLevels)
+                array.shift(id = intradayResistanceBars)
+
+    if showIntradayStructure and not na(intradaySRPivotLow)
+        if not na(sessionStartBarIndex) and intradaySRPivotLowBar >= sessionStartBarIndex and (na(sessionExtremePivotLow) or intradaySRPivotLow < sessionExtremePivotLow)
+            sessionExtremePivotLow := intradaySRPivotLow
+            array.push(id = intradaySupportLevels, value = intradaySRPivotLow)
+            array.push(id = intradaySupportBars, value = intradaySRPivotLowBar)
+            while array.size(id = intradaySupportLevels) > intradaySRMaxLevels
+                array.shift(id = intradaySupportLevels)
+                array.shift(id = intradaySupportBars)
+
+    if showTrendLines and not na(trendPivotHigh)
+        if not na(sessionStartBarIndex) and trendPivotHighBar >= sessionStartBarIndex
+            if not na(previousTrendHighLevel) and trendPivotHigh < previousTrendHighLevel
+                array.push(id = bearishTrends, value = TrendSegment.new(previousTrendHighBar, previousTrendHighLevel, trendPivotHighBar, trendPivotHigh))
+                while array.size(id = bearishTrends) > trendLineMaxCount
+                    array.shift(id = bearishTrends)
+            previousTrendHighLevel := trendPivotHigh
+            previousTrendHighBar := trendPivotHighBar
+
+    if showTrendLines and not na(trendPivotLow)
+        if not na(sessionStartBarIndex) and trendPivotLowBar >= sessionStartBarIndex
+            if not na(previousTrendLowLevel) and trendPivotLow > previousTrendLowLevel
+                array.push(id = bullishTrends, value = TrendSegment.new(previousTrendLowBar, previousTrendLowLevel, trendPivotLowBar, trendPivotLow))
+                while array.size(id = bullishTrends) > trendLineMaxCount
+                    array.shift(id = bullishTrends)
+            previousTrendLowLevel := trendPivotLow
+            previousTrendLowBar := trendPivotLowBar
 
 // 📊 VISUALIZATION
-// Determine candle color based on open vs close
-bool isUpCandle = deltaClose >= deltaOpen
-color candleBodyColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
-color candleWickColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
-color candleBorderColor = isUpCandle ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
 bool useCandles = displayMode == "Candles"
-
+bool isUpCandle = deltaClose >= deltaOpen
+// Hollow candles by design so the border and body direction stay readable without obscuring the intraday lines.
+color candleBodyColor = isUpCandle ? color.new(color = NORD8, transp = 100) : color.new(color = NORD9, transp = 100)
+color candleBorderColor = isUpCandle ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
 color lineColor = deltaClose >= nz(deltaClose[1], deltaClose) ? color.new(color = NORD8, transp = 20) : color.new(color = NORD9, transp = 60)
+color intradayStructureColor = NORD3
 
 plotcandle(
      open = useCandles ? deltaOpen : na,
@@ -85,10 +185,11 @@ plotcandle(
      close = useCandles ? deltaClose : na,
      title = "Advance-Decline Delta (Candles)",
      color = candleBodyColor,
-     wickcolor = candleWickColor,
+     wickcolor = candleBodyColor,
      bordercolor = candleBorderColor,
      editable = true
  )
+
 plot(
      useCandles ? na : deltaClose,
      title = "Advance-Decline Delta (Line)",
@@ -97,5 +198,45 @@ plot(
      linewidth = 3
  )
 
-// Plot zero line
-hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linestyle = hline.style_solid, linewidth = 3, editable = true)
+hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linestyle = hline.style_solid, linewidth = 4, editable = true)
+
+if barstate.islastconfirmedhistory or barstate.islast
+    f_clearLines(lines = renderedLines)
+
+    if showIntradayStructure
+        if array.size(id = intradayResistanceLevels) > 0
+            for resistanceIndex = 0 to array.size(id = intradayResistanceLevels) - 1
+                float resistanceLevel = array.get(id = intradayResistanceLevels, index = resistanceIndex)
+                int resistanceBar = array.get(id = intradayResistanceBars, index = resistanceIndex)
+                if not na(sessionStartBarIndex) and resistanceBar >= sessionStartBarIndex
+                    line resistanceLine = line.new(x1 = resistanceBar, y1 = resistanceLevel, x2 = bar_index, y2 = resistanceLevel, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
+                    array.push(id = renderedLines, value = resistanceLine)
+        if array.size(id = intradaySupportLevels) > 0
+            for supportIndex = 0 to array.size(id = intradaySupportLevels) - 1
+                float supportLevel = array.get(id = intradaySupportLevels, index = supportIndex)
+                int supportBar = array.get(id = intradaySupportBars, index = supportIndex)
+                if not na(sessionStartBarIndex) and supportBar >= sessionStartBarIndex
+                    line supportLine = line.new(x1 = supportBar, y1 = supportLevel, x2 = bar_index, y2 = supportLevel, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
+                    array.push(id = renderedLines, value = supportLine)
+
+    if showTrendLines
+        if array.size(id = bearishTrends) > 0
+            for bearishIndex = 0 to array.size(id = bearishTrends) - 1
+                TrendSegment bearishTrend = array.get(id = bearishTrends, index = bearishIndex)
+                int x1Bear = bearishTrend.x1
+                float y1Bear = bearishTrend.y1
+                int x2Bear = bearishTrend.x2
+                float y2Bear = bearishTrend.y2
+                if not na(sessionStartBarIndex) and x1Bear >= sessionStartBarIndex
+                    line bearishLine = line.new(x1 = x1Bear, y1 = y1Bear, x2 = x2Bear, y2 = y2Bear, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = trendLineWidth, style = line.style_dashed)
+                    array.push(id = renderedLines, value = bearishLine)
+        if array.size(id = bullishTrends) > 0
+            for bullishIndex = 0 to array.size(id = bullishTrends) - 1
+                TrendSegment bullishTrend = array.get(id = bullishTrends, index = bullishIndex)
+                int x1Bull = bullishTrend.x1
+                float y1Bull = bullishTrend.y1
+                int x2Bull = bullishTrend.x2
+                float y2Bull = bullishTrend.y2
+                if not na(sessionStartBarIndex) and x1Bull >= sessionStartBarIndex
+                    line bullishLine = line.new(x1 = x1Bull, y1 = y1Bull, x2 = x2Bull, y2 = y2Bull, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = trendLineWidth, style = line.style_dashed)
+                    array.push(id = renderedLines, value = bullishLine)

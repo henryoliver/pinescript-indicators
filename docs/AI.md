@@ -182,6 +182,8 @@ const string GROUP_FLOAT = "🧊 Float Shares Outstanding"
 
 **All indicators use the Nord color palette:**
 
+**Required rule**: Every `.pine` indicator file in this repository must declare the full `NORD0` through `NORD15` palette in the `// 🧱 CONSTANTS` section, even when some of those colors are not used by that specific indicator. Do not trim the palette down to only the currently referenced colors.
+
 ```pine
 // Dark backgrounds (Polar Night)
 const color NORD0  = #2E3440  // Darkest
