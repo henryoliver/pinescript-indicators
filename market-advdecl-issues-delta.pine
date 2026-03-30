@@ -53,10 +53,15 @@ bool showIntradayStructure = input.bool(defval = true, title = "Show Intraday Su
 int intradaySRPivotStrength = input.int(defval = 3, title = "S/R Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm an intraday body pivot before a support or resistance level can be drawn.", group = GROUP_INTRADAY)
 int intradaySRMaxLevels = input.int(defval = 20, title = "S/R Max Levels", minval = 5, maxval = MAX_INTRADAY_LEVELS, tooltip = "Maximum number of latest-session intraday support and resistance levels to keep on the chart.", group = GROUP_INTRADAY)
 int intradaySRLineWidth = input.int(defval = INTRADAY_LINE_WIDTH, title = "S/R Line Width", minval = 1, maxval = 4, tooltip = "Line width for intraday support and resistance levels.", group = GROUP_INTRADAY)
+int intradayVisibleLevelsPerSide = input.int(defval = 2, title = "Visible Levels Per Side", minval = 1, maxval = 6, tooltip = "Shows only the nearest intraday support levels below and resistance levels above the current delta value.", group = GROUP_INTRADAY)
+int intradaySRExtensionBars = input.int(defval = 60, title = "S/R Extension (Bars)", minval = 1, maxval = 200, tooltip = "How many bars each intraday support/resistance line should extend forward from its pivot bar.", group = GROUP_INTRADAY)
 bool showTrendLines = input.bool(defval = true, title = "Show Trend Lines", tooltip = "Draws intraday trend lines from confirmed higher lows and lower highs in the latest regular session.", group = GROUP_INTRADAY)
 int trendLinePivotStrength = input.int(defval = 3, title = "Trend Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm an intraday body pivot before it can be used to form a trend line.", group = GROUP_INTRADAY)
-int trendLineMaxCount = input.int(defval = 20, title = "Trend Max Count", minval = 5, maxval = MAX_INTRADAY_LEVELS, tooltip = "Maximum number of latest-session bullish and bearish trend lines to keep on the chart.", group = GROUP_INTRADAY)
-int trendLineWidth = input.int(defval = INTRADAY_LINE_WIDTH, title = "Trend Line Width", minval = 1, maxval = 4, tooltip = "Line width for intraday trend lines.", group = GROUP_INTRADAY)
+int trendLineWidth = input.int(defval = INTRADAY_LINE_WIDTH, title = "Trend Line Width", minval = 1, maxval = 4, tooltip = "Line width for the active intraday trend line.", group = GROUP_INTRADAY)
+int trendLineLookbackBars = input.int(defval = 60, title = "Trend Line Lookback Bars", minval = 10, maxval = 200, tooltip = "How many recent bars of the active trend line should remain visible behind the current bar.", group = GROUP_INTRADAY)
+int trendLineProjectionBars = input.int(defval = 60, title = "Trend Line Projection Bars", minval = 1, maxval = 200, tooltip = "How many bars the active trend line should project forward beyond the current bar.", group = GROUP_INTRADAY)
+string trendLineStyleInput = input.string(defval = "Dotted", title = "Trend Line Style", options = ["Dotted", "Dashed", "Solid"], tooltip = "Display style for the active intraday trend line.", group = GROUP_INTRADAY)
+color trendLineColor = input.color(defval = NORD3, title = "Trend Line Color", tooltip = "Color for the active intraday trend line.", group = GROUP_INTRADAY)
 
 // 🧮 DATA & CALCULATIONS
 f_clearLines(array<line> lines) =>
@@ -64,6 +69,29 @@ f_clearLines(array<line> lines) =>
         for lineIndex = 0 to array.size(id = lines) - 1
             line.delete(id = array.get(id = lines, index = lineIndex))
     array.clear(id = lines)
+
+f_isVisibleIntradayLevel(array<float> levels, float referencePrice, float candidateLevel, int visiblePerSide, bool isResistance) =>
+    bool isOnCorrectSide = isResistance ? candidateLevel > referencePrice : candidateLevel < referencePrice
+    int closerLevels = 0
+    if isOnCorrectSide and array.size(id = levels) > 0
+        for levelIndex = 0 to array.size(id = levels) - 1
+            float level = array.get(id = levels, index = levelIndex)
+            bool countsAsCloser = isResistance ? level > referencePrice and level < candidateLevel : level < referencePrice and level > candidateLevel
+            if countsAsCloser
+                closerLevels += 1
+    isOnCorrectSide and closerLevels < visiblePerSide
+
+f_lineValueAtBar(int x1, float y1, int x2, float y2, int targetBar) =>
+    x2 == x1 ? y2 : y1 + (y2 - y1) * (targetBar - x1) / (x2 - x1)
+
+f_trendLineStyle(string styleInput) =>
+    styleInput == "Solid" ? line.style_solid : styleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+f_isTrendAnchor(TrendSegment trendSegment, int levelBar, float levelPrice) =>
+    not na(trendSegment) and ((levelBar == trendSegment.x1 and levelPrice == trendSegment.y1) or (levelBar == trendSegment.x2 and levelPrice == trendSegment.y2))
+
+f_isAnyTrendAnchor(TrendSegment upTrendSegment, TrendSegment downTrendSegment, int levelBar, float levelPrice) =>
+    f_isTrendAnchor(trendSegment = upTrendSegment, levelBar = levelBar, levelPrice = levelPrice) or f_isTrendAnchor(trendSegment = downTrendSegment, levelBar = levelBar, levelPrice = levelPrice)
 
 string marketSuffix = switch market
     "NASDAQ 100" => "NQ"
@@ -83,11 +111,14 @@ string declRegularSymbol = ticker.modify(declSymbol, session = session.regular)
 
 float deltaOpen = advOpen - declOpen
 float deltaClose = advClose - declClose
+// Use body extremes intentionally so intraday structure is based on confirmed closes/opens, not wick noise.
 float deltaHigh = math.max(deltaOpen, deltaClose)
 float deltaLow = math.min(deltaOpen, deltaClose)
 
-bool inRegularSession = not na(time(timeframe.period, "0930-1600"))
+bool inRegularSession = session.ismarket
 int regularSessionDayKey = year * 10000 + month * 100 + dayofmonth
+int currentTradingDayKey = year(timenow) * 10000 + month(timenow) * 100 + dayofmonth(timenow)
+bool isCurrentTradingDay = regularSessionDayKey == currentTradingDayKey
 
 float intradaySRPivotHigh = ta.pivothigh(source = deltaHigh, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength)
 float intradaySRPivotLow = ta.pivotlow(source = deltaLow, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength)
@@ -100,8 +131,6 @@ int trendPivotLowBar = not na(trendPivotLow) ? bar_index - trendLinePivotStrengt
 
 var int sessionStartBarIndex = na
 var int latestRegularSessionDayKey = na
-var float sessionExtremePivotHigh = na
-var float sessionExtremePivotLow = na
 var float previousTrendHighLevel = na
 var int previousTrendHighBar = na
 var float previousTrendLowLevel = na
@@ -111,31 +140,28 @@ var array<float> intradayResistanceLevels = array.new<float>()
 var array<int> intradayResistanceBars = array.new<int>()
 var array<float> intradaySupportLevels = array.new<float>()
 var array<int> intradaySupportBars = array.new<int>()
-var array<TrendSegment> bearishTrends = array.new<TrendSegment>()
-var array<TrendSegment> bullishTrends = array.new<TrendSegment>()
+var TrendSegment activeUpTrend = na
+var TrendSegment activeDownTrend = na
 
 var array<line> renderedLines = array.new<line>()
 
-if inRegularSession and (na(latestRegularSessionDayKey) or regularSessionDayKey != latestRegularSessionDayKey)
+if inRegularSession and isCurrentTradingDay and (na(latestRegularSessionDayKey) or regularSessionDayKey != latestRegularSessionDayKey)
     latestRegularSessionDayKey := regularSessionDayKey
     sessionStartBarIndex := bar_index
-    sessionExtremePivotHigh := na
-    sessionExtremePivotLow := na
     previousTrendHighLevel := na
     previousTrendHighBar := na
     previousTrendLowLevel := na
     previousTrendLowBar := na
+    activeUpTrend := na
+    activeDownTrend := na
     array.clear(id = intradayResistanceLevels)
     array.clear(id = intradayResistanceBars)
     array.clear(id = intradaySupportLevels)
     array.clear(id = intradaySupportBars)
-    array.clear(id = bearishTrends)
-    array.clear(id = bullishTrends)
 
-if inRegularSession and barstate.isconfirmed
+if inRegularSession and isCurrentTradingDay and barstate.isconfirmed
     if showIntradayStructure and not na(intradaySRPivotHigh)
-        if not na(sessionStartBarIndex) and intradaySRPivotHighBar >= sessionStartBarIndex and (na(sessionExtremePivotHigh) or intradaySRPivotHigh > sessionExtremePivotHigh)
-            sessionExtremePivotHigh := intradaySRPivotHigh
+        if not na(sessionStartBarIndex) and intradaySRPivotHighBar >= sessionStartBarIndex
             array.push(id = intradayResistanceLevels, value = intradaySRPivotHigh)
             array.push(id = intradayResistanceBars, value = intradaySRPivotHighBar)
             while array.size(id = intradayResistanceLevels) > intradaySRMaxLevels
@@ -143,8 +169,7 @@ if inRegularSession and barstate.isconfirmed
                 array.shift(id = intradayResistanceBars)
 
     if showIntradayStructure and not na(intradaySRPivotLow)
-        if not na(sessionStartBarIndex) and intradaySRPivotLowBar >= sessionStartBarIndex and (na(sessionExtremePivotLow) or intradaySRPivotLow < sessionExtremePivotLow)
-            sessionExtremePivotLow := intradaySRPivotLow
+        if not na(sessionStartBarIndex) and intradaySRPivotLowBar >= sessionStartBarIndex
             array.push(id = intradaySupportLevels, value = intradaySRPivotLow)
             array.push(id = intradaySupportBars, value = intradaySRPivotLowBar)
             while array.size(id = intradaySupportLevels) > intradaySRMaxLevels
@@ -154,18 +179,14 @@ if inRegularSession and barstate.isconfirmed
     if showTrendLines and not na(trendPivotHigh)
         if not na(sessionStartBarIndex) and trendPivotHighBar >= sessionStartBarIndex
             if not na(previousTrendHighLevel) and trendPivotHigh < previousTrendHighLevel
-                array.push(id = bearishTrends, value = TrendSegment.new(previousTrendHighBar, previousTrendHighLevel, trendPivotHighBar, trendPivotHigh))
-                while array.size(id = bearishTrends) > trendLineMaxCount
-                    array.shift(id = bearishTrends)
+                activeDownTrend := TrendSegment.new(previousTrendHighBar, previousTrendHighLevel, trendPivotHighBar, trendPivotHigh)
             previousTrendHighLevel := trendPivotHigh
             previousTrendHighBar := trendPivotHighBar
 
     if showTrendLines and not na(trendPivotLow)
         if not na(sessionStartBarIndex) and trendPivotLowBar >= sessionStartBarIndex
             if not na(previousTrendLowLevel) and trendPivotLow > previousTrendLowLevel
-                array.push(id = bullishTrends, value = TrendSegment.new(previousTrendLowBar, previousTrendLowLevel, trendPivotLowBar, trendPivotLow))
-                while array.size(id = bullishTrends) > trendLineMaxCount
-                    array.shift(id = bullishTrends)
+                activeUpTrend := TrendSegment.new(previousTrendLowBar, previousTrendLowLevel, trendPivotLowBar, trendPivotLow)
             previousTrendLowLevel := trendPivotLow
             previousTrendLowBar := trendPivotLowBar
 
@@ -202,41 +223,55 @@ hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linesty
 
 if barstate.islastconfirmedhistory or barstate.islast
     f_clearLines(lines = renderedLines)
+    int trendVisibleWindowStart = math.max(0, bar_index - trendLineLookbackBars + 1)
+    bool showCurrentSessionIntraday = latestRegularSessionDayKey == currentTradingDayKey
 
-    if showIntradayStructure
+    if showIntradayStructure and showCurrentSessionIntraday
         if array.size(id = intradayResistanceLevels) > 0
             for resistanceIndex = 0 to array.size(id = intradayResistanceLevels) - 1
                 float resistanceLevel = array.get(id = intradayResistanceLevels, index = resistanceIndex)
                 int resistanceBar = array.get(id = intradayResistanceBars, index = resistanceIndex)
-                if not na(sessionStartBarIndex) and resistanceBar >= sessionStartBarIndex
-                    line resistanceLine = line.new(x1 = resistanceBar, y1 = resistanceLevel, x2 = bar_index, y2 = resistanceLevel, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
+                bool showResistanceLevel = f_isVisibleIntradayLevel(levels = intradayResistanceLevels, referencePrice = deltaClose, candidateLevel = resistanceLevel, visiblePerSide = intradayVisibleLevelsPerSide, isResistance = true)
+                bool resistanceIsTrendAnchor = f_isAnyTrendAnchor(upTrendSegment = activeUpTrend, downTrendSegment = activeDownTrend, levelBar = resistanceBar, levelPrice = resistanceLevel)
+                if showResistanceLevel and not resistanceIsTrendAnchor and resistanceBar >= sessionStartBarIndex
+                    int resistanceEndBar = math.min(bar_index, resistanceBar + intradaySRExtensionBars)
+                    line resistanceLine = line.new(x1 = resistanceBar, y1 = resistanceLevel, x2 = resistanceEndBar, y2 = resistanceLevel, xloc = xloc.bar_index, extend = extend.none, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
                     array.push(id = renderedLines, value = resistanceLine)
         if array.size(id = intradaySupportLevels) > 0
             for supportIndex = 0 to array.size(id = intradaySupportLevels) - 1
                 float supportLevel = array.get(id = intradaySupportLevels, index = supportIndex)
                 int supportBar = array.get(id = intradaySupportBars, index = supportIndex)
-                if not na(sessionStartBarIndex) and supportBar >= sessionStartBarIndex
-                    line supportLine = line.new(x1 = supportBar, y1 = supportLevel, x2 = bar_index, y2 = supportLevel, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
+                bool showSupportLevel = f_isVisibleIntradayLevel(levels = intradaySupportLevels, referencePrice = deltaClose, candidateLevel = supportLevel, visiblePerSide = intradayVisibleLevelsPerSide, isResistance = false)
+                bool supportIsTrendAnchor = f_isAnyTrendAnchor(upTrendSegment = activeUpTrend, downTrendSegment = activeDownTrend, levelBar = supportBar, levelPrice = supportLevel)
+                if showSupportLevel and not supportIsTrendAnchor and supportBar >= sessionStartBarIndex
+                    int supportEndBar = math.min(bar_index, supportBar + intradaySRExtensionBars)
+                    line supportLine = line.new(x1 = supportBar, y1 = supportLevel, x2 = supportEndBar, y2 = supportLevel, xloc = xloc.bar_index, extend = extend.none, color = intradayStructureColor, width = intradaySRLineWidth, style = line.style_solid)
                     array.push(id = renderedLines, value = supportLine)
 
-    if showTrendLines
-        if array.size(id = bearishTrends) > 0
-            for bearishIndex = 0 to array.size(id = bearishTrends) - 1
-                TrendSegment bearishTrend = array.get(id = bearishTrends, index = bearishIndex)
-                int x1Bear = bearishTrend.x1
-                float y1Bear = bearishTrend.y1
-                int x2Bear = bearishTrend.x2
-                float y2Bear = bearishTrend.y2
-                if not na(sessionStartBarIndex) and x1Bear >= sessionStartBarIndex
-                    line bearishLine = line.new(x1 = x1Bear, y1 = y1Bear, x2 = x2Bear, y2 = y2Bear, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = trendLineWidth, style = line.style_dashed)
-                    array.push(id = renderedLines, value = bearishLine)
-        if array.size(id = bullishTrends) > 0
-            for bullishIndex = 0 to array.size(id = bullishTrends) - 1
-                TrendSegment bullishTrend = array.get(id = bullishTrends, index = bullishIndex)
-                int x1Bull = bullishTrend.x1
-                float y1Bull = bullishTrend.y1
-                int x2Bull = bullishTrend.x2
-                float y2Bull = bullishTrend.y2
-                if not na(sessionStartBarIndex) and x1Bull >= sessionStartBarIndex
-                    line bullishLine = line.new(x1 = x1Bull, y1 = y1Bull, x2 = x2Bull, y2 = y2Bull, xloc = xloc.bar_index, extend = extend.right, color = intradayStructureColor, width = trendLineWidth, style = line.style_dashed)
-                    array.push(id = renderedLines, value = bullishLine)
+    if showTrendLines and showCurrentSessionIntraday
+        if not na(activeDownTrend)
+            int downTrendStartBar = activeDownTrend.x1
+            float downTrendStartLevel = activeDownTrend.y1
+            int downTrendPivotBar = activeDownTrend.x2
+            float downTrendPivotLevel = activeDownTrend.y2
+            if downTrendStartBar >= sessionStartBarIndex
+                int downTrendEndBar = bar_index + trendLineProjectionBars
+                int downTrendVisibleStart = math.max(downTrendStartBar, trendVisibleWindowStart)
+                if downTrendEndBar > downTrendVisibleStart
+                    float downTrendVisibleStartY = f_lineValueAtBar(x1 = downTrendStartBar, y1 = downTrendStartLevel, x2 = downTrendPivotBar, y2 = downTrendPivotLevel, targetBar = downTrendVisibleStart)
+                    float downTrendVisibleEndY = f_lineValueAtBar(x1 = downTrendStartBar, y1 = downTrendStartLevel, x2 = downTrendPivotBar, y2 = downTrendPivotLevel, targetBar = downTrendEndBar)
+                    line activeDownTrendLine = line.new(x1 = downTrendVisibleStart, y1 = downTrendVisibleStartY, x2 = downTrendEndBar, y2 = downTrendVisibleEndY, xloc = xloc.bar_index, extend = extend.none, color = trendLineColor, width = trendLineWidth, style = f_trendLineStyle(trendLineStyleInput))
+                    array.push(id = renderedLines, value = activeDownTrendLine)
+        if not na(activeUpTrend)
+            int upTrendStartBar = activeUpTrend.x1
+            float upTrendStartLevel = activeUpTrend.y1
+            int upTrendPivotBar = activeUpTrend.x2
+            float upTrendPivotLevel = activeUpTrend.y2
+            if upTrendStartBar >= sessionStartBarIndex
+                int upTrendEndBar = bar_index + trendLineProjectionBars
+                int upTrendVisibleStart = math.max(upTrendStartBar, trendVisibleWindowStart)
+                if upTrendEndBar > upTrendVisibleStart
+                    float upTrendVisibleStartY = f_lineValueAtBar(x1 = upTrendStartBar, y1 = upTrendStartLevel, x2 = upTrendPivotBar, y2 = upTrendPivotLevel, targetBar = upTrendVisibleStart)
+                    float upTrendVisibleEndY = f_lineValueAtBar(x1 = upTrendStartBar, y1 = upTrendStartLevel, x2 = upTrendPivotBar, y2 = upTrendPivotLevel, targetBar = upTrendEndBar)
+                    line activeUpTrendLine = line.new(x1 = upTrendVisibleStart, y1 = upTrendVisibleStartY, x2 = upTrendEndBar, y2 = upTrendVisibleEndY, xloc = xloc.bar_index, extend = extend.none, color = trendLineColor, width = trendLineWidth, style = f_trendLineStyle(trendLineStyleInput))
+                    array.push(id = renderedLines, value = activeUpTrendLine)
