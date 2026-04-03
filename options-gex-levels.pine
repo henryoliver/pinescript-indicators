@@ -6,13 +6,11 @@
 indicator(title = "Options GEX Levels", shorttitle = "🧬 GEX", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 100)
 
 // 🧱 CONSTANTS
-const string GROUP_GENERAL = "⚙️ General"
 const string GROUP_DATA = "📝 Data Input"
 const string GROUP_DEBUG = "🧪 Debug"
 const string GROUP_LEVELS = "📏 Levels"
 const string GROUP_SESSION = "🕒 Session"
 const string GROUP_LABELS = "🏷️ Labels"
-const string GROUP_BARS = "📊 Level Bars"
 const string GROUP_PROFILES = "📌 Profiles"
 
 // Nord Theme Color Constants
@@ -39,25 +37,18 @@ const color NORD15 = #B48EAD
 
 // 🎛️ USER INPUT SETTINGS
 string dataText = input.text_area(defval = "", title = "Options Data", group = GROUP_DATA, tooltip = "Paste the lines exactly as provided.\nExample:\nSPY,20260305,ZONES,NEG_SQUEEZE:672,...")
-bool requireSymbolMatch = input.bool(defval = true, title = "Require Symbol Match", group = GROUP_GENERAL)
-bool requireDateMatch = input.bool(defval = true, title = "Require Date Match", group = GROUP_GENERAL)
 bool showExpiryLine = input.bool(defval = true, title = "Show Expiry Line", group = GROUP_SESSION)
-string expiryLineStyle = input.string(defval = "Dotted", title = "Expiry Line Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_SESSION)
-color expiryLineColor = input.color(defval = color.new(NORD13, 40), title = "Expiry Line Color", group = GROUP_SESSION)
-int expiryLineWidth = input.int(defval = 1, title = "Expiry Line Width", minval = 1, maxval = 4, group = GROUP_SESSION)
 
 // NETGEX Levels
 bool showNetGexLines = input.bool(defval = true, title = "Show NETGEX Levels", group = GROUP_LEVELS)
 int maxNetGexLevels = input.int(defval = 10, title = "Max NETGEX Levels", minval = 1, maxval = 20, group = GROUP_LEVELS)
 float minNetGexAbsPercent = input.float(defval = 0, title = "Min NETGEX Abs %", minval = 0, maxval = 100, step = 1, group = GROUP_LEVELS)
-color netGexPosColor = input.color(defval = color.new(NORD8, 60), title = "Positive Color", group = GROUP_LEVELS)
-color netGexNegColor = input.color(defval = color.new(NORD11, 60), title = "Negative Color", group = GROUP_LEVELS)
+color netGexPosColor = input.color(defval = NORD8, title = "Positive Color", group = GROUP_LEVELS)
+color netGexNegColor = input.color(defval = NORD11, title = "Negative Color", group = GROUP_LEVELS)
+int levelRightBars = input.int(defval = 40, title = "Level Right Bars", minval = 5, maxval = 200, group = GROUP_LEVELS)
 
 // HVL
 bool showHvl = input.bool(defval = true, title = "Show HVL Line", group = GROUP_LEVELS)
-color hvlLineColor = input.color(defval = color.new(NORD4, 60), title = "HVL Line Color", group = GROUP_LEVELS)
-string hvlLineStyle = input.string(defval = "Solid", title = "HVL Line Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_LEVELS)
-int hvlLineWidth = input.int(defval = 2, title = "HVL Line Width", minval = 1, maxval = 5, group = GROUP_LEVELS)
 
 // Flip Zone
 bool showFlipZone = input.bool(defval = false, title = "Show Flip Zone", group = GROUP_LEVELS)
@@ -65,38 +56,19 @@ int flipFillBars = input.int(defval = 30, title = "Flip Fill Width (Bars)", minv
 color flipFillColor = input.color(defval = color.new(NORD4, 85), title = "Flip Fill Color", group = GROUP_LEVELS)
 
 // Zone Fills
-bool showZoneFills = input.bool(defval = true, title = "Show Zone Fills", group = GROUP_LEVELS)
+bool showZoneFills = input.bool(defval = false, title = "Show Zone Fills", group = GROUP_LEVELS)
 color posZoneFillColor = input.color(defval = color.new(NORD8, 88), title = "Positive Zone Fill", group = GROUP_LEVELS)
 color negZoneFillColor = input.color(defval = color.new(NORD11, 88), title = "Negative Zone Fill", group = GROUP_LEVELS)
 color squeezeZoneFillColor = input.color(defval = color.new(NORD10, 88), title = "Squeeze Zone Fill", group = GROUP_LEVELS)
-
-// Level Lines
-int levelRightBars = input.int(defval = 40, title = "Level Right Bars", minval = 5, maxval = 200, group = GROUP_LEVELS)
-string levelLineStyle = input.string(defval = "Solid", title = "Level Line Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_LEVELS)
-int levelLineWidth = input.int(defval = 1, title = "Level Line Width", minval = 1, maxval = 5, group = GROUP_LEVELS)
-int widthScale = input.int(defval = 2, title = "Width Scale (0-5)", minval = 0, maxval = 5, group = GROUP_LEVELS)
 
 // Labels
 bool showLabels = input.bool(defval = true, title = "Show Labels", group = GROUP_LABELS)
 bool showStrikePrice = input.bool(defval = true, title = "Show Strike Price", group = GROUP_LABELS)
 bool showLevelInfo = input.bool(defval = true, title = "Show Level Info", group = GROUP_LABELS)
-color strikeTextColor = input.color(defval = color.new(NORD6, 60), title = "Strike Text Color", group = GROUP_LABELS)
 string strikeTextSize = input.string(defval = "Normal", title = "Strike Text Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_LABELS)
-string strikeLabelPosition = input.string(defval = "Above", title = "Strike Label Position", options = ["Above", "Below"], group = GROUP_LABELS)
-int strikeLabelOffsetTicks = input.int(defval = 14, title = "Strike Label Offset (Ticks)", minval = 1, maxval = 50, group = GROUP_LABELS)
-color labelTextColor = input.color(defval = color.new(NORD6, 60), title = "Info Text Color", group = GROUP_LABELS)
-color labelBgColor = input.color(defval = color.new(NORD0, 90), title = "Info Background", group = GROUP_LABELS)
 string infoTextSize = input.string(defval = "Normal", title = "Info Text Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_LABELS)
-int infoGapBars = input.int(defval = 0, title = "Info Gap (Bars)", minval = 0, maxval = 20, group = GROUP_LABELS)
-
-// Level Bars
-bool showLevelBars = input.bool(defval = true, title = "Show Level Bars", group = GROUP_BARS)
-int barGapBars = input.int(defval = 1, title = "Bar Gap (Bars)", minval = 0, maxval = 20, group = GROUP_BARS)
-int barMaxWidthBars = input.int(defval = 12, title = "Bar Max Width (Bars)", minval = 2, maxval = 100, group = GROUP_BARS)
-int barHeightTicks = input.int(defval = 2, title = "Bar Height (Ticks)", minval = 1, maxval = 50, group = GROUP_BARS)
-color levelBarPosColor = input.color(defval = color.new(NORD8, 60), title = "Bar Positive Color", group = GROUP_BARS)
-color levelBarNegColor = input.color(defval = color.new(NORD11, 60), title = "Bar Negative Color", group = GROUP_BARS)
-color levelBarNeutralColor = input.color(defval = color.new(NORD4, 60), title = "Bar Neutral Color", group = GROUP_BARS)
+int infoGapBars = input.int(defval = 1, title = "Info Gap (Bars)", minval = 0, maxval = 20, group = GROUP_LABELS)
+bool showLevelBars = input.bool(defval = false, title = "Show Level Bars", group = GROUP_LABELS)
 
 // Profiles
 bool showAbsProfile = input.bool(defval = false, title = "Show ABSGEX Profile", group = GROUP_PROFILES)
@@ -118,27 +90,21 @@ color profileNeutralColor = input.color(defval = color.new(NORD4, 60), title = "
 bool showDebug = input.bool(defval = false, title = "Show Debug Label", group = GROUP_DEBUG)
 bool showParseDetails = input.bool(defval = true, title = "Include Parse Details", group = GROUP_DEBUG)
 
-// 🧩 TYPE DEFINITIONS
-// None
-
 // 🧮 HELPERS
 f_clearLines(array<line> lines) =>
-    if array.size(lines) > 0
-        for i = 0 to array.size(lines) - 1
-            line.delete(array.get(lines, i))
-        array.clear(lines)
+    for deletedLine in lines
+        line.delete(deletedLine)
+    array.clear(lines)
 
 f_clearLabels(array<label> labels) =>
-    if array.size(labels) > 0
-        for i = 0 to array.size(labels) - 1
-            label.delete(array.get(labels, i))
-        array.clear(labels)
+    for deletedLabel in labels
+        label.delete(deletedLabel)
+    array.clear(labels)
 
 f_clearBoxes(array<box> boxes) =>
-    if array.size(boxes) > 0
-        for i = 0 to array.size(boxes) - 1
-            box.delete(array.get(boxes, i))
-        array.clear(boxes)
+    for deletedBox in boxes
+        box.delete(deletedBox)
+    array.clear(boxes)
 
 f_safeFloat(string s) =>
     string t = str.trim(s)
@@ -155,12 +121,6 @@ f_safeFloat(string s) =>
 
 f_hasZone(float v) =>
     not na(v) and v != 0
-
-f_levelWidthScaled(float absVal) =>
-    widthScale <= 0 ? 0 : int(math.round(absVal / 100.0 * widthScale))
-
-f_lineStyle(string s) =>
-    s == "Dashed" ? line.style_dashed : s == "Dotted" ? line.style_dotted : line.style_solid
 
 f_labelSize(string s) =>
     s == "Tiny" ? size.tiny :
@@ -187,84 +147,87 @@ f_targetDateInt(int y, int m, int d, int hr, int min) =>
     afterClose ? f_nextTradingDateInt(y, m, d) : today
 
 f_pctAbs(float absVal, float maxAbs) =>
-    maxAbs > 0 ? str.tostring(math.round(absVal / maxAbs * 100.0, 1)) + "%" : "0.0%"
+    maxAbs > 0 ? str.tostring(absVal / maxAbs * 100.0, "#.##") + "%" : "0%"
 
-f_drawLevelLayout(array<line> lines, array<label> labels, array<box> boxes, float price, float absVal, float maxAbs, float signVal, int extraWidth, int baseWidth, color lineColor, string descText, string lineStyle) =>
-    int width = math.min(5, baseWidth + f_levelWidthScaled(absVal) + extraWidth)
+f_levelOpacity(int sideRank) =>
+    sideRank <= 1 ? 0 : sideRank == 2 ? 10 : 20
+
+f_levelWidth(int sideRank) =>
+    sideRank <= 1 ? 3 : sideRank <= 3 ? 2 : 1
+
+f_levelStyle(int sideRank) =>
+    sideRank <= 3 ? line.style_solid : line.style_dotted
+
+f_applyOpacity(color baseColor, int opacity) =>
+    color.new(baseColor, opacity)
+
+f_hvlColor() =>
+    color.new(NORD4, 80)
+
+f_barColor(float signVal, int opacity) =>
+    signVal > 0 ? color.new(NORD8, opacity) : signVal < 0 ? color.new(NORD11, opacity) : color.new(NORD4, opacity)
+
+f_drawLevelLayoutTextColor(array<line> lines, array<label> labels, array<box> boxes, float price, float absVal, float maxAbs, float signVal, int drawWidth, color lineColor, string descText, resolvedLineStyle, resolvedStrikeTextSize, resolvedInfoTextSize, color textColor, string prefixText = "", color prefixColor = na) =>
     int rightX = bar_index + levelRightBars
-    line ln = line.new(x1 = bar_index, y1 = price, x2 = rightX, y2 = price, extend = extend.left, color = lineColor, width = width, style = f_lineStyle(lineStyle))
+    line ln = line.new(x1 = bar_index, y1 = price, x2 = rightX, y2 = price, extend = extend.left, color = lineColor, width = drawWidth, style = resolvedLineStyle)
     array.push(lines, ln)
 
     if showLabels and showStrikePrice
-        float strikeY = strikeLabelPosition == "Above" ? price + syminfo.mintick * strikeLabelOffsetTicks : price - syminfo.mintick * strikeLabelOffsetTicks
-        label lbStrike = label.new(x = rightX, y = strikeY, text = str.tostring(price, format.mintick), style = label.style_label_right, textcolor = strikeTextColor, color = color.new(NORD0, 100), size = f_labelSize(strikeTextSize))
+        label lbStrike = label.new(x = rightX, y = price, text = str.tostring(price, format.mintick), style = label.style_label_lower_left, textcolor = textColor, color = color.new(NORD0, 100), size = resolvedStrikeTextSize)
         array.push(labels, lbStrike)
 
-    int barLeft = rightX + barGapBars
-    int barWidth = maxAbs > 0 ? int(math.max(1, math.round(barMaxWidthBars * absVal / maxAbs))) : 1
+    int barLeft = rightX + 1
+    int barWidth = showLevelBars ? 5 : 0
     int barRight = barLeft + barWidth
     if showLevelBars
-        float halfHeight = syminfo.mintick * barHeightTicks
-        color barColor = signVal > 0 ? levelBarPosColor : signVal < 0 ? levelBarNegColor : levelBarNeutralColor
+        float halfHeight = syminfo.mintick * 5
+        int barOpacity = int(color.t(lineColor))
+        color barColor = f_barColor(signVal, barOpacity)
         box bx = box.new(left = barLeft, right = barRight, bottom = price - halfHeight, top = price + halfHeight, bgcolor = barColor, border_color = barColor)
         array.push(boxes, bx)
 
     if showLabels and showLevelInfo
         string pctText = f_pctAbs(absVal, maxAbs)
-        string infoText = pctText + " | " + descText
-        label lbInfo = label.new(x = barRight + infoGapBars, y = price, text = infoText, style = label.style_label_left, textcolor = labelTextColor, color = labelBgColor, size = f_labelSize(infoTextSize))
+        string infoText = str.startswith(descText, "HVL ") or str.startswith(descText, "Highest negative NETGEX") ? descText : pctText + " / " + descText
+        int infoX = barRight + infoGapBars
+        if prefixText != "" and not na(prefixColor)
+            label lbPrefix = label.new(x = infoX, y = price, text = prefixText, style = label.style_label_left, textcolor = prefixColor, color = color.new(NORD0, 100), size = size.large)
+            array.push(labels, lbPrefix)
+            infoX += 1
+        label lbInfo = label.new(x = infoX, y = price, text = infoText, style = label.style_label_left, textcolor = textColor, color = color.new(NORD0, 100), size = resolvedInfoTextSize)
         array.push(labels, lbInfo)
 
-f_drawLevelLayoutTextColor(array<line> lines, array<label> labels, array<box> boxes, float price, float absVal, float maxAbs, float signVal, int extraWidth, int baseWidth, color lineColor, string descText, string lineStyle, color textColor) =>
-    int width = math.min(5, baseWidth + f_levelWidthScaled(absVal) + extraWidth)
-    int rightX = bar_index + levelRightBars
-    line ln = line.new(x1 = bar_index, y1 = price, x2 = rightX, y2 = price, extend = extend.left, color = lineColor, width = width, style = f_lineStyle(lineStyle))
-    array.push(lines, ln)
-
-    if showLabels and showStrikePrice
-        float strikeY = strikeLabelPosition == "Above" ? price + syminfo.mintick * strikeLabelOffsetTicks : price - syminfo.mintick * strikeLabelOffsetTicks
-        label lbStrike = label.new(x = rightX, y = strikeY, text = str.tostring(price, format.mintick), style = label.style_label_right, textcolor = strikeTextColor, color = color.new(NORD0, 100), size = f_labelSize(strikeTextSize))
-        array.push(labels, lbStrike)
-
-    int barLeft = rightX + barGapBars
-    int barWidth = maxAbs > 0 ? int(math.max(1, math.round(barMaxWidthBars * absVal / maxAbs))) : 1
-    int barRight = barLeft + barWidth
-    if showLevelBars
-        float halfHeight = syminfo.mintick * barHeightTicks
-        color barColor = signVal > 0 ? levelBarPosColor : signVal < 0 ? levelBarNegColor : levelBarNeutralColor
-        box bx = box.new(left = barLeft, right = barRight, bottom = price - halfHeight, top = price + halfHeight, bgcolor = barColor, border_color = barColor)
-        array.push(boxes, bx)
-
-    if showLabels and showLevelInfo
-        string pctText = f_pctAbs(absVal, maxAbs)
-        string infoText = pctText + " | " + descText
-        label lbInfo = label.new(x = barRight + infoGapBars, y = price, text = infoText, style = label.style_label_left, textcolor = textColor, color = labelBgColor, size = f_labelSize(infoTextSize))
-        array.push(labels, lbInfo)
+f_drawLevelLayout(array<line> lines, array<label> labels, array<box> boxes, float price, float absVal, float maxAbs, float signVal, int drawWidth, color lineColor, string descText, resolvedLineStyle, resolvedStrikeTextSize, resolvedInfoTextSize, color textColor) =>
+    f_drawLevelLayoutTextColor(lines, labels, boxes, price, absVal, maxAbs, signVal, drawWidth, lineColor, descText, resolvedLineStyle, resolvedStrikeTextSize, resolvedInfoTextSize, textColor)
 
 f_maxIndex(array<float> values) =>
     int maxIdx = na
     float maxVal = -1.0
-    for i = 0 to array.size(values) - 1
-        float v = array.get(values, i)
-        if v > maxVal
-            maxVal := v
-            maxIdx := i
+    if array.size(values) > 0
+        for i = 0 to array.size(values) - 1
+            float v = array.get(values, i)
+            if v > maxVal
+                maxVal := v
+                maxIdx := i
     maxIdx
 
 f_netGexSign(array<float> strikes, array<float> values, float strike) =>
     float sign = 0
-    for i = 0 to array.size(strikes) - 1
-        float s = array.get(strikes, i)
-        if math.abs(s - strike) <= syminfo.mintick
-            float v = array.get(values, i)
-            sign := v > 0 ? 1 : v < 0 ? -1 : 0
-            break
+    int itemCount = math.min(array.size(strikes), array.size(values))
+    if itemCount > 0
+        for i = 0 to itemCount - 1
+            float s = array.get(strikes, i)
+            if math.abs(s - strike) <= syminfo.mintick
+                float v = array.get(values, i)
+                sign := v > 0 ? 1 : v < 0 ? -1 : 0
+                break
     sign
 
 f_valueAtStrike(array<float> strikes, array<float> values, float strike) =>
     float out = na
-    if array.size(strikes) > 0 and array.size(values) > 0
-        for i = 0 to array.size(strikes) - 1
+    int itemCount = math.min(array.size(strikes), array.size(values))
+    if itemCount > 0
+        for i = 0 to itemCount - 1
             float s = array.get(strikes, i)
             if math.abs(s - strike) <= syminfo.mintick
                 out := array.get(values, i)
@@ -272,15 +235,17 @@ f_valueAtStrike(array<float> strikes, array<float> values, float strike) =>
     out
 
 f_drawProfileBars(array<box> boxes, array<label> labels, array<float> strikes, array<float> values, float maxAbs, int offsetBars, string title, bool useSignFromNetGex, array<float> netGexStrikes, array<float> netGexValues) =>
-    if array.size(strikes) > 0 and maxAbs > 0
-        int baseRight = bar_index + levelRightBars + barGapBars + barMaxWidthBars + infoGapBars + profileEdgeGapBars + offsetBars
+    int itemCount = math.min(array.size(strikes), array.size(values))
+    if itemCount > 0 and maxAbs > 0
+        int baseRight = bar_index + levelRightBars + 1 + 5 + infoGapBars + profileEdgeGapBars + offsetBars
         int baseLeft = bar_index - levelRightBars - profileEdgeGapBars - offsetBars
+        resolvedInfoTextSize = f_labelSize(infoTextSize)
         if showLabels and showProfileTitles
-            float titleY = array.get(strikes, array.size(strikes) - 1)
+            float titleY = array.get(strikes, itemCount - 1)
             int titleX = profileSide == "Right" ? baseRight + 1 : baseLeft - 1
-            label lbTitle = label.new(x = titleX, y = titleY, text = title, style = profileSide == "Right" ? label.style_label_left : label.style_label_right, textcolor = labelTextColor, color = color.new(NORD0, 100), size = f_labelSize(infoTextSize))
+            label lbTitle = label.new(x = titleX, y = titleY, text = title, style = profileSide == "Right" ? label.style_label_left : label.style_label_right, textcolor = NORD6, color = color.new(NORD0, 100), size = resolvedInfoTextSize)
             array.push(labels, lbTitle)
-        for i = 0 to array.size(strikes) - 1
+        for i = 0 to itemCount - 1
             float strike = array.get(strikes, i)
             float val = array.get(values, i)
             float absVal = math.abs(val)
@@ -309,19 +274,16 @@ var array<label> g_labels = array.new<label>()
 var array<box> g_boxes = array.new<box>()
 var string lastDataText = ""
 var int lastRenderDate = na
-var string tickerIdSymbol = syminfo.ticker
 var label debugLabel = na
+var line g_expiryLine = na
 var int g_expiryDateInt = na
 var int g_expiryHour = na
 var int g_expiryMin = na
 var int g_dteVal = na
+var string g_regime = ""
 
 int todayInt = year * 10000 + month * 100 + dayofmonth
-int targetInt = f_targetDateInt(year, month, dayofmonth, hour, minute)
-int nextTradeInt = f_nextTradingDateInt(year, month, dayofmonth)
-
-bool dateChanged = requireDateMatch and not na(lastRenderDate) and todayInt != lastRenderDate
-bool shouldRebuild = barstate.islast and (dataText != lastDataText or dateChanged)
+bool shouldRebuild = barstate.islast and dataText != lastDataText
 
 if shouldRebuild
     f_clearLines(g_lines)
@@ -352,6 +314,7 @@ if shouldRebuild
     g_expiryHour := na
     g_expiryMin := na
     g_dteVal := na
+    g_regime := ""
 
     float flipLow = na
     float flipMid = na
@@ -365,6 +328,8 @@ if shouldRebuild
     array<float> netDexValues = array.new<float>()
     array<float> netVolStrikes = array.new<float>()
     array<float> netVolValues = array.new<float>()
+    resolvedStrikeTextSize = f_labelSize(strikeTextSize)
+    resolvedInfoTextSize = f_labelSize(infoTextSize)
 
     array<string> lines = str.split(dataText, "\n")
     totalLines := array.size(lines)
@@ -378,21 +343,9 @@ if shouldRebuild
         string symbol = str.trim(array.get(tokens, 0))
         string dateStr = str.trim(array.get(tokens, 1))
         string recordType = str.trim(array.get(tokens, 2))
-        int dateInt = na
-        if str.contains(dateStr, "/")
-            array<string> dparts = str.split(dateStr, "/")
-            if array.size(dparts) >= 2
-                int mm = int(f_safeFloat(array.get(dparts, 0)))
-                int dd = int(f_safeFloat(array.get(dparts, 1)))
-                if mm > 0 and dd > 0
-                    dateInt := year * 10000 + mm * 100 + dd
-        else
-            float dateFloat = f_safeFloat(dateStr)
-            dateInt := na(dateFloat) ? na : int(dateFloat)
-
         string symIn = str.upper(symbol)
         string symTicker = str.upper(syminfo.ticker)
-        bool symbolOk = not requireSymbolMatch or symIn == symTicker
+        bool symbolOk = symIn == symTicker
         if recordType == "DTE"
             if array.size(tokens) >= 4
                 float dteFloat = f_safeFloat(str.trim(array.get(tokens, 3)))
@@ -418,9 +371,7 @@ if shouldRebuild
             lastMatchedLine := rawLine
             lastRecordType := recordType
             continue
-        int expectedDate = not na(g_expiryDateInt) ? g_expiryDateInt : targetInt
-        bool dateOk = not requireDateMatch or (not na(dateInt) and (dateInt == expectedDate or dateInt == nextTradeInt))
-        if not symbolOk or not dateOk
+        if not symbolOk
             continue
         matchedLines += 1
         lastMatchedLine := rawLine
@@ -451,6 +402,7 @@ if shouldRebuild
                     zonePosSqueeze := valNum
                 else if key == "REGIME"
                     regime := valStr
+                    g_regime := valStr
         else
             int t = 3
             while t < array.size(tokens)
@@ -490,8 +442,9 @@ if shouldRebuild
                 t += 1
 
     float netGexMaxAbs = 0
-    if array.size(netGexValues) > 0
-        for i = 0 to array.size(netGexValues) - 1
+    int netGexItemCount = math.min(array.size(netGexStrikes), array.size(netGexValues))
+    if netGexItemCount > 0
+        for i = 0 to netGexItemCount - 1
             netGexMaxAbs := math.max(netGexMaxAbs, math.abs(array.get(netGexValues, i)))
 
     // Plot HVL
@@ -500,38 +453,28 @@ if shouldRebuild
         float posStrike = na
         float negMin = na
         float negStrike = na
-        for i = 0 to array.size(netGexValues) - 1
-            float v = array.get(netGexValues, i)
-            float s = array.get(netGexStrikes, i)
-            if v > 0 and (na(posMax) or v > posMax)
-                posMax := v
-                posStrike := s
-            if v < 0 and (na(negMin) or v < negMin)
-                negMin := v
-                negStrike := s
-        bool overlapPos = f_hasZone(posStrike) and math.abs(zoneHvl - posStrike) <= syminfo.mintick
-        bool overlapNeg = f_hasZone(negStrike) and math.abs(zoneHvl - negStrike) <= syminfo.mintick
-        color hvlColor = overlapPos ? netGexPosColor : overlapNeg ? netGexNegColor : hvlLineColor
-        float hvlNet = f_valueAtStrike(netGexStrikes, netGexValues, zoneHvl)
+        if netGexItemCount > 0
+            for i = 0 to netGexItemCount - 1
+                float v = array.get(netGexValues, i)
+                float s = array.get(netGexStrikes, i)
+                if v > 0 and (na(posMax) or v > posMax)
+                    posMax := v
+                    posStrike := s
+                if v < 0 and (na(negMin) or v < negMin)
+                    negMin := v
+                    negStrike := s
+        float displayHvl = f_hasZone(flipLow) ? flipLow : zoneHvl
+        bool overlapPos = f_hasZone(posStrike) and math.abs(displayHvl - posStrike) <= syminfo.mintick
+        bool overlapNeg = f_hasZone(negStrike) and math.abs(displayHvl - negStrike) <= syminfo.mintick
+        color hvlColor = f_hvlColor()
+        float hvlNet = f_valueAtStrike(netGexStrikes, netGexValues, displayHvl)
         float hvlAbs = na(hvlNet) ? 0 : math.abs(hvlNet)
-        string regimeText = str.upper(regime) == "POSITIVE" ? "POS" : str.upper(regime) == "NEGATIVE" ? "NEG" : "?"
+        string regimeUpper = str.upper(regime)
         string dteText = not na(g_dteVal) ? str.tostring(g_dteVal) + "DTE" : "DTE?"
-        string hvlLabel = "● HVL " + dteText + " " + regimeText
-        string suffix = ""
-        if f_hasZone(zonePosGamma) and math.abs(zoneHvl - zonePosGamma) <= syminfo.mintick
-            suffix := " | CR"
-        else if f_hasZone(zoneNegGamma) and math.abs(zoneHvl - zoneNegGamma) <= syminfo.mintick
-            suffix := " | PS"
-        else if f_hasZone(zonePosSqueeze) and math.abs(zoneHvl - zonePosSqueeze) <= syminfo.mintick
-            suffix := " | POS_SQ"
-        else if f_hasZone(zoneNegSqueeze) and math.abs(zoneHvl - zoneNegSqueeze) <= syminfo.mintick
-            suffix := " | NEG_SQ"
-        hvlLabel := hvlLabel + suffix
-        float signVal = overlapPos ? 1 : overlapNeg ? -1 : 0
-        int extraWidth = overlapPos or overlapNeg ? 2 : 0
-        // Color the entire HVL label to match regime so the leading dot is colored too.
-        color regColor = str.upper(regime) == "POSITIVE" ? color.new(NORD8, 0) : str.upper(regime) == "NEGATIVE" ? color.new(NORD11, 0) : color.new(NORD4, 0)
-        f_drawLevelLayoutTextColor(g_lines, g_labels, g_boxes, zoneHvl, hvlAbs, netGexMaxAbs, signVal, extraWidth, hvlLineWidth, hvlColor, hvlLabel, hvlLineStyle, regColor)
+        string expMonthDay = not na(g_expiryDateInt) ? str.substring(str.tostring(g_expiryDateInt), 4, 6) + "/" + str.substring(str.tostring(g_expiryDateInt), 6, 8) : "--/--"
+        string hvlLabel = "HVL " + dteText + " (" + expMonthDay + ")"
+        color regColor = regimeUpper == "NEGATIVE" ? NORD11 : NORD8
+        f_drawLevelLayoutTextColor(g_lines, g_labels, g_boxes, displayHvl, hvlAbs, netGexMaxAbs, 0, 2, hvlColor, hvlLabel, line.style_solid, resolvedStrikeTextSize, resolvedInfoTextSize, hvlColor, "●", regColor)
         hvlRightX := bar_index + levelRightBars
 
     // Plot Flip Zone (background only)
@@ -583,13 +526,13 @@ if shouldRebuild
     // Plot NETGEX levels (top N)
     if showNetGexLines and array.size(netGexStrikes) > 0
         array<float> absVals = array.new<float>()
-        for i = 0 to array.size(netGexValues) - 1
+        for i = 0 to netGexItemCount - 1
             array.push(absVals, math.abs(array.get(netGexValues, i)))
 
-        int limit = math.min(maxNetGexLevels, array.size(netGexStrikes))
+        int limit = math.min(maxNetGexLevels, netGexItemCount)
         int posRank = 0
         int negRank = 0
-        for k = 0 to limit - 1
+        for levelIndex = 0 to limit - 1
             int idx = f_maxIndex(absVals)
             if na(idx)
                 break
@@ -599,17 +542,21 @@ if shouldRebuild
                 continue
             float strike = array.get(netGexStrikes, idx)
             float val = array.get(netGexValues, idx)
-            string wallText = "Wall"
+            string wallText = "GEX" + str.tostring(levelIndex + 1)
+            int sideRank = 0
+            color lineColor = na
             if val > 0
                 posRank += 1
-                wallText := posRank == 1 ? "Call Resistance" : posRank == 2 ? "2nd Call Wall" : posRank == 3 ? "3rd Call Wall" : "Call Wall"
+                sideRank := posRank
+                wallText := posRank == 1 ? "CALL Resistance" : posRank == 2 ? "2nd CALL Wall" : posRank == 3 ? "3rd CALL Wall" : "GEX" + str.tostring(levelIndex + 1)
+                lineColor := f_applyOpacity(netGexPosColor, f_levelOpacity(sideRank))
             else if val < 0
                 negRank += 1
-                wallText := negRank == 1 ? "Put Support" : negRank == 2 ? "2nd Put Wall" : negRank == 3 ? "3rd Put Wall" : "Put Wall"
-            color lineColor = val > 0 ? netGexPosColor : val < 0 ? netGexNegColor : netGexPosColor
-            bool isConfluence = f_hasZone(zoneHvl) and math.abs(strike - zoneHvl) <= syminfo.mintick
-            int extraWidth = isConfluence ? 2 : 0
-            f_drawLevelLayout(g_lines, g_labels, g_boxes, strike, absVal, netGexMaxAbs, val, extraWidth, levelLineWidth, lineColor, wallText, levelLineStyle)
+                sideRank := negRank
+                wallText := negRank == 1 ? "Highest negative NETGEX / PUT Support" : negRank == 2 ? "2nd PUT Wall" : negRank == 3 ? "3rd PUT Wall" : "GEX" + str.tostring(levelIndex + 1)
+                lineColor := f_applyOpacity(netGexNegColor, f_levelOpacity(sideRank))
+            if not na(lineColor)
+                f_drawLevelLayout(g_lines, g_labels, g_boxes, strike, absVal, netGexMaxAbs, val, f_levelWidth(sideRank), lineColor, wallText, f_levelStyle(sideRank), resolvedStrikeTextSize, resolvedInfoTextSize, lineColor)
             array.set(absVals, idx, -1)
 
     // Profiles (horizontal bars by strike)
@@ -638,7 +585,7 @@ if shouldRebuild
     lastRenderDate := todayInt
 
     if showDebug
-        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nRequireSymbol: {2}\nRequireDate: {3}\nToday: {4}\nLines: {5}\nMatched: {6}\nZones: {7}\nMetrics: {8}\nFlips: {9}", syminfo.tickerid, syminfo.ticker, str.tostring(requireSymbolMatch), str.tostring(requireDateMatch), str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips))
+        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nToday: {2}\nLines: {3}\nMatched: {4}\nZones: {5}\nMetrics: {6}\nFlips: {7}", syminfo.tickerid, syminfo.ticker, str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips))
         if showParseDetails
             dbg += "\nLastType: " + lastRecordType
             dbg += "\nLastLine: " + (lastMatchedLine == "" ? "<none>" : lastMatchedLine)
@@ -655,8 +602,14 @@ if showExpiryLine and isIntraday and not na(g_expiryDateInt) and not na(g_expiry
     int expMonth = int((g_expiryDateInt % 10000) / 100)
     int expDay = int(g_expiryDateInt % 100)
     int expTs = timestamp("America/New_York", expYear, expMonth, expDay, g_expiryHour, g_expiryMin)
-    if time == expTs
-        line.new(x1 = expTs, y1 = low, x2 = expTs, y2 = high, xloc = xloc.bar_time, extend = extend.both, color = expiryLineColor, width = expiryLineWidth, style = f_lineStyle(expiryLineStyle))
+    color resolvedExpiryColor = str.upper(g_regime) == "NEGATIVE" ? NORD11 : NORD8
+    if barstate.islast
+        if not na(g_expiryLine)
+            line.delete(g_expiryLine)
+        g_expiryLine := line.new(x1 = expTs, y1 = low, x2 = expTs, y2 = high, xloc = xloc.bar_time, extend = extend.both, color = resolvedExpiryColor, width = 1, style = line.style_dotted)
+else if not na(g_expiryLine) and barstate.islast
+    line.delete(g_expiryLine)
+    g_expiryLine := na
 
 // 📊 STATUS
 plotchar(series = na, title = "GEX Levels", char = "")

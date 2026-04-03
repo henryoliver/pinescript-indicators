@@ -73,7 +73,7 @@ const string NL_RUT = "INDEX:LOWN"
 
 // 🎛️ USER INPUT SETTINGS
 // Market Selection
-string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], group = GROUP_MARKET)
+string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], tooltip = "Selects the index and matching breadth symbols used for the Hindenburg Omen calculation.", group = GROUP_MARKET)
 
 // Conditions
 int posTrendLookback = input.int(defval = 50, title = "Positive Trend Lookback (Days)",
@@ -95,8 +95,8 @@ int signalPeriod = input.int(defval = 10, title = "Signal Period (Days)",
      group = GROUP_DISPLAY)
 bool showBackground = input.bool(defval = true, title = "Show Background",
      tooltip = "Show background color during signal period", group = GROUP_DISPLAY)
-color backgroundColor = input.color(defval = color.new(NORD11, 90), title = "Background Color",
-     group = GROUP_DISPLAY)
+color backgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Background Color",
+     tooltip = "Background highlight color shown while the signal window is active.", group = GROUP_DISPLAY)
 
 // 🧮 DATA & CALCULATIONS
 // Resolve symbols based on market selection
@@ -133,17 +133,17 @@ else if marketIndex == MARKET_RUT
     newLowSymbol := NL_RUT
 
 // Get breadth and index data (daily)
-float advIssues = request.security(advSymbol, "D", close,
+float advIssues = request.security(symbol = advSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-float decIssues = request.security(decSymbol, "D", close,
+float decIssues = request.security(symbol = decSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-float uncIssues = request.security(uncSymbol, "D", close,
+float uncIssues = request.security(symbol = uncSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-float newHighs = request.security(newHighSymbol, "D", close,
+float newHighs = request.security(symbol = newHighSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-float newLows = request.security(newLowSymbol, "D", close,
+float newLows = request.security(symbol = newLowSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-float marketIndexValue = request.security(indexSymbol, "D", close,
+float marketIndexValue = request.security(symbol = indexSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
 // Calculations
@@ -153,32 +153,32 @@ float nhPct = not na(total) and total > 0 ? (newHighs / total * 100) : na
 float nlPct = not na(total) and total > 0 ? (newLows / total * 100) : na
 
 // Condition 1: % of issues hitting new 52W highs and 52W lows >= threshold
-bool cond1 = not na(nhPct) and not na(nlPct) and
+bool isNewHighLowThresholdMet = not na(nhPct) and not na(nlPct) and
      nhPct >= newLowHighThreshold and
      nlPct >= newLowHighThreshold and
      math.min(nhPct, nlPct) >= newLowHighThreshold
 
 // Condition 2: Index is higher or equal in value than when it was X days ago
-bool cond2 = not na(marketIndexValue) and not na(marketIndexValue[posTrendLookback]) and
+bool isPositiveTrend = not na(marketIndexValue) and not na(marketIndexValue[posTrendLookback]) and
      marketIndexValue >= marketIndexValue[posTrendLookback]
 
 // Condition 3: McClellan Oscillator must be negative
-float rana = not na(advIssues) and not na(decIssues) and (advIssues + decIssues) > 0 ?
+float mcclellanRatio = not na(advIssues) and not na(decIssues) and (advIssues + decIssues) > 0 ?
      1000 * ((advIssues - decIssues) / (advIssues + decIssues)) : na
-float mccMa1 = ta.ema(rana, 19)
-float mccMa2 = ta.ema(rana, 39)
-float mcc = mccMa1 - mccMa2
-bool cond3 = not na(mcc) and mcc < 0
+float mcclellanFastEma = ta.ema(source = mcclellanRatio, length = 19)
+float mcclellanSlowEma = ta.ema(source = mcclellanRatio, length = 39)
+float mcclellanOscillator = mcclellanFastEma - mcclellanSlowEma
+bool isMcclellanNegative = not na(mcclellanOscillator) and mcclellanOscillator < 0
 
 // Condition 4: Ratio of new 52W highs to new 52W lows < 2
-bool cond4 = not na(newHighs) and not na(newLows) and newLows > 0 and
+bool isHighLowRatioValid = not na(newHighs) and not na(newLows) and newLows > 0 and
      (newHighs / newLows) < 2
 
 // Confirmed daily bar flag (daily time)
-bool dailyConfirmed = request.security(indexSymbol, "D", barstate.isconfirmed, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+bool dailyConfirmed = request.security(symbol = indexSymbol, timeframe = "D", expression = barstate.isconfirmed, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
 // Hindenburg Omen Signal (confirmed daily bars only)
-bool homenSignalRaw = dailyConfirmed and cond1 and cond2 and cond3 and cond4
+bool homenSignalRaw = dailyConfirmed and isNewHighLowThresholdMet and isPositiveTrend and isMcclellanNegative and isHighLowRatioValid
 
 // Cluster confirmation: require multiple signals within a rolling 36-day window.
 var array<int> signalWindow = array.new<int>()
@@ -188,10 +188,7 @@ if dailyConfirmed and barstate.isconfirmed
     array.push(signalWindow, homenSignalRaw ? 1 : 0)
     if array.size(signalWindow) > clusterWindowDays
         array.shift(signalWindow)
-    int sumSignals = 0
-    for i = 0 to array.size(signalWindow) - 1
-        sumSignals += array.get(signalWindow, i)
-    clusterCount := sumSignals
+    clusterCount := int(array.sum(signalWindow))
 
 bool homenSignal = homenSignalRaw and clusterCount >= clusterMinSignals
 

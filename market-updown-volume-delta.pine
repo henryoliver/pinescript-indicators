@@ -32,9 +32,6 @@ const int MAX_LONG_TERM_BARS = 1200
 const int MAX_INTRADAY_LEVELS = 80
 const int INTRADAY_LINE_WIDTH = 2
 
-// 🧩 TYPE DEFINITIONS
-// None
-
 // 🎛️ USER INPUT SETTINGS
 string market = input.string(
      defval = "NASDAQ 100",
@@ -60,8 +57,9 @@ int intradayLineExtensionBars = input.int(defval = 40, title = "Line Extension (
 
 // 🧮 DATA & CALCULATIONS
 f_clearLines(array<line> lines) =>
-    if array.size(id = lines) > 0
-        for lineIndex = 0 to array.size(id = lines) - 1
+    int lineCount = array.size(id = lines)
+    if lineCount > 0
+        for lineIndex = 0 to lineCount - 1
             line.delete(id = array.get(id = lines, index = lineIndex))
     array.clear(id = lines)
 
@@ -72,8 +70,9 @@ f_trimFloatArray(array<float> values, int maxSize) =>
 f_isVisibleIntradayLevel(array<float> levels, float referencePrice, float candidateLevel, int visiblePerSide, bool isResistance) =>
     bool isOnCorrectSide = isResistance ? candidateLevel > referencePrice : candidateLevel < referencePrice
     int closerLevels = 0
-    if isOnCorrectSide and array.size(id = levels) > 0
-        for levelIndex = 0 to array.size(id = levels) - 1
+    int levelCount = array.size(id = levels)
+    if isOnCorrectSide and levelCount > 0
+        for levelIndex = 0 to levelCount - 1
             float level = array.get(id = levels, index = levelIndex)
             bool countsAsCloser = isResistance ? level > referencePrice and level < candidateLevel : level < referencePrice and level > candidateLevel
             if countsAsCloser
@@ -108,13 +107,15 @@ f_selectRepeatedLevels(array<float> candidates, int maxLevels, float tolerance) 
     array<float> clusterPrices = array.new<float>()
     array<int> clusterCounts = array.new<int>()
 
-    if array.size(id = candidates) > 0
-        for candidateIndex = 0 to array.size(id = candidates) - 1
+    int candidateCount = array.size(id = candidates)
+    if candidateCount > 0
+        for candidateIndex = 0 to candidateCount - 1
             float candidatePrice = array.get(id = candidates, index = candidateIndex)
             int matchingCluster = -1
             float matchingDistance = na
-            if array.size(id = clusterPrices) > 0
-                for clusterIndex = 0 to array.size(id = clusterPrices) - 1
+            int clusterCount = array.size(id = clusterPrices)
+            if clusterCount > 0
+                for clusterIndex = 0 to clusterCount - 1
                     float clusterPrice = array.get(id = clusterPrices, index = clusterIndex)
                     float clusterDistance = math.abs(candidatePrice - clusterPrice)
                     if clusterDistance <= tolerance and (na(matchingDistance) or clusterDistance < matchingDistance)
@@ -131,8 +132,9 @@ f_selectRepeatedLevels(array<float> candidates, int maxLevels, float tolerance) 
                 array.set(id = clusterCounts, index = matchingCluster, value = updatedCount)
                 array.set(id = clusterPrices, index = matchingCluster, value = updatedPrice)
 
-    if array.size(id = clusterPrices) > 1
-        for outerIndex = 1 to array.size(id = clusterPrices) - 1
+    int sortedClusterCount = array.size(id = clusterPrices)
+    if sortedClusterCount > 1
+        for outerIndex = 1 to sortedClusterCount - 1
             float sortPrice = array.get(id = clusterPrices, index = outerIndex)
             int sortCount = array.get(id = clusterCounts, index = outerIndex)
             int innerIndex = outerIndex - 1
@@ -144,8 +146,8 @@ f_selectRepeatedLevels(array<float> candidates, int maxLevels, float tolerance) 
             array.set(id = clusterCounts, index = innerIndex + 1, value = sortCount)
 
     array<float> selectedLevels = array.new<float>()
-    if array.size(id = clusterPrices) > 0
-        for selectedIndex = 0 to array.size(id = clusterPrices) - 1
+    if sortedClusterCount > 0
+        for selectedIndex = 0 to sortedClusterCount - 1
             if array.get(id = clusterCounts, index = selectedIndex) >= 2
                 array.push(id = selectedLevels, value = array.get(id = clusterPrices, index = selectedIndex))
                 if array.size(id = selectedLevels) >= maxLevels
@@ -209,7 +211,7 @@ var array<float> longTermLowHistory = array.new<float>()
 var array<float> longTermAboveLevels = array.new<float>()
 var array<float> longTermBelowLevels = array.new<float>()
 var array<line> renderedLines = array.new<line>()
-int longTermLookbackBars = f_lookbackBars(structureTimeframe = longTermTimeframe, tradingDays = longTermLookbackDays)
+var int longTermLookbackBars = f_lookbackBars(structureTimeframe = longTermTimeframe, tradingDays = longTermLookbackDays)
 
 if inRegularSession and isCurrentTradingDay and (na(latestRegularSessionDayKey) or regularSessionDayKey != latestRegularSessionDayKey)
     latestRegularSessionDayKey := regularSessionDayKey
@@ -293,7 +295,7 @@ plotcandle(
  )
 
 plot(
-     useCandles ? na : deltaClose,
+     series = useCandles ? na : deltaClose,
      title = "Volume Delta (Line)",
      color = lineColor,
      style = plot.style_line,
@@ -302,13 +304,15 @@ plot(
 
 hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD1 : na, linestyle = hline.style_solid, linewidth = 4, editable = true)
 
+// 🖊️ RENDERING
 if barstate.islastconfirmedhistory or barstate.islast
     f_clearLines(lines = renderedLines)
     bool showCurrentSessionIntraday = latestRegularSessionDayKey == currentTradingDayKey
 
     if showIntradayStructure and showCurrentSessionIntraday
-        if array.size(id = intradayResistanceLevels) > 0
-            for resistanceIndex = 0 to array.size(id = intradayResistanceLevels) - 1
+        int resistanceLevelCount = array.size(id = intradayResistanceLevels)
+        if resistanceLevelCount > 0
+            for resistanceIndex = 0 to resistanceLevelCount - 1
                 float resistanceLevel = array.get(id = intradayResistanceLevels, index = resistanceIndex)
                 int resistanceBar = array.get(id = intradayResistanceBars, index = resistanceIndex)
                 bool showResistanceLevel = f_isVisibleIntradayLevel(levels = intradayResistanceLevels, referencePrice = deltaClose, candidateLevel = resistanceLevel, visiblePerSide = intradayVisibleLevelsPerSide, isResistance = true)
@@ -316,8 +320,9 @@ if barstate.islastconfirmedhistory or barstate.islast
                     int resistanceEndBar = resistanceBar + intradayLineExtensionBars
                     line resistanceLine = line.new(x1 = resistanceBar, y1 = resistanceLevel, x2 = resistanceEndBar, y2 = resistanceLevel, xloc = xloc.bar_index, extend = extend.none, color = intradayStructureColor, width = INTRADAY_LINE_WIDTH, style = line.style_solid)
                     array.push(id = renderedLines, value = resistanceLine)
-        if array.size(id = intradaySupportLevels) > 0
-            for supportIndex = 0 to array.size(id = intradaySupportLevels) - 1
+        int supportLevelCount = array.size(id = intradaySupportLevels)
+        if supportLevelCount > 0
+            for supportIndex = 0 to supportLevelCount - 1
                 float supportLevel = array.get(id = intradaySupportLevels, index = supportIndex)
                 int supportBar = array.get(id = intradaySupportBars, index = supportIndex)
                 bool showSupportLevel = f_isVisibleIntradayLevel(levels = intradaySupportLevels, referencePrice = deltaClose, candidateLevel = supportLevel, visiblePerSide = intradayVisibleLevelsPerSide, isResistance = false)
@@ -327,15 +332,17 @@ if barstate.islastconfirmedhistory or barstate.islast
                     array.push(id = renderedLines, value = supportLine)
 
     if showLongTermStructure
-        if array.size(id = longTermAboveLevels) > 0
-            for aboveIndex = 0 to array.size(id = longTermAboveLevels) - 1
+        int aboveLevelCount = array.size(id = longTermAboveLevels)
+        if aboveLevelCount > 0
+            for aboveIndex = 0 to aboveLevelCount - 1
                 float aboveLevel = array.get(id = longTermAboveLevels, index = aboveIndex)
-                int aboveWidth = math.min(array.size(id = longTermAboveLevels) - aboveIndex, 6)
+                int aboveWidth = math.min(aboveLevelCount - aboveIndex, 6)
                 line aboveLine = line.new(x1 = bar_index - 1, y1 = aboveLevel, x2 = bar_index, y2 = aboveLevel, xloc = xloc.bar_index, extend = extend.both, color = color.new(color = NORD8, transp = 60), width = aboveWidth, style = line.style_solid)
                 array.push(id = renderedLines, value = aboveLine)
-        if array.size(id = longTermBelowLevels) > 0
-            for belowIndex = 0 to array.size(id = longTermBelowLevels) - 1
+        int belowLevelCount = array.size(id = longTermBelowLevels)
+        if belowLevelCount > 0
+            for belowIndex = 0 to belowLevelCount - 1
                 float belowLevel = array.get(id = longTermBelowLevels, index = belowIndex)
-                int belowWidth = math.min(array.size(id = longTermBelowLevels) - belowIndex, 6)
+                int belowWidth = math.min(belowLevelCount - belowIndex, 6)
                 line belowLine = line.new(x1 = bar_index - 1, y1 = belowLevel, x2 = bar_index, y2 = belowLevel, xloc = xloc.bar_index, extend = extend.both, color = color.new(color = NORD11, transp = 60), width = belowWidth, style = line.style_solid)
                 array.push(id = renderedLines, value = belowLine)
