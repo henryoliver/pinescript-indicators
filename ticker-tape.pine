@@ -40,42 +40,24 @@ type TickData
     int   time     // Timestamp (milliseconds)
     float bid      // Bid price at time of execution
     float ask      // Ask price at time of execution
+    int   direction // 1 = buy/up, -1 = sell/down, 0 = neutral/unknown
 
 // 🎛️ USER INPUT SETTINGS
 
 // Input Groups
-const string GROUP_TABLE = "📋 Table Settings"
-const string GROUP_LAYOUT = "📐 Layout & Sizing"
-const string GROUP_GENERAL = "⚙️ General Settings"
-const string GROUP_INSTITUTIONAL = "🏦 Institutional Settings"
-const string GROUP_RETAIL = "🛍️ Retail Settings"
-const string GROUP_CLUSTER = "🧩 Cluster Detection"
-
-// Table Settings
-tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = GROUP_TABLE)
-textSize = input.string(defval = "small", title = "Text Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_TABLE)
-fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], group = GROUP_TABLE)
-headerTextAlign = input.string(defval = "center", title = "Header Text Alignment", options = ["left", "center", "right"], tooltip = "Text alignment for header row", group = GROUP_TABLE)
-timeColumnAlign = input.string(defval = "center", title = "Time Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
-priceColumnAlign = input.string(defval = "center", title = "Price Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
-sizeColumnAlign = input.string(defval = "center", title = "Size Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
-condColumnAlign = input.string(defval = "center", title = "Cond Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
-
-// Layout Settings
-headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
-dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
-columnWidth = input.float(defval = 2.5, title = "Column Width (all columns)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Width applied to all columns", group = GROUP_LAYOUT)
-frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, inline = "frame", group = GROUP_LAYOUT)
-frameColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "frame", group = GROUP_LAYOUT)
-borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, inline = "border", group = GROUP_LAYOUT)
-borderColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "border", group = GROUP_LAYOUT)
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_TABLE = "📋 Table"
+const string GROUP_LAYOUT = "📐 Layout"
+const string GROUP_RETAIL = "🛍️ Retail / Amateur"
+const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
 
 // General Settings
-showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Orders", tooltip = "Filter to show only orders above ask (aggressive buy) or below bid (aggressive sell). Hides mid-spread, at bid, and at ask orders.", group = GROUP_GENERAL)
+showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
+
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all)", group = GROUP_GENERAL)
-largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted. Set to 0 to disable large order highlighting.", group = GROUP_GENERAL)
+largeOrderSize = input.int(defval = 10000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted. Set to 0 to disable large order highlighting.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Large Order Text", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(NORD10, 40), title = "Large Order BG", inline = "large", group = GROUP_GENERAL)
 largeOrderBold = input.bool(defval = true, title = "Bold", inline = "large", group = GROUP_GENERAL)
@@ -92,35 +74,44 @@ belowBidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Below 
 belowBidBackgroundColor = input.color(defval = color.new(NORD11, 50), title = "Below Bid BG", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBold = input.bool(defval = true, title = "Bold", inline = "below_bid", group = GROUP_GENERAL)
 
-// Institutional Settings
+// Table Settings
+tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = GROUP_TABLE)
+textSize = input.string(defval = "normal", title = "Text Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_TABLE)
+fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], group = GROUP_TABLE)
+headerTextAlign = input.string(defval = "center", title = "Header Text Alignment", options = ["left", "center", "right"], tooltip = "Text alignment for header row", group = GROUP_TABLE)
+timeColumnAlign = input.string(defval = "center", title = "Time Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
+priceColumnAlign = input.string(defval = "center", title = "Price Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
+sizeColumnAlign = input.string(defval = "center", title = "Size Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
+condColumnAlign = input.string(defval = "center", title = "Cond Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
+
+// Layout Settings
+headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
+dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
+columnWidth = input.float(defval = 4.5, title = "Column Width (all columns)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Width applied to all columns", group = GROUP_LAYOUT)
+frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, inline = "frame", group = GROUP_LAYOUT)
+frameColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "frame", group = GROUP_LAYOUT)
+borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, inline = "border", group = GROUP_LAYOUT)
+borderColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "border", group = GROUP_LAYOUT)
+
+// Retail / Amateur Settings
+showRetail = input.bool(defval = true, title = "Show Retail/Amateur", group = GROUP_RETAIL)
+retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, group = GROUP_RETAIL)
+retailMinSize = input.int(defval = 1, title = "Retail Min Size", minval = 0, step = 1, group = GROUP_RETAIL)
+retailMaxSize = input.int(defval = 300, title = "Retail Max Size", minval = 0, step = 1, group = GROUP_RETAIL)
+retailHeaderBg = input.color(defval = color.new(NORD2, 80), title = "Retail Header BG", group = GROUP_RETAIL)
+
+// Professional / Institutional Settings
 showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", group = GROUP_INSTITUTIONAL)
 institutionalRows = input.int(defval = 10, title = "Institutional Rows", minval = 1, maxval = 50, group = GROUP_INSTITUTIONAL)
 institutionalMinSize = input.int(defval = 500, title = "Institutional Min Size", minval = 0, step = 1, group = GROUP_INSTITUTIONAL)
-institutionalMaxSize = input.int(defval = 5000, title = "Institutional Max Size", minval = 0, step = 1, group = GROUP_INSTITUTIONAL)
-institutionalClusterMinSize = input.int(defval = 1000, title = "Institutional Cluster Min Size", minval = 0, step = 1, tooltip = "Minimum order size to count toward institutional clusters. Set to 0 to disable.", group = GROUP_INSTITUTIONAL)
+institutionalMaxSize = input.int(defval = 100000, title = "Institutional Max Size", minval = 0, step = 1, group = GROUP_INSTITUTIONAL)
 institutionalHeaderBg = input.color(defval = color.new(NORD1, 80), title = "Institutional Header BG", group = GROUP_INSTITUTIONAL)
 
-// Retail Settings
-showRetail = input.bool(defval = true, title = "Show Retail/Amateur", group = GROUP_RETAIL)
-retailRows = input.int(defval = 10, title = "Retail Rows", minval = 1, maxval = 50, group = GROUP_RETAIL)
-retailMinSize = input.int(defval = 1, title = "Retail Min Size", minval = 0, step = 1, group = GROUP_RETAIL)
-retailMaxSize = input.int(defval = 300, title = "Retail Max Size", minval = 0, step = 1, group = GROUP_RETAIL)
-retailClusterMinSize = input.int(defval = 100, title = "Retail Cluster Min Size", minval = 0, step = 1, tooltip = "Minimum order size to count toward retail clusters. Set to 0 to disable.", group = GROUP_RETAIL)
-retailHeaderBg = input.color(defval = color.new(NORD2, 80), title = "Retail Header BG", group = GROUP_RETAIL)
-
-// Cluster Detection Settings
-highlightClusters = input.bool(defval = true, title = "Highlight Clusters", tooltip = "Highlight bursts of large orders in the same direction within the time window.", group = GROUP_CLUSTER)
-clusterSize = input.int(defval = 3, title = "Cluster Size", minval = 2, maxval = 10, tooltip = "Number of large trades in the same direction to form a cluster.", group = GROUP_CLUSTER)
-clusterWindowSeconds = input.int(defval = 30, title = "Cluster Window (seconds)", minval = 5, maxval = 300, tooltip = "Time window to count clustered trades.", group = GROUP_CLUSTER)
-clusterBackgroundColor = input.color(defval = color.new(NORD15, 0), title = "Cluster BG", inline = "cluster_colors", group = GROUP_CLUSTER)
-clusterTextColor = input.color(defval = color.new(NORD6, 0), title = "Cluster Text", inline = "cluster_colors", group = GROUP_CLUSTER)
-clusterBold = input.bool(defval = true, title = "Bold", inline = "cluster_colors", group = GROUP_CLUSTER)
-
 // 🧮 DATA & CALCULATIONS
-int instRowsActive = showInstitutional ? institutionalRows : 0
 int retailRowsActive = showRetail ? retailRows : 0
+int instRowsActive = showInstitutional ? institutionalRows : 0
 bool showGap = showInstitutional and showRetail
-int totalRows = math.max(1, (showInstitutional ? (2 + instRowsActive) : 0) + (showGap ? 1 : 0) + (showRetail ? (2 + retailRowsActive) : 0))
+int totalRows = math.max(1, (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0))
 
 f_inRange(float value, int minValue, int maxValue) =>
     value >= minValue and (maxValue <= 0 or value <= maxValue)
@@ -143,21 +134,84 @@ varip array<TickData> retailTicks = array.new<TickData>()
 
 // Track the last processed tick count to avoid reprocessing the same ticks
 varip int lastProcessedTickCount = 0
+varip float lastProcessedTapePrice = na
+varip float lastRecordedTickPrice = na
+varip float lastRecordedTickVolume = na
+varip int lastRecordedTickTime = na
+varip int lastRecordedTickDirection = na
+varip float lastSeenTailPrice = na
+varip float lastSeenTailVolume = na
+varip int lastSeenTailTime = na
+varip float lastRealtimeBarVolume = na
+varip float lastRealtimeBarPrice = na
+varip int lastRealtimeUpdateTime = na
 
 // TICK PROCESSING
 // Keep the tape rolling across bars; row caps trim the oldest visible records automatically.
 if barstate.isnew
     lastProcessedTickCount := 0
+    lastRealtimeBarVolume := 0.0
+    lastRealtimeBarPrice := close
+    lastRealtimeUpdateTime := timenow
+
+f_hasValidQuotes(float tickBid, float tickAsk) =>
+    not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
+
+f_syntheticDirection(float currentPrice, float previousPrice) =>
+    na(previousPrice) ? 0 : currentPrice > previousPrice ? 1 : currentPrice < previousPrice ? -1 : 0
+
+f_classifyDirection(float currentPrice, float tickBid, float tickAsk, float previousPrice) =>
+    bool hasQuotes = f_hasValidQuotes(tickBid, tickAsk)
+    int quoteDirection = hasQuotes ? currentPrice >= tickAsk ? 1 : currentPrice <= tickBid ? -1 : 0 : 0
+    int syntheticDirection = f_syntheticDirection(currentPrice, previousPrice)
+    quoteDirection != 0 ? quoteDirection : syntheticDirection
+
+f_isDuplicatePrint(float currentPrice, float currentVolume, int currentTime, int currentDirection) =>
+    currentTime == lastRecordedTickTime and currentDirection == lastRecordedTickDirection and currentPrice == lastRecordedTickPrice and currentVolume == lastRecordedTickVolume
+
+f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
+    int insertIndex = 0
+    int tickCount = array.size(id = ticks)
+    while insertIndex < tickCount and array.get(id = ticks, index = insertIndex).time > newTick.time
+        insertIndex += 1
+    array.insert(id = ticks, index = insertIndex, value = newTick)
+    if array.size(id = ticks) > maxRows
+        array.pop(id = ticks)
+
+f_storeTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk, int tickDirection) =>
+    bool inInstitutionalRange = showInstitutional and f_inRange(tickVolume, institutionalMinSize, institutionalMaxSize)
+    bool inRetailRange = showRetail and f_inRange(tickVolume, retailMinSize, retailMaxSize)
+    bool passesSectionFilter = inInstitutionalRange or inRetailRange
+    bool isDuplicatePrint = f_isDuplicatePrint(tickPrice, tickVolume, tickTime, tickDirection)
+    if passesSectionFilter and not isDuplicatePrint
+        TickData newTick = TickData.new(
+            price = tickPrice,
+            volume = tickVolume,
+            time = tickTime,
+            bid = tickBid,
+            ask = tickAsk,
+            direction = tickDirection
+        )
+        if inInstitutionalRange and instRowsActive > 0
+            f_insertSortedTick(ticks = institutionalTicks, newTick = newTick, maxRows = instRowsActive)
+        else if inRetailRange and retailRowsActive > 0
+            f_insertSortedTick(ticks = retailTicks, newTick = newTick, maxRows = retailRowsActive)
+    not isDuplicatePrint and passesSectionFilter
 
 // Get the number of ticks available in the current bar
 int availableTickCount = tickPrices.size()
-bool newTicksThisExec = availableTickCount > lastProcessedTickCount
+float currentTailPrice = availableTickCount > 0 ? tickPrices.get(availableTickCount - 1) : na
+float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
+int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
+bool tailTickChanged = availableTickCount > 0 and (currentTailPrice != lastSeenTailPrice or currentTailVolume != lastSeenTailVolume or currentTailTime != lastSeenTailTime)
+bool newTicksThisExec = availableTickCount > lastProcessedTickCount or tailTickChanged
 
 // Only process NEW ticks that we haven't seen yet
 // This prevents duplicate processing and performance issues
 if newTicksThisExec
-    // Process only the NEW ticks (from lastProcessedTickCount to end)
-    for tickIndex = lastProcessedTickCount to availableTickCount - 1
+    int processStartIndex = availableTickCount > lastProcessedTickCount ? lastProcessedTickCount : math.max(availableTickCount - 1, 0)
+    // Process only the NEW ticks, or the changed tail tick when the last element updates in place.
+    for tickIndex = processStartIndex to availableTickCount - 1
         // Step 1: Extract tick data from arrays
         float currentTickPrice = tickPrices.get(tickIndex)
         float currentTickVolume = tickVolumes.get(tickIndex)
@@ -165,46 +219,52 @@ if newTicksThisExec
         float currentTickBid = tickBids.get(tickIndex)
         float currentTickAsk = tickAsks.get(tickIndex)
 
-        // Step 2: Validate - only add ticks with complete AND valid data
-        // Optimized: combine all checks in one boolean expression
-        bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and not na(currentTickBid) and not na(currentTickAsk) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickBid > 0 and currentTickAsk > 0 and currentTickTime > 0
+        // Step 2: Validate - accept core print data even when quote fields are unavailable.
+        bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
 
         if isCompleteRecord
             // Step 3: Apply user-defined filters
             bool passesMinimumSize = currentTickVolume >= minimumSize
+            int currentTickDirection = f_classifyDirection(currentTickPrice, currentTickBid, currentTickAsk, lastProcessedTapePrice)
+            bool isDuplicatePrint = f_isDuplicatePrint(currentTickPrice, currentTickVolume, currentTickTime, currentTickDirection)
 
             // Treat prints at/through the ask as buy-side aggressive and at/through the bid as sell-side aggressive.
-            bool isAboveAsk = currentTickPrice >= currentTickAsk
-            bool isBelowBid = currentTickPrice <= currentTickBid
-            bool passesAggressiveFilter = not showAggressiveOnly or (isAboveAsk or isBelowBid)
+            bool passesAggressiveFilter = not showAggressiveOnly or currentTickDirection != 0
 
-            // Step 4: Only add to persistent storage if passes all filters and section size ranges
-            bool inInstitutionalRange = showInstitutional and f_inRange(currentTickVolume, institutionalMinSize, institutionalMaxSize)
-            bool inRetailRange = showRetail and f_inRange(currentTickVolume, retailMinSize, retailMaxSize)
-            bool passesSectionFilter = inInstitutionalRange or inRetailRange
+            if passesMinimumSize and passesAggressiveFilter and not isDuplicatePrint
+                bool storedTick = f_storeTick(currentTickPrice, currentTickVolume, currentTickTime, currentTickBid, currentTickAsk, currentTickDirection)
+                if storedTick
+                    lastRecordedTickPrice := currentTickPrice
+                    lastRecordedTickVolume := currentTickVolume
+                    lastRecordedTickTime := currentTickTime
+                    lastRecordedTickDirection := currentTickDirection
 
-            if passesMinimumSize and passesAggressiveFilter and passesSectionFilter
-                // Create structured TickData record
-                TickData newTick = TickData.new(
-                    price = currentTickPrice,
-                    volume = currentTickVolume,
-                    time = currentTickTime,
-                    bid = currentTickBid,
-                    ask = currentTickAsk
-                )
-
-                // Add to the appropriate section (institutional takes priority if ranges overlap)
-                if inInstitutionalRange and instRowsActive > 0
-                    array.unshift(institutionalTicks, newTick)
-                    while array.size(institutionalTicks) > instRowsActive
-                        array.pop(institutionalTicks)
-                else if inRetailRange and retailRowsActive > 0
-                    array.unshift(retailTicks, newTick)
-                    while array.size(retailTicks) > retailRowsActive
-                        array.pop(retailTicks)
+            lastProcessedTapePrice := currentTickPrice
 
     // Update the last processed tick count to prevent reprocessing
     lastProcessedTickCount := availableTickCount
+    lastSeenTailPrice := currentTailPrice
+    lastSeenTailVolume := currentTailVolume
+    lastSeenTailTime := currentTailTime
+
+bool noFreshLowerTfUpdate = not newTicksThisExec
+if barstate.isrealtime
+    float realtimeVolumeDelta = math.max(volume - nz(lastRealtimeBarVolume), 0)
+    bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != lastRealtimeUpdateTime
+    if realtimePrintReady and noFreshLowerTfUpdate
+        int realtimeDirection = f_classifyDirection(close, bid, ask, lastProcessedTapePrice)
+        bool passesAggressiveFilter = not showAggressiveOnly or realtimeDirection != 0
+        if passesAggressiveFilter
+            bool storedTick = f_storeTick(close, realtimeVolumeDelta, timenow, bid, ask, realtimeDirection)
+            if storedTick
+                lastRecordedTickPrice := close
+                lastRecordedTickVolume := realtimeVolumeDelta
+                lastRecordedTickTime := timenow
+                lastRecordedTickDirection := realtimeDirection
+                lastProcessedTapePrice := close
+    lastRealtimeBarVolume := volume
+    lastRealtimeBarPrice := close
+    lastRealtimeUpdateTime := timenow
 
 // PRECOMPUTED VALUES & HELPERS
 // Convert text alignment strings to constants
@@ -216,31 +276,6 @@ condAlignValue = condColumnAlign == "left" ? text.align_left : condColumnAlign =
 
 // Build price format string
 priceFormat = priceDecimals <= 1 ? "#,###.0" : priceDecimals == 2 ? "#,###.00" : priceDecimals == 3 ? "#,###.000" : "#,###.0000"
-
-// Cluster detection helpers
-clusterWindowMs = clusterWindowSeconds * 1000
-
-f_direction(TickData tickData) =>
-    tickData.price >= tickData.ask ? 1 : tickData.price <= tickData.bid ? -1 : 0
-
-f_clusterCount(array<TickData> ticks, int idx, int minClusterSize) =>
-    if not highlightClusters or minClusterSize <= 0
-        0
-    else
-        TickData base = array.get(ticks, idx)
-        int dir = f_direction(base)
-        if dir == 0 or base.volume < minClusterSize
-            0
-        else
-            int count = 0
-            int total = array.size(ticks)
-            for j = 0 to total - 1
-                TickData other = array.get(ticks, j)
-                bool sameDir = f_direction(other) == dir
-                bool inWindow = math.abs(base.time - other.time) <= clusterWindowMs
-                if sameDir and other.volume >= minClusterSize and inWindow
-                    count += 1
-            count
 
 // Convert table position string to position constant
 tablePos = switch tablePosition
@@ -258,29 +293,42 @@ tablePos = switch tablePosition
 // Create table (var = initialized once, persists across bars)
 var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = backgroundColor, border_width = borderWidth, border_color = borderColor, frame_width = frameWidth, frame_color = frameColor)
 
-f_renderTickRow(int tableRow, TickData currentTick, int clusterCount) =>
+f_renderTickRow(int tableRow, TickData currentTick) =>
     string conditionText = "mid"
     color tickTextColor = defaultTextColor
     color tickBgColor = backgroundColor
     bool useBold = false
+    bool hasValidQuotes = f_hasValidQuotes(currentTick.bid, currentTick.ask)
 
-    if currentTick.price > currentTick.ask
+    if currentTick.direction > 0
         conditionText := "above ask"
         tickTextColor := aboveAskTextColor
         tickBgColor := aboveAskBackgroundColor
         if aboveAskBold
             useBold := true
-    else if currentTick.price == currentTick.ask
-        conditionText := "at ask"
-        tickTextColor := askTextColor
-        tickBgColor := askBackgroundColor
-    else if currentTick.price < currentTick.bid
+        if hasValidQuotes and currentTick.price == currentTick.ask
+            conditionText := "at ask"
+            tickTextColor := askTextColor
+            tickBgColor := askBackgroundColor
+        else if not hasValidQuotes
+            conditionText := "above price"
+    else if currentTick.direction < 0
         conditionText := "below bid"
         tickTextColor := belowBidTextColor
         tickBgColor := belowBidBackgroundColor
         if belowBidBold
             useBold := true
-    else if currentTick.price == currentTick.bid
+        if hasValidQuotes and currentTick.price == currentTick.bid
+            conditionText := "at bid"
+            tickTextColor := bidTextColor
+            tickBgColor := bidBackgroundColor
+        else if not hasValidQuotes
+            conditionText := "below price"
+    else if hasValidQuotes and currentTick.price == currentTick.ask
+        conditionText := "at ask"
+        tickTextColor := askTextColor
+        tickBgColor := askBackgroundColor
+    else if hasValidQuotes and currentTick.price == currentTick.bid
         conditionText := "at bid"
         tickTextColor := bidTextColor
         tickBgColor := bidBackgroundColor
@@ -291,28 +339,15 @@ f_renderTickRow(int tableRow, TickData currentTick, int clusterCount) =>
         if largeOrderBold
             useBold := true
 
-    bool clusterActive = highlightClusters and clusterCount >= clusterSize
-    if clusterActive
-        tickBgColor := clusterBackgroundColor
-        tickTextColor := clusterTextColor
-        if clusterBold
-            useBold := true
-        conditionText := conditionText + " CLx" + str.tostring(clusterCount)
-
     string timeText = str.format_time(time = currentTick.time, format = timeFormat, timezone = syminfo.timezone)
-    string priceText = str.tostring(currentTick.price, priceFormat)
-    string volumeText = str.tostring(currentTick.volume)
+    string priceText = str.tostring(value = currentTick.price, format = priceFormat)
+    string volumeText = str.tostring(value = currentTick.volume)
+    rowFormatting = useBold ? text.format_bold : text.format_none
 
-    table.cell(table_id = tapeTable, column = 0, row = tableRow, text = timeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 1, row = tableRow, text = priceText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 2, row = tableRow, text = volumeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 3, row = tableRow, text = conditionText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = tickBgColor)
-
-    if useBold
-        table.cell_set_text_formatting(tapeTable, 0, tableRow, text.format_bold)
-        table.cell_set_text_formatting(tapeTable, 1, tableRow, text.format_bold)
-        table.cell_set_text_formatting(tapeTable, 2, tableRow, text.format_bold)
-        table.cell_set_text_formatting(tapeTable, 3, tableRow, text.format_bold)
+    table.cell(table_id = tapeTable, column = 0, row = tableRow, text = timeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
+    table.cell(table_id = tapeTable, column = 1, row = tableRow, text = priceText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
+    table.cell(table_id = tapeTable, column = 2, row = tableRow, text = volumeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
+    table.cell(table_id = tapeTable, column = 3, row = tableRow, text = conditionText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
 
 f_clearTickRow(int tableRow) =>
     table.cell(table_id = tapeTable, column = 0, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
@@ -320,15 +355,14 @@ f_clearTickRow(int tableRow) =>
     table.cell(table_id = tapeTable, column = 2, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
     table.cell(table_id = tapeTable, column = 3, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
 
-f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int startRow, int clusterMinSize) =>
+f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int startRow) =>
     if rowsActive > 0
         int rowsToRender = math.min(tickCount, rowsActive)
         if rowsToRender > 0
             for tickIndex = 0 to rowsToRender - 1
-                TickData currentTick = array.get(ticks, tickIndex)
+                TickData currentTick = array.get(id = ticks, index = tickIndex)
                 int tableRow = startRow + tickIndex
-                int clusterCount = f_clusterCount(ticks, tickIndex, clusterMinSize)
-                f_renderTickRow(tableRow, currentTick, clusterCount)
+                f_renderTickRow(tableRow, currentTick)
         if rowsToRender < rowsActive
             for clearIndex = rowsToRender to rowsActive - 1
                 f_clearTickRow(startRow + clearIndex)
@@ -350,8 +384,8 @@ f_renderHeader(int row, color headerBg) =>
 // ===================================================================
 if barstate.islast
     // Get current tick count
-    int instTickCount = array.size(institutionalTicks)
-    int retailTickCount = array.size(retailTicks)
+    int instTickCount = array.size(id = institutionalTicks)
+    int retailTickCount = array.size(id = retailTicks)
     int cursorRow = 0
     int instLabelRow = na
     int instHeaderRow = na
@@ -382,21 +416,21 @@ if barstate.islast
         cursorRow += retailRowsActive
 
     if showInstitutional
-        table.merge_cells(tapeTable, 0, instLabelRow, 3, instLabelRow)
+        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = instLabelRow, end_column = 3, end_row = instLabelRow)
         table.cell(table_id = tapeTable, column = 0, row = instLabelRow, text = "INSTITUTIONAL / PRO", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = institutionalHeaderBg)
         f_renderHeader(instHeaderRow, backgroundColor)
 
     if showGap
-        table.merge_cells(tapeTable, 0, gapRow, 3, gapRow)
+        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = gapRow, end_column = 3, end_row = gapRow)
         table.cell(table_id = tapeTable, column = 0, row = gapRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
 
     if showRetail
-        table.merge_cells(tapeTable, 0, retailLabelRow, 3, retailLabelRow)
+        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = retailLabelRow, end_column = 3, end_row = retailLabelRow)
         table.cell(table_id = tapeTable, column = 0, row = retailLabelRow, text = "RETAIL / AMATEUR", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = retailHeaderBg)
         f_renderHeader(retailHeaderRow, backgroundColor)
 
     if showInstitutional and instRowsActive > 0
-        f_renderTickSection(institutionalTicks, instTickCount, instRowsActive, instStartRow, institutionalClusterMinSize)
+        f_renderTickSection(institutionalTicks, instTickCount, instRowsActive, instStartRow)
 
     if showRetail and retailRowsActive > 0
-        f_renderTickSection(retailTicks, retailTickCount, retailRowsActive, retailStartRow, retailClusterMinSize)
+        f_renderTickSection(retailTicks, retailTickCount, retailRowsActive, retailStartRow)
