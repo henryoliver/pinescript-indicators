@@ -3,7 +3,7 @@
 // Moving Average with Trend Indicator
 
 //@version=6
-indicator(title = "MAs & Waves", shorttitle = "🌊 MA&W", overlay = true, calc_bars_count = 300, max_labels_count = 500)
+indicator(title = "MAs & Waves", shorttitle = "🌊 MA&W", overlay = true, calc_bars_count = 5000, max_labels_count = 500)
 
 // 🧱 CONSTANTS
 const string GROUP_TREND = "📈 Trend"
@@ -36,6 +36,15 @@ const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 const color TREND_FLAT_COLOR = NORD2
 
+const float CYCLE_LOW_BOUNDARY = 45.0
+const float CYCLE_HIGH_BOUNDARY = 55.0
+const string DOT_GLYPH = "●"
+const string SIZE_OPTION_TINY = "Tiny"
+const string SIZE_OPTION_SMALL = "Small"
+const string SIZE_OPTION_NORMAL = "Normal"
+const string SIZE_OPTION_LARGE = "Large"
+const string SIZE_OPTION_HUGE = "Huge"
+
 const string ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 // 🧩 TYPE DEFINITIONS
@@ -48,8 +57,24 @@ type Trend
     TrendDir direction
     color plotColor
 
-type Cycle
-    int XXXXX
+enum CycleZone
+    HIGH
+    LOW
+
+type ExtremeBar
+    float price
+    int barIndex
+    label dotLabel
+
+type CycleStatus
+    CycleZone activeCycleZone
+    bool startedHighCycle
+    bool startedLowCycle
+
+type CycleSnapshot
+    CycleZone activeCycleZone
+    ExtremeBar highCycleExtremeBar
+    ExtremeBar lowCycleExtremeBar
 
 type Wave
     int number
@@ -57,89 +82,144 @@ type Wave
     float lastImpulseHigh
     float lastImpulseLow
 
-type Price
-    float close
-    bool isExtreme
-    bool isHigherHigh
-    bool isLowerLow
-
 // 🎛️ USER INPUT SETTINGS
 
 // Trend Settings
 trendSource = input.source(defval = close, title = "Source", group = GROUP_TREND)
 trendSmaLength = input.int(defval = 50, title = "SMA Length", minval = 1, group = GROUP_TREND)
 trendSmaOffset = input.int(defval = 0, title = "SMA Offset", minval = -500, maxval = 500, display = display.none, group = GROUP_TREND)
-trendSlopeLookback = input.int(defval = 1, title = "Slope Lookback (Bars)", minval = 1, maxval = 20,
-     tooltip = "Number of bars to look back when calculating the slope", group = GROUP_TREND)
-trendFlatThreshold = input.float(defval = 0.0001, title = "Flat Threshold", minval = 0.0001, maxval = 10.0, step = 0.0001,
-     tooltip = "Per-bar SMA slope threshold; values between -threshold and +threshold are flat", group = GROUP_TREND)
+trendFlatThreshold = input.float(defval = 0.001, title = "Flat Threshold", minval = 0.0, maxval = 10.0, step = 0.0001,
+     tooltip = "Minimum one-bar change in the 50MA required to mark the line as up or down. Smaller values react faster; larger values classify more bars as flat.", group = GROUP_TREND)
 
 // Cycle Settings
 stochLength = input.int(defval = 5, title = "K Length", minval = 1, group = GROUP_CYCLE)
 stochSmooth = input.int(defval = 2, title = "K Smooth", minval = 1, group = GROUP_CYCLE)
 stochDLength = input.int(defval = 3, title = "D Length", minval = 1, group = GROUP_CYCLE)
+cycleHighDotOffsetTicks = input.float(defval = 10.0, title = "High Dot Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_CYCLE)
+cycleLowDotOffsetTicks = input.float(defval = 10.0, title = "Low Dot Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_CYCLE)
 
 // Wave Settings
 waveLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Color", group = GROUP_WAVES)
-waveLabelSizeOpt = input.string(defval = "Normal", title = "Label Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_WAVES)
+waveLabelSizeOpt = input.string(defval = SIZE_OPTION_NORMAL, title = "Label Size", options = [SIZE_OPTION_TINY, SIZE_OPTION_SMALL, SIZE_OPTION_NORMAL, SIZE_OPTION_LARGE, SIZE_OPTION_HUGE], group = GROUP_WAVES)
 waveLabelOffsetTop = input.float(defval = 10.0, title = "Top Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelOffsetBottom = input.float(defval = 10.0, title = "Bottom Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelSize = switch waveLabelSizeOpt
-    "Tiny" => size.tiny
-    "Small" => size.small
-    "Normal" => size.normal
-    "Large" => size.large
+    SIZE_OPTION_TINY => size.tiny
+    SIZE_OPTION_SMALL => size.small
+    SIZE_OPTION_NORMAL => size.normal
+    SIZE_OPTION_LARGE => size.large
     => size.huge
 
 // Complex Retrace Settings
 complexRetraceShow = input.bool(defval = false, title = "Show Complex Retrace Letters", group = GROUP_WAVES)
 complexRetraceLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Complex Retrace Label Color", group = GROUP_WAVES)
-complexRetraceLabelSizeOpt = input.string(defval = "Normal", title = "Complex Retrace Label Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_WAVES)
+complexRetraceLabelSizeOpt = input.string(defval = SIZE_OPTION_NORMAL, title = "Complex Retrace Label Size", options = [SIZE_OPTION_TINY, SIZE_OPTION_SMALL, SIZE_OPTION_NORMAL, SIZE_OPTION_LARGE, SIZE_OPTION_HUGE], group = GROUP_WAVES)
 complexRetraceLabelSize = switch complexRetraceLabelSizeOpt
-    "Tiny" => size.tiny
-    "Small" => size.small
-    "Normal" => size.normal
-    "Large" => size.large
+    SIZE_OPTION_TINY => size.tiny
+    SIZE_OPTION_SMALL => size.small
+    SIZE_OPTION_NORMAL => size.normal
+    SIZE_OPTION_LARGE => size.large
     => size.huge
 
 // 📈 TREND
 var Trend trend = Trend.new(TrendDir.FLAT, TREND_FLAT_COLOR)
+
+// Inputs to signal
 trendSma = ta.sma(source = trendSource, length = trendSmaLength)
-trendSmaSlope = (trendSma - trendSma[trendSlopeLookback]) / trendSlopeLookback
+float trendSmaPrior = trendSma[1]
+float trendSlopePerBar = na(trendSma) or na(trendSmaPrior) ? na : trendSma - trendSmaPrior
+
+// Signal to state
+TrendDir currTrendDir = na(trendSlopePerBar) ? TrendDir.FLAT :
+     math.abs(number = trendSlopePerBar) <= trendFlatThreshold ? TrendDir.FLAT :
+     trendSlopePerBar > 0 ? TrendDir.UP : TrendDir.DOWN
+color currTrendColor = switch currTrendDir
+    TrendDir.UP => TREND_UP_COLOR
+    TrendDir.DOWN => TREND_DOWN_COLOR
+    TrendDir.FLAT => TREND_FLAT_COLOR
+trend := Trend.new(currTrendDir, currTrendColor)
 
 // 🔄 CYCLE
-// var Cycle cycle = Cycle.new(CycleZone.NONE, CyclePoint.new(0, 0), CyclePoint.new(0, 0))
+// Helpers
+f_upsertCycleDot(label existingDotLabel, int dotBarIndex, float dotPrice, color dotColor) =>
+    label updatedDotLabel = existingDotLabel
+    if na(updatedDotLabel)
+        updatedDotLabel := label.new(x = dotBarIndex, y = dotPrice, text = DOT_GLYPH, xloc = xloc.bar_index, yloc = yloc.price,
+             color = na, style = label.style_none, textcolor = dotColor, size = size.small)
+    else
+        label.set_xy(id = updatedDotLabel, x = dotBarIndex, y = dotPrice)
+        label.set_color(id = updatedDotLabel, color = na)
+        label.set_style(id = updatedDotLabel, style = label.style_none)
+        label.set_text(id = updatedDotLabel, text = DOT_GLYPH)
+        label.set_textcolor(id = updatedDotLabel, textcolor = dotColor)
+        label.set_size(id = updatedDotLabel, size = size.small)
+        label.set_yloc(id = updatedDotLabel, yloc = yloc.price)
+    updatedDotLabel
+
+f_trackExtremeBar(ExtremeBar existingExtremeBar, float candidatePrice, float dotOffsetPrice, color dotColor, bool isHigherExtreme) =>
+    bool hasNoExtreme = na(existingExtremeBar.price)
+    bool isMoreExtreme = isHigherExtreme ? candidatePrice > existingExtremeBar.price : candidatePrice < existingExtremeBar.price
+    if hasNoExtreme or isMoreExtreme
+        ExtremeBar.new(price = candidatePrice, barIndex = bar_index,
+             dotLabel = f_upsertCycleDot(existingDotLabel = hasNoExtreme ? na : existingExtremeBar.dotLabel, dotBarIndex = bar_index,
+             dotPrice = isHigherExtreme ? candidatePrice + dotOffsetPrice : candidatePrice - dotOffsetPrice, dotColor = dotColor))
+    else
+        existingExtremeBar
+
+f_emptyExtremeBar() =>
+    ExtremeBar.new(na, na, na)
+
+// Signal inputs
 stochK = ta.stoch(source = close, high = high, low = low, length = stochLength)
 stochKSmoothed = ta.sma(source = stochK, length = stochSmooth)
 stochD = ta.sma(source = stochKSmoothed, length = stochDLength)
+bool crossedAbove45 = ta.crossover(source1 = stochD, source2 = CYCLE_LOW_BOUNDARY)
+bool crossedAbove55 = ta.crossover(source1 = stochD, source2 = CYCLE_HIGH_BOUNDARY)
+bool crossedBelow55 = ta.crossunder(source1 = stochD, source2 = CYCLE_HIGH_BOUNDARY)
+bool crossedBelow45 = ta.crossunder(source1 = stochD, source2 = CYCLE_LOW_BOUNDARY)
+float cycleHighDotOffsetPrice = syminfo.mintick * cycleHighDotOffsetTicks
+float cycleLowDotOffsetPrice = syminfo.mintick * cycleLowDotOffsetTicks
+
+// Cycle state
+var CycleSnapshot confirmedCycleSnapshot = CycleSnapshot.new(
+     activeCycleZone = stochD > CYCLE_LOW_BOUNDARY ? CycleZone.HIGH : CycleZone.LOW,
+     highCycleExtremeBar = f_emptyExtremeBar(),
+     lowCycleExtremeBar = f_emptyExtremeBar()
+ )
+CycleSnapshot liveCycleSnapshot = confirmedCycleSnapshot
+
+// Cycle status
+CycleStatus cycleStatus = CycleStatus.new(
+     activeCycleZone = confirmedCycleSnapshot.activeCycleZone,
+     startedHighCycle = crossedAbove45 or (crossedAbove55 and confirmedCycleSnapshot.activeCycleZone == CycleZone.LOW),
+     startedLowCycle = crossedBelow55 or (crossedBelow45 and confirmedCycleSnapshot.activeCycleZone == CycleZone.HIGH)
+ )
+
+if cycleStatus.startedHighCycle
+    liveCycleSnapshot.activeCycleZone := CycleZone.HIGH
+    liveCycleSnapshot.highCycleExtremeBar := f_emptyExtremeBar()
+    liveCycleSnapshot.highCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar, candidatePrice = high,
+         dotOffsetPrice = cycleHighDotOffsetPrice, dotColor = NORD8, isHigherExtreme = true)
+else if cycleStatus.startedLowCycle
+    liveCycleSnapshot.activeCycleZone := CycleZone.LOW
+    liveCycleSnapshot.lowCycleExtremeBar := f_emptyExtremeBar()
+    liveCycleSnapshot.lowCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar, candidatePrice = low,
+         dotOffsetPrice = cycleLowDotOffsetPrice, dotColor = NORD11, isHigherExtreme = false)
+else if liveCycleSnapshot.activeCycleZone == CycleZone.HIGH and stochD > CYCLE_LOW_BOUNDARY
+    liveCycleSnapshot.highCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar, candidatePrice = high,
+         dotOffsetPrice = cycleHighDotOffsetPrice, dotColor = NORD8, isHigherExtreme = true)
+else if liveCycleSnapshot.activeCycleZone == CycleZone.LOW and stochD < CYCLE_HIGH_BOUNDARY
+    liveCycleSnapshot.lowCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar, candidatePrice = low,
+         dotOffsetPrice = cycleLowDotOffsetPrice, dotColor = NORD11, isHigherExtreme = false)
+
+if barstate.isconfirmed
+    confirmedCycleSnapshot := liveCycleSnapshot
 
 // 🌊 WAVES
 // var Wave wave = Wave.new(0, false, 0, ALPHABET[0])
 // var Price price = Price.new(close = close, isExtreme = false, isHigherHigh = false, isLowerLow = false)
-
-// Current bar confirmed
-if barstate.isconfirmed
-    // 1. TREND
-    TrendDir currTrendDir = math.abs(number = trendSmaSlope) < trendFlatThreshold ? TrendDir.FLAT : trendSmaSlope > 0 ? TrendDir.UP : TrendDir.DOWN
-    color currTrendColor = switch currTrendDir
-        TrendDir.UP => TREND_UP_COLOR
-        TrendDir.DOWN => TREND_DOWN_COLOR
-        TrendDir.FLAT => TREND_FLAT_COLOR
-    trend := Trend.new(currTrendDir, currTrendColor)
-
-    // 2. CYCLE
-    // bool dCrossAbove45 = ta.crossover(stochD, 45)
-    // bool dCrossBelow45 = ta.crossunder(stochD, 45)
-    // bool dCrossAbove55 = ta.crossover(stochD, 55)
-    // bool dCrossBelow55 = ta.crossunder(stochD, 55)
-
-    // 3. WAVE
-    // float waveLabelOffsetTopPrice = syminfo.mintick * waveLabelOffsetTop
-    // float waveLabelOffsetBottomPrice = syminfo.mintick * waveLabelOffsetBottom
-
-    // 4. CURRENT BAR close
-        // a. Is that BAR the EXTREME bar?
-        // b. Is that BAR the HH or LL?
+// float waveLabelOffsetTopPrice = syminfo.mintick * waveLabelOffsetTop
+// float waveLabelOffsetBottomPrice = syminfo.mintick * waveLabelOffsetBottom
 
 // 📊 PLOT
 plot(series = trendSma, title = "SMA", color = trend.plotColor, linewidth = 3, offset = trendSmaOffset)

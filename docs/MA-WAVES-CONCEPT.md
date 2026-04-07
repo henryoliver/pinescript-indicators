@@ -15,7 +15,19 @@
 ## Cycle Rules
 - Cycle high: Highest high after %D goes above 45 and before it drops below 55.
 - Cycle low: Lowest low after %D goes below 55 and before it rises above 45.
-- 45–55 is neutral.
+- The code tracks only those two cycle windows.
+- The code uses the `CycleZone` interface with only `HIGH` and `LOW`.
+- Cycle ownership is finalized at the close of each bar.
+- The bar that closes with the crossing immediately belongs to the new cycle and can become its extreme bar.
+- A high cycle begins when %D crosses above 45, or when %D crosses back above 55 while the active cycle is low.
+- A low cycle begins when %D crosses below 55, or when %D crosses back below 45 while the active cycle is high.
+- While %D stays above 45, the current high-cycle dot keeps moving to any later bar that makes a higher high.
+- While %D stays below 55, the current low-cycle dot keeps moving to any later bar that makes a lower low.
+- Each cycle window has its own extreme-bar dot.
+- The code uses the `ExtremeBar` interface to hold the extreme price, bar index, and dot label for each cycle side.
+- The code uses a confirmed cycle snapshot and a live cycle snapshot.
+- The live snapshot can move the active cycle dot intrabar as the bar forms.
+- At bar close, the live snapshot is committed into the confirmed snapshot.
 
 ## Anchor Rule
 - Wave 1 DOWN = first cycle LOW after 50 SMA starts angling DOWN.

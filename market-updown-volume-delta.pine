@@ -336,13 +336,15 @@ if barstate.islastconfirmedhistory or barstate.islast
         if aboveLevelCount > 0
             for aboveIndex = 0 to aboveLevelCount - 1
                 float aboveLevel = array.get(id = longTermAboveLevels, index = aboveIndex)
-                int aboveWidth = math.min(aboveLevelCount - aboveIndex, 6)
+                int aboveStrengthRank = aboveLevelCount - aboveIndex
+                int aboveWidth = aboveStrengthRank <= 1 ? 1 : 2
                 line aboveLine = line.new(x1 = bar_index - 1, y1 = aboveLevel, x2 = bar_index, y2 = aboveLevel, xloc = xloc.bar_index, extend = extend.both, color = color.new(color = NORD8, transp = 60), width = aboveWidth, style = line.style_solid)
                 array.push(id = renderedLines, value = aboveLine)
         int belowLevelCount = array.size(id = longTermBelowLevels)
         if belowLevelCount > 0
             for belowIndex = 0 to belowLevelCount - 1
                 float belowLevel = array.get(id = longTermBelowLevels, index = belowIndex)
-                int belowWidth = math.min(belowLevelCount - belowIndex, 6)
+                int belowStrengthRank = belowLevelCount - belowIndex
+                int belowWidth = belowStrengthRank <= 1 ? 1 : 2
                 line belowLine = line.new(x1 = bar_index - 1, y1 = belowLevel, x2 = bar_index, y2 = belowLevel, xloc = xloc.bar_index, extend = extend.both, color = color.new(color = NORD11, transp = 60), width = belowWidth, style = line.style_solid)
                 array.push(id = renderedLines, value = belowLine)

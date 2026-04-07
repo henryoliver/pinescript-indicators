@@ -50,17 +50,17 @@ bool showSwings = input.bool(defval = true, title = "Major Swings", tooltip = "S
 bool showMurrey = input.bool(defval = true, title = "Murrey Math", tooltip = "Shows Murrey Math octave levels derived from a volatility-adjusted price frame. These act as structured support and resistance bands.", group = GROUP_GENERAL)
 bool showValueArea = input.bool(defval = true, title = "Value Area", tooltip = "Shows prior-session VAL, POC, and VAH from a simple volume profile. Useful for auction-market context and balance areas.", group = GROUP_GENERAL)
 
-float visibleRangePercent = input.float(defval = 15.0, title = "Visible Range (% From Price)", minval = 1.0, maxval = 100.0, step = 0.5, tooltip = "Hides levels that are too far from current price so the chart stays focused on nearby actionable zones.", group = GROUP_GENERAL)
-int extendBarsRight = input.int(defval = 80, title = "Extend Right (Bars)", minval = 10, maxval = 300, tooltip = "Controls how far right projected lines and labels extend from the current bar.", group = GROUP_GENERAL)
+int extendBarsRight = input.int(defval = 40, title = "Extend Right (Bars)", minval = 10, maxval = 300, tooltip = "Controls how far right projected lines and labels extend from the current bar.", group = GROUP_GENERAL)
 bool showLevelLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each visible level or cluster.", group = GROUP_GENERAL)
 string labelSizeInput = input.string(defval = "Normal", title = "Label Size", options = ["Tiny", "Small", "Normal", "Large"], tooltip = "Controls the text size used by all level and cluster labels.", group = GROUP_GENERAL)
 string labelHorizontal = input.string(defval = "Right", title = "Label Horizontal Position", options = ["Left", "Middle", "Right"], tooltip = "Places labels on the left edge, center, or right edge of the level span.", group = GROUP_GENERAL)
-int labelHorizontalAdjustBars = input.int(defval = -1, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars. Pine labels cannot be shifted horizontally in price ticks.", group = GROUP_GENERAL)
-int labelDistanceTicks = input.int(defval = 3, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_GENERAL)
+int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars. Pine labels cannot be shifted horizontally in price ticks.", group = GROUP_GENERAL)
+int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_GENERAL)
 
 bool showCluster = input.bool(defval = true, title = "Cluster", tooltip = "Groups nearby levels from different indicator families into one combined support or resistance zone.", group = GROUP_GENERAL_CLUSTER)
 bool showGhostLines = input.bool(defval = false, title = "Show Source Indicators When Cluster Is On", tooltip = "Keeps the original source levels visible behind the cluster zones for extra context.", group = GROUP_GENERAL_CLUSTER)
 bool showIndicatorCount = input.bool(defval = true, title = "Show Indicator Count In Cluster Label", tooltip = "Adds the number of unique indicator families contributing to each cluster label.", group = GROUP_GENERAL_CLUSTER)
+bool showClusterSources = input.bool(defval = true, title = "Show Cluster Sources", tooltip = "Adds short source-family names to each cluster label so you can see which components formed the confluence.", group = GROUP_GENERAL_CLUSTER)
 
 color overallLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Overall Line/Zone Color", tooltip = "Main line color shared by all inner indicators.", group = GROUP_GENERAL)
 color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by level and cluster labels.", group = GROUP_GENERAL)
@@ -72,6 +72,7 @@ float fibAtrMultiplier = input.float(defval = 5.0, title = "ATR Multiplier", min
 bool fibUseHighAndLow = input.bool(defval = false, title = "Use High And Low", tooltip = "When on, Fibonacci anchors use raw highs and lows. When off, they use close-based pivots for a cleaner structure read.", group = GROUP_FIB)
 
 string pivotResolutionInput = input.string(defval = "1 Day", title = "Resolution", options = ["4 Hours", "3 Hours", "2 Hours", "1 Hour", "1 Day", "3 Days", "9 Days", "1 Week", "1 Month", "3 Months", "6 Months", "12 Months"], tooltip = "Higher timeframe used to calculate the floor pivot set.", group = GROUP_PIVOTS)
+bool showPivotMidLevels = input.bool(defval = true, title = "Show Mid-Pivots", tooltip = "Adds midpoint pivot levels between PP/R1, R1/R2, PP/S1, and S1/S2. These are secondary references and work best as low-weight cluster contributors.", group = GROUP_PIVOTS)
 
 bool showPreviousDayHighLevel = input.bool(defval = true, title = "Show High", tooltip = "Plots the previous day's high for each trading day.", group = GROUP_PDH)
 bool showPreviousDayLowLevel = input.bool(defval = true, title = "Show Low", tooltip = "Plots the previous day's low for each trading day.", group = GROUP_PDH)
@@ -105,6 +106,11 @@ float toleranceAtrMult = input.float(defval = 0.30, title = "Cluster Tolerance A
 int clusterMinScore = input.int(defval = 6, title = "Minimum Cluster Score", minval = 2, maxval = 20, tooltip = "Only draws clusters whose combined level score reaches this threshold. Higher values keep only stronger confluence zones.", group = GROUP_CLUSTER)
 int clusterMinIndicators = input.int(defval = 2, title = "Minimum Indicator Families", minval = 1, maxval = 7, tooltip = "Requires confluence from at least this many different indicator families before a cluster is drawn.", group = GROUP_CLUSTER)
 float clusterZoneCompression = input.float(defval = 0.55, title = "Zone Height Compression", minval = 0.10, maxval = 1.00, step = 0.05, tooltip = "Compresses the drawn cluster height around its center so magnet/reaction areas stay tighter.", group = GROUP_CLUSTER)
+int clusterTouchLookback = input.int(defval = 80, title = "Acceptance Lookback", minval = 10, maxval = 300, tooltip = "Bars used to estimate how often price accepted a level as value instead of only rejecting it at an extreme.", group = GROUP_CLUSTER)
+int clusterFlipLookback = input.int(defval = 40, title = "Flip Lookback", minval = 10, maxval = 200, tooltip = "Bars used to detect whether price has traded on both sides of a cluster, which helps identify flip zones.", group = GROUP_CLUSTER)
+int clusterApproachLookback = input.int(defval = 6, title = "Approach Lookback", minval = 3, maxval = 20, tooltip = "Bars used to judge whether price is approaching a zone aggressively and may slice through it.", group = GROUP_CLUSTER)
+
+float atrValue = ta.atr(length = murreyAtrLength)
 
 // 🧮 DATA & CALCULATIONS
 f_lineStyle(string styleName) =>
@@ -128,9 +134,6 @@ f_clearBoxes(array<box> boxes) =>
         box.delete(id = boxObj)
     array.clear(id = boxes)
 
-f_isVisiblePrice(float levelPrice) =>
-    not na(levelPrice) and math.abs(number = levelPrice - close) / math.max(math.abs(number = close), syminfo.mintick) * 100.0 <= visibleRangePercent
-
 f_roundToTick(float rawPrice) =>
     math.round(number = rawPrice / syminfo.mintick) * syminfo.mintick
 
@@ -141,18 +144,66 @@ f_levelDisplayColor(color baseColor, int indicatorId, int levelWeight) =>
     else
         baseColor
 
-f_pushLevel(array<float> levelPrices, array<int> levelWeights, array<int> levelIndicators, array<string> levelNames, array<color> levelColors, array<string> levelStyles, array<int> levelStartBars, float levelPrice, int levelWeight, int indicatorId, string levelName, color levelColor, string lineStyle, int levelStartBar = na) =>
-    bool keepLevelVisible = indicatorId == 5 or f_isVisiblePrice(levelPrice)
-    if keepLevelVisible
-        array.push(id = levelPrices, value = f_roundToTick(rawPrice = levelPrice))
+f_touchScore(int bodyTouchCount, int wickOnlyTouchCount) =>
+    int acceptanceScore = bodyTouchCount >= 10 ? 3 : bodyTouchCount >= 5 ? 2 : bodyTouchCount >= 2 ? 1 : 0
+    int rejectionScore = wickOnlyTouchCount >= 8 ? 2 : wickOnlyTouchCount >= 4 ? 1 : 0
+    math.min(4, acceptanceScore + rejectionScore)
+
+f_countLevelTouches(float zoneLow, float zoneHigh, int lookbackBars) =>
+    int bodyTouchCount = 0
+    int wickOnlyTouchCount = 0
+    int barsToCheck = math.min(lookbackBars, bar_index + 1)
+    if barsToCheck > 0
+        for lookbackIndex = 0 to barsToCheck - 1
+            float bodyHighCheck = math.max(open[lookbackIndex], close[lookbackIndex])
+            float bodyLowCheck = math.min(open[lookbackIndex], close[lookbackIndex])
+            bool bodyAcceptedZone = bodyLowCheck <= zoneHigh and bodyHighCheck >= zoneLow
+            bool wickTouchedZone = low[lookbackIndex] <= zoneHigh and high[lookbackIndex] >= zoneLow
+            if bodyAcceptedZone
+                bodyTouchCount += 1
+            else if wickTouchedZone
+                wickOnlyTouchCount += 1
+    [bodyTouchCount, wickOnlyTouchCount]
+
+f_levelFreshnessScore(int indicatorId, int levelStartBar) =>
+    if indicatorId == 5 and not na(levelStartBar)
+        int swingAgeBars = bar_index - levelStartBar
+        swingAgeBars <= 150 ? 2 : swingAgeBars <= 400 ? 1 : 0
+    else
+        indicatorId == 3 or indicatorId == 4 or indicatorId == 7 ? 1 : 0
+
+f_levelZoneHalfHeight(int indicatorId, int levelWeight, float atrBase) =>
+    float halfHeight = indicatorId == 5 ? atrBase * (swingSourceMode == "Bodies" ? 0.08 : 0.12) :
+     indicatorId == 2 ? atrBase * 0.08 :
+     indicatorId == 3 or indicatorId == 4 or indicatorId == 7 ? atrBase * 0.10 :
+     indicatorId == 6 ? atrBase * 0.06 :
+     indicatorId == 1 ? atrBase * 0.09 :
+     atrBase * 0.08
+    math.max(halfHeight + syminfo.mintick * levelWeight, syminfo.mintick)
+
+f_pushLevel(array<float> levelPrices, array<int> levelWeights, array<int> levelIndicators, array<string> levelNames, array<color> levelColors, array<string> levelStyles, array<int> levelStartBars, array<float> levelZoneLows, array<float> levelZoneHighs, array<int> levelTouchScores, array<int> levelFreshnessScores, array<bool> levelFlipFlags, float levelPrice, int levelWeight, int indicatorId, string levelName, color levelColor, string lineStyle, int levelStartBar = na, bool levelFlip = false) =>
+    if not na(levelPrice)
+        float roundedPrice = f_roundToTick(rawPrice = levelPrice)
+        float zoneHalfHeight = f_levelZoneHalfHeight(indicatorId = indicatorId, levelWeight = levelWeight, atrBase = math.max(atrValue, syminfo.mintick))
+        float zoneLow = f_roundToTick(rawPrice = roundedPrice - zoneHalfHeight)
+        float zoneHigh = f_roundToTick(rawPrice = roundedPrice + zoneHalfHeight)
+        [bodyTouchCount, wickOnlyTouchCount] = f_countLevelTouches(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterTouchLookback)
+        int touchScore = f_touchScore(bodyTouchCount = bodyTouchCount, wickOnlyTouchCount = wickOnlyTouchCount)
+        int freshnessScore = f_levelFreshnessScore(indicatorId = indicatorId, levelStartBar = levelStartBar)
+        array.push(id = levelPrices, value = roundedPrice)
         array.push(id = levelWeights, value = levelWeight)
         array.push(id = levelIndicators, value = indicatorId)
         array.push(id = levelNames, value = levelName)
         array.push(id = levelColors, value = f_levelDisplayColor(baseColor = levelColor, indicatorId = indicatorId, levelWeight = levelWeight))
         array.push(id = levelStyles, value = lineStyle)
         array.push(id = levelStartBars, value = levelStartBar)
+        array.push(id = levelZoneLows, value = zoneLow)
+        array.push(id = levelZoneHighs, value = zoneHigh)
+        array.push(id = levelTouchScores, value = touchScore)
+        array.push(id = levelFreshnessScores, value = freshnessScore)
+        array.push(id = levelFlipFlags, value = levelFlip)
 
-f_sortLevels(array<float> levelPrices, array<int> levelWeights, array<int> levelIndicators, array<string> levelNames, array<color> levelColors, array<string> levelStyles, array<int> levelStartBars) =>
+f_sortLevels(array<float> levelPrices, array<int> levelWeights, array<int> levelIndicators, array<string> levelNames, array<color> levelColors, array<string> levelStyles, array<int> levelStartBars, array<float> levelZoneLows, array<float> levelZoneHighs, array<int> levelTouchScores, array<int> levelFreshnessScores, array<bool> levelFlipFlags) =>
     if array.size(id = levelPrices) > 1
         for outerIndex = 1 to array.size(id = levelPrices) - 1
             float sortPrice = array.get(id = levelPrices, index = outerIndex)
@@ -162,6 +213,11 @@ f_sortLevels(array<float> levelPrices, array<int> levelWeights, array<int> level
             color sortColor = array.get(id = levelColors, index = outerIndex)
             string sortStyle = array.get(id = levelStyles, index = outerIndex)
             int sortStartBar = array.get(id = levelStartBars, index = outerIndex)
+            float sortZoneLow = array.get(id = levelZoneLows, index = outerIndex)
+            float sortZoneHigh = array.get(id = levelZoneHighs, index = outerIndex)
+            int sortTouchScore = array.get(id = levelTouchScores, index = outerIndex)
+            int sortFreshnessScore = array.get(id = levelFreshnessScores, index = outerIndex)
+            bool sortFlipFlag = array.get(id = levelFlipFlags, index = outerIndex)
             int innerIndex = outerIndex - 1
             while innerIndex >= 0 and array.get(id = levelPrices, index = innerIndex) > sortPrice
                 array.set(id = levelPrices, index = innerIndex + 1, value = array.get(id = levelPrices, index = innerIndex))
@@ -171,6 +227,11 @@ f_sortLevels(array<float> levelPrices, array<int> levelWeights, array<int> level
                 array.set(id = levelColors, index = innerIndex + 1, value = array.get(id = levelColors, index = innerIndex))
                 array.set(id = levelStyles, index = innerIndex + 1, value = array.get(id = levelStyles, index = innerIndex))
                 array.set(id = levelStartBars, index = innerIndex + 1, value = array.get(id = levelStartBars, index = innerIndex))
+                array.set(id = levelZoneLows, index = innerIndex + 1, value = array.get(id = levelZoneLows, index = innerIndex))
+                array.set(id = levelZoneHighs, index = innerIndex + 1, value = array.get(id = levelZoneHighs, index = innerIndex))
+                array.set(id = levelTouchScores, index = innerIndex + 1, value = array.get(id = levelTouchScores, index = innerIndex))
+                array.set(id = levelFreshnessScores, index = innerIndex + 1, value = array.get(id = levelFreshnessScores, index = innerIndex))
+                array.set(id = levelFlipFlags, index = innerIndex + 1, value = array.get(id = levelFlipFlags, index = innerIndex))
                 innerIndex -= 1
             array.set(id = levelPrices, index = innerIndex + 1, value = sortPrice)
             array.set(id = levelWeights, index = innerIndex + 1, value = sortWeight)
@@ -179,6 +240,11 @@ f_sortLevels(array<float> levelPrices, array<int> levelWeights, array<int> level
             array.set(id = levelColors, index = innerIndex + 1, value = sortColor)
             array.set(id = levelStyles, index = innerIndex + 1, value = sortStyle)
             array.set(id = levelStartBars, index = innerIndex + 1, value = sortStartBar)
+            array.set(id = levelZoneLows, index = innerIndex + 1, value = sortZoneLow)
+            array.set(id = levelZoneHighs, index = innerIndex + 1, value = sortZoneHigh)
+            array.set(id = levelTouchScores, index = innerIndex + 1, value = sortTouchScore)
+            array.set(id = levelFreshnessScores, index = innerIndex + 1, value = sortFreshnessScore)
+            array.set(id = levelFlipFlags, index = innerIndex + 1, value = sortFlipFlag)
 
 // Bitmask helpers prevent double-counting the same indicator inside one cluster.
 f_maskHasIndicator(int indicatorMask, int indicatorId) =>
@@ -205,6 +271,36 @@ f_maskCount(int indicatorMask) =>
         if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = maskIndex)
             indicatorCount += 1
     indicatorCount
+
+f_setFamilyMax(array<int> familyValues, int indicatorId, int candidateValue) =>
+    int familyIndex = math.max(0, math.min(array.size(id = familyValues) - 1, indicatorId - 1))
+    int existingValue = array.get(id = familyValues, index = familyIndex)
+    if candidateValue > existingValue
+        array.set(id = familyValues, index = familyIndex, value = candidateValue)
+
+f_sumIntArray(array<int> familyValues) =>
+    int totalValue = 0
+    for familyValue in familyValues
+        totalValue += familyValue
+    totalValue
+
+f_maskToSources(int indicatorMask) =>
+    string sourceText = ""
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 1)
+        sourceText += "MM·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 2)
+        sourceText += "Fib·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 3)
+        sourceText += "PP·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 4)
+        sourceText += "PD·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 5)
+        sourceText += "Sw·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 6)
+        sourceText += "Rnd·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 7)
+        sourceText += "VA·"
+    str.length(sourceText) > 0 ? str.substring(sourceText, 0, str.length(sourceText) - 1) : ""
 
 f_levelLineWidth(int levelWeight) =>
     levelWeight >= 3 ? 3 : levelWeight == 2 ? 2 : 1
@@ -254,7 +350,37 @@ f_drawSwingLevel(array<line> lines, array<label> labels, float levelPrice, strin
         label newLabel = label.new(x = f_labelX(leftX = swingLeftX, rightX = swingRightX), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = textColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign())
         array.push(id = labels, value = newLabel)
 
-f_drawClusterZone(array<box> boxes, array<label> labels, float zoneLow, float zoneHigh, float zoneMid, int zoneScore, int indicatorMask) =>
+f_recentCrossesZone(float zoneLow, float zoneHigh, int lookbackBars) =>
+    bool tradedAbove = false
+    bool tradedBelow = false
+    int barsToCheck = math.min(lookbackBars, bar_index + 1)
+    if barsToCheck > 0
+        for lookbackIndex = 0 to barsToCheck - 1
+            tradedAbove := tradedAbove or close[lookbackIndex] > zoneHigh
+            tradedBelow := tradedBelow or close[lookbackIndex] < zoneLow
+    tradedAbove and tradedBelow
+
+f_zoneApproachPenalty(float zoneMid, int lookbackBars, float approachAtr) =>
+    int penalty = 0
+    int barsToCheck = math.min(lookbackBars, bar_index)
+    if barsToCheck > 0
+        bool resistanceZone = zoneMid >= close
+        float netMove = close - close[barsToCheck]
+        int directionalBars = 0
+        for lookbackIndex = 0 to barsToCheck - 1
+            bool directionalClose = resistanceZone ? close[lookbackIndex] > open[lookbackIndex] : close[lookbackIndex] < open[lookbackIndex]
+            float barRange = math.abs(close[lookbackIndex] - open[lookbackIndex])
+            bool aggressiveBar = directionalClose and barRange > approachAtr * 0.25
+            if aggressiveBar
+                directionalBars += 1
+        bool aggressiveMove = resistanceZone ? netMove > approachAtr * 0.9 : netMove < -approachAtr * 0.9
+        if aggressiveMove and directionalBars >= barsToCheck - 1
+            penalty := 2
+        else if aggressiveMove or directionalBars >= barsToCheck - 1
+            penalty := 1
+    penalty
+
+f_drawClusterZone(array<box> boxes, array<label> labels, float zoneLow, float zoneHigh, float zoneMid, int zoneScore, int indicatorMask, bool zoneIsFlip, int approachPenalty) =>
     int zoneLeftX = bar_index - extendBarsRight
     int zoneRightX = bar_index + extendBarsRight
     int indicatorCount = f_maskCount(indicatorMask = indicatorMask)
@@ -263,9 +389,12 @@ f_drawClusterZone(array<box> boxes, array<label> labels, float zoneLow, float zo
         float compressedHalfHeight = math.max(rawHalfHeight * clusterZoneCompression, syminfo.mintick * 0.5)
         float zoneTop = zoneMid + compressedHalfHeight
         float zoneBottom = zoneMid - compressedHalfHeight
-        string zoneLabelText = zoneScore >= 10 ? "HIGH CLUSTER " + str.tostring(value = zoneScore) : "Cluster " + str.tostring(value = zoneScore)
+        string zonePolarity = zoneIsFlip ? "Flip" : zoneMid >= close ? "Resistance" : "Support"
+        string zoneLabelText = zonePolarity + " " + (zoneScore >= 10 ? "Cluster " + str.tostring(value = zoneScore) : "Cluster " + str.tostring(value = zoneScore))
         zoneLabelText := showIndicatorCount ? zoneLabelText + " | " + str.tostring(value = indicatorCount) + "I" : zoneLabelText
-        color zoneFillColor = zoneScore >= 10 ? color.new(color = clusterZoneColor, transp = math.max(0, color.t(clusterZoneColor) - 10)) : clusterZoneColor
+        zoneLabelText := showClusterSources ? zoneLabelText + " | " + f_maskToSources(indicatorMask = indicatorMask) : zoneLabelText
+        zoneLabelText := approachPenalty >= 2 ? zoneLabelText + " | Slice Risk" : approachPenalty == 1 ? zoneLabelText + " | Fast" : zoneLabelText
+        color zoneFillColor = zoneScore >= 10 ? color.new(color = clusterZoneColor, transp = math.max(0, color.t(clusterZoneColor) - 8)) : clusterZoneColor
         color zoneBorderColor = na
         box zoneBox = box.new(left = zoneLeftX, right = zoneRightX, top = zoneTop, bottom = zoneBottom, extend = extend.both, bgcolor = zoneFillColor, border_color = zoneBorderColor, border_width = 0)
         array.push(id = boxes, value = zoneBox)
@@ -339,7 +468,6 @@ f_roundSpacing(float referencePrice) =>
     float minorSpacing = majorSpacing / 2.0
     [majorSpacing, minorSpacing]
 
-float atrValue = ta.atr(length = murreyAtrLength)
 float toleranceValue = toleranceMode == "ATR" ? atrValue * toleranceAtrMult : close * tolerancePercent * 0.01
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -495,6 +623,10 @@ float pivotR3 = pivotPoint + pivotRange * 2.0
 float pivotS3 = pivotPoint - pivotRange * 2.0
 float pivotR4 = pivotPoint + pivotRange * 3.0
 float pivotS4 = pivotPoint - pivotRange * 3.0
+float pivotMidPPS1 = (pivotPoint + pivotS1) / 2.0
+float pivotMidS1S2 = (pivotS1 + pivotS2) / 2.0
+float pivotMidPPR1 = (pivotPoint + pivotR1) / 2.0
+float pivotMidR1R2 = (pivotR1 + pivotR2) / 2.0
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 3. 📅 Previous Day
@@ -593,7 +725,7 @@ if isNewSession
 if not na(currentFootprint)
     array<volume_row> footprintRows = currentFootprint.rows()
     for currentRow in footprintRows
-        f_accumulateProfileRow(rowPrices = sessionFootprintRowPrices, rowVolumes = sessionFootprintRowVolumes, rowPrice = currentRow.down_price(), rowVolume = currentRow.total_volume())
+        f_accumulateProfileRow(rowPrices = sessionFootprintRowPrices, rowVolumes = sessionFootprintRowVolumes, rowPrice = volume_row.down_price(currentRow), rowVolume = volume_row.total_volume(currentRow))
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 8. 🧲 Cluster
@@ -644,6 +776,11 @@ if barstate.islastconfirmedhistory or barstate.islast
     array<color> levelColors = array.new<color>()
     array<string> levelStyles = array.new<string>()
     array<int> levelStartBars = array.new<int>()
+    array<float> levelZoneLows = array.new<float>()
+    array<float> levelZoneHighs = array.new<float>()
+    array<int> levelTouchScores = array.new<int>()
+    array<int> levelFreshnessScores = array.new<int>()
+    array<bool> levelFlipFlags = array.new<bool>()
 
     bool useFibonacciInCluster = showCluster or showFibonacci
     bool usePivotsInCluster = showCluster or showPivots
@@ -660,26 +797,34 @@ if barstate.islastconfirmedhistory or barstate.islast
             float fibPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01
             int fibWeight = fibPercent == 38.2 or fibPercent == 50.0 or fibPercent == 61.8 or fibPercent == 161.8 ? 3 : fibPercent == 138.2 or fibPercent == 200.0 or fibPercent == -61.8 or fibPercent == -100.0 ? 2 : 1
             string fibStyle = "Solid"
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = fibPrice, levelWeight = fibWeight, indicatorId = 2, levelName = str.tostring(value = fibPercent, format = "#.##") + "%", levelColor = overallLevelColor, lineStyle = fibStyle)
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = fibPrice, levelWeight = fibWeight, indicatorId = 2, levelName = str.tostring(value = fibPercent, format = "#.##") + "%", levelColor = overallLevelColor, lineStyle = fibStyle)
 
     if usePivotsInCluster and not na(pivotPoint)
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotS4, levelWeight = 1, indicatorId = 3, levelName = "S4", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotS3, levelWeight = 1, indicatorId = 3, levelName = "S3", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotS2, levelWeight = 1, indicatorId = 3, levelName = "S2", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotS1, levelWeight = 2, indicatorId = 3, levelName = "S1", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotPoint, levelWeight = 3, indicatorId = 3, levelName = "PP", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotR1, levelWeight = 2, indicatorId = 3, levelName = "R1", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotR2, levelWeight = 1, indicatorId = 3, levelName = "R2", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotR3, levelWeight = 1, indicatorId = 3, levelName = "R3", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = pivotR4, levelWeight = 1, indicatorId = 3, levelName = "R4", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotS4, levelWeight = 1, indicatorId = 3, levelName = "S4", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotS3, levelWeight = 1, indicatorId = 3, levelName = "S3", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotS2, levelWeight = 1, indicatorId = 3, levelName = "S2", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showPivotMidLevels
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotMidS1S2, levelWeight = 1, indicatorId = 3, levelName = "M-S1S2", levelColor = overallLevelColor, lineStyle = "Dotted")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotS1, levelWeight = 2, indicatorId = 3, levelName = "S1", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showPivotMidLevels
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotMidPPS1, levelWeight = 1, indicatorId = 3, levelName = "M-PPS1", levelColor = overallLevelColor, lineStyle = "Dotted")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotPoint, levelWeight = 3, indicatorId = 3, levelName = "PP", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showPivotMidLevels
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotMidPPR1, levelWeight = 1, indicatorId = 3, levelName = "M-PPR1", levelColor = overallLevelColor, lineStyle = "Dotted")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotR1, levelWeight = 2, indicatorId = 3, levelName = "R1", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showPivotMidLevels
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotMidR1R2, levelWeight = 1, indicatorId = 3, levelName = "M-R1R2", levelColor = overallLevelColor, lineStyle = "Dotted")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotR2, levelWeight = 1, indicatorId = 3, levelName = "R2", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotR3, levelWeight = 1, indicatorId = 3, levelName = "R3", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = pivotR4, levelWeight = 1, indicatorId = 3, levelName = "R4", levelColor = overallLevelColor, lineStyle = "Solid")
 
     if usePreviousDayInCluster
         if showPreviousDayHighLevel
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevDayHigh, levelWeight = 3, indicatorId = 4, levelName = "PDH", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevDayHigh, levelWeight = 3, indicatorId = 4, levelName = "PDH", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPreviousDayLowLevel
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevDayLow, levelWeight = 3, indicatorId = 4, levelName = "PDL", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevDayLow, levelWeight = 3, indicatorId = 4, levelName = "PDL", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPreviousDayCloseLevel
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevDayClose, levelWeight = 2, indicatorId = 4, levelName = "PDC", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevDayClose, levelWeight = 2, indicatorId = 4, levelName = "PDC", levelColor = overallLevelColor, lineStyle = "Solid")
 
     if useSwingsInCluster
         array<float> renderedHighSwingPrices = array.new<float>()
@@ -707,7 +852,7 @@ if barstate.islastconfirmedhistory or barstate.islast
                             string swingPrefix = isHighSwing ? "H" : "L"
                             string swingLineStyle = swingIsBroken ? "Solid" : "Dotted"
                             string swingLabel = swingPrefix + str.tostring(value = swingSequence) + swingStructureLabel
-                            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = swingPriceVal, levelWeight = swingWeight, indicatorId = 5, levelName = swingLabel, levelColor = overallLevelColor, lineStyle = swingLineStyle, levelStartBar = swingBarVal)
+                            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = swingPriceVal, levelWeight = swingWeight, indicatorId = 5, levelName = swingLabel, levelColor = overallLevelColor, lineStyle = swingLineStyle, levelStartBar = swingBarVal, levelFlip = swingIsBroken)
                             array.push(id = swingSidePrices, value = swingPriceVal)
                             if isHighSwing
                                 renderedHighCount += 1
@@ -717,30 +862,30 @@ if barstate.islastconfirmedhistory or barstate.islast
     if useRoundNumbersInCluster
         for roundIndex = -roundLevelsEachSide to roundLevelsEachSide
             float roundMajorPrice = nearestMajorBase + roundMajorSpacing * roundIndex
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = roundMajorPrice, levelWeight = 3, indicatorId = 6, levelName = str.tostring(value = roundMajorPrice, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = roundMajorPrice, levelWeight = 3, indicatorId = 6, levelName = str.tostring(value = roundMajorPrice, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
             float roundMidPrice = roundMajorPrice + roundMinorSpacing
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = roundMidPrice, levelWeight = 2, indicatorId = 6, levelName = str.tostring(value = roundMidPrice, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = roundMidPrice, levelWeight = 2, indicatorId = 6, levelName = str.tostring(value = roundMidPrice, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
             if showRoundQuarterLevels
                 float roundQuarterOne = roundMajorPrice + roundQuarterSpacing
                 float roundQuarterThree = roundMajorPrice + roundQuarterSpacing * 3.0
-                f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = roundQuarterOne, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQuarterOne, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
-                f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = roundQuarterThree, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQuarterThree, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
+                f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = roundQuarterOne, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQuarterOne, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
+                f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = roundQuarterThree, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQuarterThree, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Solid")
 
     if useMurreyInCluster
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = murreyExtendedLow, levelWeight = 2, indicatorId = 1, levelName = "-4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = murreyExtendedLow, levelWeight = 2, indicatorId = 1, levelName = "-4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
         for murreyIndex = 0 to 8
             float murreyLevelPrice = murreyLower + murreyStep * murreyIndex
             int murreyWeight = murreyIndex == 0 or murreyIndex == 4 or murreyIndex == 8 ? 3 : murreyIndex == 3 or murreyIndex == 5 ? 2 : 1
             string murreyStyle = murreyWeight == 3 ? "Solid" : murreyWeight == 2 ? "Dashed" : "Dotted"
-            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = murreyLevelPrice, levelWeight = murreyWeight, indicatorId = 1, levelName = str.tostring(value = murreyIndex) + "/8", levelColor = overallLevelColor, lineStyle = murreyStyle)
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = murreyExtendedHigh, levelWeight = 2, indicatorId = 1, levelName = "+4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
+            f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = murreyLevelPrice, levelWeight = murreyWeight, indicatorId = 1, levelName = str.tostring(value = murreyIndex) + "/8", levelColor = overallLevelColor, lineStyle = murreyStyle)
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = murreyExtendedHigh, levelWeight = 2, indicatorId = 1, levelName = "+4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
 
     if useValueAreaInCluster
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevSessionVal, levelWeight = 3, indicatorId = 7, levelName = "VAL", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevSessionPoc, levelWeight = 3, indicatorId = 7, levelName = "POC", levelColor = overallLevelColor, lineStyle = "Solid")
-        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelPrice = prevSessionVah, levelWeight = 3, indicatorId = 7, levelName = "VAH", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevSessionVal, levelWeight = 3, indicatorId = 7, levelName = "VAL", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevSessionPoc, levelWeight = 3, indicatorId = 7, levelName = "POC", levelColor = overallLevelColor, lineStyle = "Solid")
+        f_pushLevel(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags, levelPrice = prevSessionVah, levelWeight = 3, indicatorId = 7, levelName = "VAH", levelColor = overallLevelColor, lineStyle = "Solid")
 
-    f_sortLevels(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars)
+    f_sortLevels(levelPrices = levelPrices, levelWeights = levelWeights, levelIndicators = levelIndicators, levelNames = levelNames, levelColors = levelColors, levelStyles = levelStyles, levelStartBars = levelStartBars, levelZoneLows = levelZoneLows, levelZoneHighs = levelZoneHighs, levelTouchScores = levelTouchScores, levelFreshnessScores = levelFreshnessScores, levelFlipFlags = levelFlipFlags)
 
     if showCluster and array.size(id = levelPrices) > 0
         if showGhostLines
@@ -758,31 +903,58 @@ if barstate.islastconfirmedhistory or barstate.islast
                     f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = ghostPrice, labelText = ghostName, levelColor = ghostColor, styleName = ghostStyle, levelWeight = ghostWeight, startBar = ghostStartBar, ghostMode = true)
                 else
                     f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = ghostPrice, labelText = ghostName, levelColor = ghostColor, styleName = ghostStyle, levelWeight = ghostWeight, ghostMode = true)
-        float zoneLow = array.get(id = levelPrices, index = 0)
-        float zoneHigh = zoneLow
-        float zoneWeightedSum = zoneLow * array.get(id = levelWeights, index = 0)
-        int zoneScore = array.get(id = levelWeights, index = 0)
+        float zoneLow = array.get(id = levelZoneLows, index = 0)
+        float zoneHigh = array.get(id = levelZoneHighs, index = 0)
+        float zoneWeightedSum = array.get(id = levelPrices, index = 0) * array.get(id = levelWeights, index = 0)
+        int zoneWeightTotal = array.get(id = levelWeights, index = 0)
         int zoneMask = f_addIndicatorMask(indicatorMask = 0, indicatorId = array.get(id = levelIndicators, index = 0))
+        array<int> zoneFamilyWeights = array.new<int>(7, 0)
+        array<int> zoneFamilyTouches = array.new<int>(7, 0)
+        array<int> zoneFamilyFreshness = array.new<int>(7, 0)
+        f_setFamilyMax(familyValues = zoneFamilyWeights, indicatorId = array.get(id = levelIndicators, index = 0), candidateValue = array.get(id = levelWeights, index = 0))
+        f_setFamilyMax(familyValues = zoneFamilyTouches, indicatorId = array.get(id = levelIndicators, index = 0), candidateValue = array.get(id = levelTouchScores, index = 0))
+        f_setFamilyMax(familyValues = zoneFamilyFreshness, indicatorId = array.get(id = levelIndicators, index = 0), candidateValue = array.get(id = levelFreshnessScores, index = 0))
+        bool zoneHasFlip = array.get(id = levelFlipFlags, index = 0)
         for zoneIndex = 1 to array.size(id = levelPrices) - 1
             float currentPrice = array.get(id = levelPrices, index = zoneIndex)
             int currentWeight = array.get(id = levelWeights, index = zoneIndex)
             int currentIndicator = array.get(id = levelIndicators, index = zoneIndex)
-            float currentMid = zoneWeightedSum / zoneScore
-            bool mergeIntoZone = math.abs(number = currentPrice - currentMid) <= toleranceValue * 0.75
+            float currentZoneLow = array.get(id = levelZoneLows, index = zoneIndex)
+            float currentZoneHigh = array.get(id = levelZoneHighs, index = zoneIndex)
+            bool mergeIntoZone = currentZoneLow <= zoneHigh + toleranceValue and currentZoneHigh >= zoneLow - toleranceValue
             if mergeIntoZone
-                zoneLow := math.min(zoneLow, currentPrice)
-                zoneHigh := math.max(zoneHigh, currentPrice)
+                zoneLow := math.min(zoneLow, currentZoneLow)
+                zoneHigh := math.max(zoneHigh, currentZoneHigh)
                 zoneWeightedSum += currentPrice * currentWeight
-                zoneScore += currentWeight
+                zoneWeightTotal += currentWeight
                 zoneMask := f_addIndicatorMask(indicatorMask = zoneMask, indicatorId = currentIndicator)
+                f_setFamilyMax(familyValues = zoneFamilyWeights, indicatorId = currentIndicator, candidateValue = currentWeight)
+                f_setFamilyMax(familyValues = zoneFamilyTouches, indicatorId = currentIndicator, candidateValue = array.get(id = levelTouchScores, index = zoneIndex))
+                f_setFamilyMax(familyValues = zoneFamilyFreshness, indicatorId = currentIndicator, candidateValue = array.get(id = levelFreshnessScores, index = zoneIndex))
+                zoneHasFlip := zoneHasFlip or array.get(id = levelFlipFlags, index = zoneIndex)
             else
-                f_drawClusterZone(boxes = renderedBoxes, labels = renderedLabels, zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = currentMid, zoneScore = zoneScore, indicatorMask = zoneMask)
-                zoneLow := currentPrice
-                zoneHigh := currentPrice
+                float currentMid = zoneWeightedSum / zoneWeightTotal
+                bool zoneRecentFlip = zoneHasFlip or f_recentCrossesZone(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterFlipLookback)
+                int zoneApproachPenalty = f_zoneApproachPenalty(zoneMid = currentMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(atrValue, syminfo.mintick))
+                int zoneScore = f_sumIntArray(familyValues = zoneFamilyWeights) + f_sumIntArray(familyValues = zoneFamilyTouches) + f_sumIntArray(familyValues = zoneFamilyFreshness) + (zoneRecentFlip ? 1 : 0) - zoneApproachPenalty
+                f_drawClusterZone(boxes = renderedBoxes, labels = renderedLabels, zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = currentMid, zoneScore = zoneScore, indicatorMask = zoneMask, zoneIsFlip = zoneRecentFlip, approachPenalty = zoneApproachPenalty)
+                zoneLow := currentZoneLow
+                zoneHigh := currentZoneHigh
                 zoneWeightedSum := currentPrice * currentWeight
-                zoneScore := currentWeight
+                zoneWeightTotal := currentWeight
                 zoneMask := f_addIndicatorMask(indicatorMask = 0, indicatorId = currentIndicator)
-        f_drawClusterZone(boxes = renderedBoxes, labels = renderedLabels, zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = zoneWeightedSum / zoneScore, zoneScore = zoneScore, indicatorMask = zoneMask)
+                zoneFamilyWeights := array.new<int>(7, 0)
+                zoneFamilyTouches := array.new<int>(7, 0)
+                zoneFamilyFreshness := array.new<int>(7, 0)
+                f_setFamilyMax(familyValues = zoneFamilyWeights, indicatorId = currentIndicator, candidateValue = currentWeight)
+                f_setFamilyMax(familyValues = zoneFamilyTouches, indicatorId = currentIndicator, candidateValue = array.get(id = levelTouchScores, index = zoneIndex))
+                f_setFamilyMax(familyValues = zoneFamilyFreshness, indicatorId = currentIndicator, candidateValue = array.get(id = levelFreshnessScores, index = zoneIndex))
+                zoneHasFlip := array.get(id = levelFlipFlags, index = zoneIndex)
+        float finalZoneMid = zoneWeightedSum / zoneWeightTotal
+        bool finalZoneFlip = zoneHasFlip or f_recentCrossesZone(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterFlipLookback)
+        int finalApproachPenalty = f_zoneApproachPenalty(zoneMid = finalZoneMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(atrValue, syminfo.mintick))
+        int finalZoneScore = f_sumIntArray(familyValues = zoneFamilyWeights) + f_sumIntArray(familyValues = zoneFamilyTouches) + f_sumIntArray(familyValues = zoneFamilyFreshness) + (finalZoneFlip ? 1 : 0) - finalApproachPenalty
+        f_drawClusterZone(boxes = renderedBoxes, labels = renderedLabels, zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = finalZoneMid, zoneScore = finalZoneScore, indicatorMask = zoneMask, zoneIsFlip = finalZoneFlip, approachPenalty = finalApproachPenalty)
     else if array.size(id = levelPrices) > 0
         int pivotLabelLeftX = bar_index
         int pivotLabelRightX = bar_index + extendBarsRight
@@ -805,9 +977,17 @@ if barstate.islastconfirmedhistory or barstate.islast
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotS4, x2 = bar_index + extendBarsRight, y2 = pivotS4, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotS3, x2 = bar_index + extendBarsRight, y2 = pivotS3, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotS2, x2 = bar_index + extendBarsRight, y2 = pivotS2, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
+            if showPivotMidLevels
+                array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotMidS1S2, x2 = bar_index + extendBarsRight, y2 = pivotMidS1S2, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_dotted))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotS1, x2 = bar_index + extendBarsRight, y2 = pivotS1, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight2Color, width = 2, style = line.style_solid))
+            if showPivotMidLevels
+                array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotMidPPS1, x2 = bar_index + extendBarsRight, y2 = pivotMidPPS1, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_dotted))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotPoint, x2 = bar_index + extendBarsRight, y2 = pivotPoint, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight3Color, width = 3, style = line.style_solid))
+            if showPivotMidLevels
+                array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotMidPPR1, x2 = bar_index + extendBarsRight, y2 = pivotMidPPR1, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_dotted))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotR1, x2 = bar_index + extendBarsRight, y2 = pivotR1, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight2Color, width = 2, style = line.style_solid))
+            if showPivotMidLevels
+                array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotMidR1R2, x2 = bar_index + extendBarsRight, y2 = pivotMidR1R2, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_dotted))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotR2, x2 = bar_index + extendBarsRight, y2 = pivotR2, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotR3, x2 = bar_index + extendBarsRight, y2 = pivotR3, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
             array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = pivotR4, x2 = bar_index + extendBarsRight, y2 = pivotR4, xloc = xloc.bar_index, extend = extend.none, color = pivotWeight1Color, width = 1, style = line.style_solid))
@@ -815,9 +995,17 @@ if barstate.islastconfirmedhistory or barstate.islast
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotS4), text = "S4", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotS3), text = "S3", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotS2), text = "S2", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
+            if showPivotMidLevels
+                array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotMidS1S2), text = "M-S1S2", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotS1), text = "S1", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
+            if showPivotMidLevels
+                array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotMidPPS1), text = "M-PPS1", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotPoint), text = "PP", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
+            if showPivotMidLevels
+                array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotMidPPR1), text = "M-PPR1", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotR1), text = "R1", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
+            if showPivotMidLevels
+                array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotMidR1R2), text = "M-R1R2", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotR2), text = "R2", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotR3), text = "R3", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = pivotLabelLeftX, rightX = pivotLabelRightX), y = f_labelY(pivotR4), text = "R4", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = f_labelSize(sizeName = labelSizeInput), textalign = f_labelTextAlign()))
