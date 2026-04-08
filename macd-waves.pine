@@ -86,18 +86,11 @@ signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visu
 signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = GROUP_WAVES,
      tooltip = "Angle threshold for signal line color (not used for wave counting)")
 waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = GROUP_WAVES)
-waveLabelSize = input.string(defval = "normal", title = "Wave Label Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_WAVES)
+waveLabelSize = input.int(defval = 14, title = "Wave Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
 minBarsBetweenLabels = input.int(defval = 5, title = "Min Bars Between Labels", minval = 0, maxval = 200, group = GROUP_WAVES)
 
-// Map wave label size string to size constant
-waveLabelSizeConst = switch waveLabelSize
-    "auto"   => size.auto
-    "tiny"   => size.tiny
-    "small"  => size.small
-    "normal" => size.normal
-    "large"  => size.large
-    "huge"   => size.huge
-    => size.normal  // fallback
+// Map wave label size to the label size value used by Pine.
+waveLabelSizeConst = waveLabelSize
 
 // 🧮 CALCULATIONS
 // Calculate fast and slow moving averages

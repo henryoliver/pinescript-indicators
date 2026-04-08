@@ -52,7 +52,7 @@ bool showValueArea = input.bool(defval = true, title = "Value Area", tooltip = "
 
 int extendBarsRight = input.int(defval = 40, title = "Extend Right (Bars)", minval = 10, maxval = 300, tooltip = "Controls how far right projected lines and labels extend from the current bar.", group = GROUP_GENERAL)
 bool showLevelLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each visible level or cluster.", group = GROUP_GENERAL)
-string labelSizeInput = input.string(defval = "Normal", title = "Label Size", options = ["Tiny", "Small", "Normal", "Large"], tooltip = "Controls the text size used by all level and cluster labels.", group = GROUP_GENERAL)
+int labelSizeInput = input.int(defval = 14, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all level and cluster labels.", group = GROUP_GENERAL)
 string labelHorizontal = input.string(defval = "Right", title = "Label Horizontal Position", options = ["Left", "Middle", "Right"], tooltip = "Places labels on the left edge, center, or right edge of the level span.", group = GROUP_GENERAL)
 int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars. Pine labels cannot be shifted horizontally in price ticks.", group = GROUP_GENERAL)
 int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_GENERAL)
@@ -116,8 +116,8 @@ float atrValue = ta.atr(length = murreyAtrLength)
 f_lineStyle(string styleName) =>
     styleName == "Dashed" ? line.style_dashed : styleName == "Dotted" ? line.style_dotted : line.style_solid
 
-f_labelSize(string sizeName) =>
-    sizeName == "Tiny" ? size.tiny : sizeName == "Small" ? size.small : sizeName == "Normal" ? size.normal : size.large
+f_labelSize(int sizeName) =>
+    sizeName
 
 f_clearLines(array<line> lines) =>
     for lineObj in lines

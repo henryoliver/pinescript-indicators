@@ -47,14 +47,14 @@ var color tableBorderColor = input.color(defval = color.new(color = NORD3, trans
 
 // Label
 var color labelColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", tooltip = "Text color used for label cells.", group = GROUP_LABEL)
-var int labelSize = input.int(defval = 14, title = "Label Size", minval = 8, maxval = 32, tooltip = "Font size used for label cells.", group = GROUP_LABEL)
+var int labelSize = input.int(defval = 14, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Font size used for label cells.", group = GROUP_LABEL)
 var string labelFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], tooltip = "Font family used for label cells.", group = GROUP_LABEL)
 var string labelHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], tooltip = "Horizontal alignment used for label text.", group = GROUP_LABEL)
 var string labelValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], tooltip = "Vertical alignment used for label text.", group = GROUP_LABEL)
 
 // Value
 var color valueColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", tooltip = "Text color used for value cells.", group = GROUP_VALUE)
-var int valueSize = input.int(defval = 14, title = "Value Size", minval = 8, maxval = 32, tooltip = "Font size used for value cells.", group = GROUP_VALUE)
+var int valueSize = input.int(defval = 14, title = "Value Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Font size used for value cells.", group = GROUP_VALUE)
 var string valueFontFamily = input.string(defval = font.family_default, title = "Font Family", options=[font.family_default, font.family_monospace], tooltip = "Font family used for value cells.", group = GROUP_VALUE)
 var string valueHalign = input.string(defval = text.align_right, title = "Horizontal Alignment", options=[text.align_left, text.align_center, text.align_right], tooltip = "Horizontal alignment used for value text.", group = GROUP_VALUE)
 var string valueValign = input.string(defval = text.align_center, title = "Vertical Alignment", options=[text.align_top, text.align_center, text.align_bottom], tooltip = "Vertical alignment used for value text.", group = GROUP_VALUE)

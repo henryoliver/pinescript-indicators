@@ -100,26 +100,16 @@ cycleLowDotOffsetTicks = input.float(defval = 10.0, title = "Low Dot Offset (Tic
 
 // Wave Settings
 waveLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Color", group = GROUP_WAVES)
-waveLabelSizeOpt = input.string(defval = SIZE_OPTION_NORMAL, title = "Label Size", options = [SIZE_OPTION_TINY, SIZE_OPTION_SMALL, SIZE_OPTION_NORMAL, SIZE_OPTION_LARGE, SIZE_OPTION_HUGE], group = GROUP_WAVES)
+waveLabelSizeOpt = input.int(defval = 14, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
 waveLabelOffsetTop = input.float(defval = 10.0, title = "Top Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelOffsetBottom = input.float(defval = 10.0, title = "Bottom Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
-waveLabelSize = switch waveLabelSizeOpt
-    SIZE_OPTION_TINY => size.tiny
-    SIZE_OPTION_SMALL => size.small
-    SIZE_OPTION_NORMAL => size.normal
-    SIZE_OPTION_LARGE => size.large
-    => size.huge
+waveLabelSize = waveLabelSizeOpt
 
 // Complex Retrace Settings
 complexRetraceShow = input.bool(defval = false, title = "Show Complex Retrace Letters", group = GROUP_WAVES)
 complexRetraceLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Complex Retrace Label Color", group = GROUP_WAVES)
-complexRetraceLabelSizeOpt = input.string(defval = SIZE_OPTION_NORMAL, title = "Complex Retrace Label Size", options = [SIZE_OPTION_TINY, SIZE_OPTION_SMALL, SIZE_OPTION_NORMAL, SIZE_OPTION_LARGE, SIZE_OPTION_HUGE], group = GROUP_WAVES)
-complexRetraceLabelSize = switch complexRetraceLabelSizeOpt
-    SIZE_OPTION_TINY => size.tiny
-    SIZE_OPTION_SMALL => size.small
-    SIZE_OPTION_NORMAL => size.normal
-    SIZE_OPTION_LARGE => size.large
-    => size.huge
+complexRetraceLabelSizeOpt = input.int(defval = 14, title = "Complex Retrace Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
+complexRetraceLabelSize = complexRetraceLabelSizeOpt
 
 // 📈 TREND
 var Trend trend = Trend.new(TrendDir.FLAT, TREND_FLAT_COLOR)

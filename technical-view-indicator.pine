@@ -67,7 +67,7 @@ var bool tableSpacerRight = input.bool(defval = true, title = "Spacer Right", gr
 
 // Text
 var color textColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Color", group = GROUP_TEXT)
-var int textSize = input.int(defval = 14, title = "Text Size", minval = 8, maxval = 32, group = GROUP_TEXT)
+var int textSize = input.int(defval = 14, title = "Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_TEXT)
 var string textFontFamily = input.string(defval = font.family_default, title = "Font Family", 
      options=[font.family_default, font.family_monospace], group = GROUP_TEXT)
 var string textHalign = input.string(defval = text.align_left, title = "Horizontal Alignment", 

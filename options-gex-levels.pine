@@ -3,7 +3,7 @@
 // Options GEX Levels - Manual paste parser
 
 //@version=6
-indicator(title = "Options GEX Levels", shorttitle = "🧬 GEX", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 100)
+indicator(title = "Options GEX Levels", shorttitle = "🧬 GEX", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300)
 
 // 🧱 CONSTANTS
 const string GROUP_DATA = "📝 Data Input"
@@ -12,6 +12,7 @@ const string GROUP_LEVELS = "📏 Levels"
 const string GROUP_SESSION = "🕒 Session"
 const string GROUP_LABELS = "🏷️ Labels"
 const string GROUP_PROFILES = "📌 Profiles"
+const string GROUP_DARKPOOL = "🌑 Dark Pools"
 
 // Nord Theme Color Constants
 // Polar Night
@@ -65,8 +66,8 @@ color squeezeZoneFillColor = input.color(defval = color.new(NORD10, 88), title =
 bool showLabels = input.bool(defval = true, title = "Show Labels", group = GROUP_LABELS)
 bool showStrikePrice = input.bool(defval = true, title = "Show Strike Price", group = GROUP_LABELS)
 bool showLevelInfo = input.bool(defval = true, title = "Show Level Info", group = GROUP_LABELS)
-string strikeTextSize = input.string(defval = "Normal", title = "Strike Text Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_LABELS)
-string infoTextSize = input.string(defval = "Normal", title = "Info Text Size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = GROUP_LABELS)
+int strikeTextSize = input.int(defval = 14, title = "Strike Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_LABELS)
+int infoTextSize = input.int(defval = 14, title = "Info Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_LABELS)
 int infoGapBars = input.int(defval = 1, title = "Info Gap (Bars)", minval = 0, maxval = 20, group = GROUP_LABELS)
 bool showLevelBars = input.bool(defval = false, title = "Show Level Bars", group = GROUP_LABELS)
 
@@ -85,6 +86,16 @@ int profileEdgeGapBars = input.int(defval = 30, title = "Profile Edge Gap (Bars)
 color profilePosColor = input.color(defval = color.new(NORD8, 60), title = "Profile Positive", group = GROUP_PROFILES)
 color profileNegColor = input.color(defval = color.new(NORD11, 60), title = "Profile Negative", group = GROUP_PROFILES)
 color profileNeutralColor = input.color(defval = color.new(NORD4, 60), title = "Profile Neutral", group = GROUP_PROFILES)
+
+// Dark Pools
+bool showDarkPoolLevels = input.bool(defval = true, title = "Show Dark Pool Levels", group = GROUP_DARKPOOL)
+int maxDarkPoolLevels = input.int(defval = 10, title = "Max Dark Pool Levels", minval = 1, maxval = 20, group = GROUP_DARKPOOL)
+float minDarkPoolAbsPercent = input.float(defval = 10, title = "Min Dark Pool Abs %", minval = 0, maxval = 100, step = 1, group = GROUP_DARKPOOL)
+color darkPoolBuyColor = input.color(defval = NORD14, title = "Buy-Side Color", group = GROUP_DARKPOOL)
+color darkPoolSellColor = input.color(defval = NORD12, title = "Sell-Side Color", group = GROUP_DARKPOOL)
+bool showDarkPoolZones = input.bool(defval = true, title = "Show as Zones/Boxes", group = GROUP_DARKPOOL)
+bool showDarkPoolProfile = input.bool(defval = false, title = "Show Dark Pool Profile", group = GROUP_DARKPOOL)
+bool showDarkPoolStats = input.bool(defval = false, title = "Show Dark Pool Stats", group = GROUP_DARKPOOL)
 
 // Debug (bottom)
 bool showDebug = input.bool(defval = false, title = "Show Debug Label", group = GROUP_DEBUG)
@@ -122,11 +133,8 @@ f_safeFloat(string s) =>
 f_hasZone(float v) =>
     not na(v) and v != 0
 
-f_labelSize(string s) =>
-    s == "Tiny" ? size.tiny :
-     s == "Small" ? size.small :
-     s == "Normal" ? size.normal :
-     s == "Large" ? size.large : size.huge
+f_labelSize(int s) =>
+    s
 
 f_twoDigits(int v) =>
     v < 10 ? "0" + str.tostring(v) : str.tostring(v)
@@ -234,6 +242,24 @@ f_valueAtStrike(array<float> strikes, array<float> values, float strike) =>
                 break
     out
 
+f_zoneScoreAtPrice(array<float> lows, array<float> highs, array<float> scores, float price) =>
+    float out = na
+    int itemCount = math.min(array.size(lows), math.min(array.size(highs), array.size(scores)))
+    if itemCount > 0
+        for i = 0 to itemCount - 1
+            float zoneLow = array.get(lows, i)
+            float zoneHigh = array.get(highs, i)
+            if price >= zoneLow - syminfo.mintick and price <= zoneHigh + syminfo.mintick
+                out := array.get(scores, i)
+                break
+    out
+
+f_formatFlow(float v) =>
+    float absV = math.abs(v)
+    absV >= 1000 ? str.tostring(v / 1000.0, "#.##") + "B" :
+     absV >= 1 ? str.tostring(v, "#.##") + "M" :
+     absV >= 0.001 ? str.tostring(v * 1000.0, "#") + "K" : str.tostring(v, "#.###")
+
 f_drawProfileBars(array<box> boxes, array<label> labels, array<float> strikes, array<float> values, float maxAbs, int offsetBars, string title, bool useSignFromNetGex, array<float> netGexStrikes, array<float> netGexValues) =>
     int itemCount = math.min(array.size(strikes), array.size(values))
     if itemCount > 0 and maxAbs > 0
@@ -281,6 +307,7 @@ var int g_expiryHour = na
 var int g_expiryMin = na
 var int g_dteVal = na
 var string g_regime = ""
+float atr14 = ta.atr(14)
 
 int todayInt = year * 10000 + month * 100 + dayofmonth
 bool shouldRebuild = barstate.islast and dataText != lastDataText
@@ -298,6 +325,7 @@ if shouldRebuild
     int parsedZones = 0
     int parsedMetrics = 0
     int parsedFlips = 0
+    int parsedDarkPool = 0
     string lastMatchedLine = ""
     string lastRecordType = ""
 
@@ -328,6 +356,19 @@ if shouldRebuild
     array<float> netDexValues = array.new<float>()
     array<float> netVolStrikes = array.new<float>()
     array<float> netVolValues = array.new<float>()
+    array<float> darkPoolStrikes = array.new<float>()
+    array<float> darkPoolValues = array.new<float>()
+    array<float> dpZoneLows = array.new<float>()
+    array<float> dpZoneHighs = array.new<float>()
+    array<float> dpZoneScores = array.new<float>()
+    float dpDarkVol = na
+    float dpDarkPct = na
+    float dpBuySell = na
+    float dpPrintCount = na
+    float dpDarkPrintCount = na
+    float dpNeutralPct = na
+    float dpNeutralVol = na
+    float dpCollectionMins = na
     resolvedStrikeTextSize = f_labelSize(strikeTextSize)
     resolvedInfoTextSize = f_labelSize(infoTextSize)
 
@@ -390,11 +431,11 @@ if shouldRebuild
                     zoneNegSqueeze := valNum
                 else if key == "NEG_GAMMA"
                     zoneNegGamma := valNum
-                else if key == "NEG_TRANS"
+                else if key == "NEG_TRANS" and not na(valNum)
                     zoneNegTrans := valNum
                 else if key == "HVL"
                     zoneHvl := valNum
-                else if key == "POS_TRANS"
+                else if key == "POS_TRANS" and not na(valNum)
                     zonePosTrans := valNum
                 else if key == "POS_GAMMA"
                     zonePosGamma := valNum
@@ -403,6 +444,45 @@ if shouldRebuild
                 else if key == "REGIME"
                     regime := valStr
                     g_regime := valStr
+        else if recordType == "DPZONES"
+            parsedDarkPool += 1
+            for t = 3 to array.size(tokens) - 1
+                string token = str.trim(array.get(tokens, t))
+                array<string> parts = str.split(token, ":")
+                if array.size(parts) == 3
+                    float zoneLow = f_safeFloat(array.get(parts, 0))
+                    float zoneHigh = f_safeFloat(array.get(parts, 1))
+                    float score = f_safeFloat(array.get(parts, 2))
+                    if not na(zoneLow) and not na(zoneHigh) and not na(score)
+                        array.push(dpZoneLows, zoneLow)
+                        array.push(dpZoneHighs, zoneHigh)
+                        array.push(dpZoneScores, score)
+        else if recordType == "DPSTATS"
+            parsedDarkPool += 1
+            for t = 3 to array.size(tokens) - 1
+                string token = str.trim(array.get(tokens, t))
+                array<string> parts = str.split(token, ":")
+                if array.size(parts) < 2
+                    continue
+                string key = str.trim(array.get(parts, 0))
+                string valStr = str.trim(array.get(parts, 1))
+                float valNum = f_safeFloat(valStr)
+                if key == "DARKVOL"
+                    dpDarkVol := valNum / 1000000.0
+                else if key == "DARKPCT"
+                    dpDarkPct := valNum
+                else if key == "BUYSELL"
+                    dpBuySell := valNum
+                else if key == "PRINTS"
+                    dpPrintCount := valNum
+                else if key == "DARKPRINTS"
+                    dpDarkPrintCount := valNum
+                else if key == "NEUTRALPCT"
+                    dpNeutralPct := valNum
+                else if key == "NEUTRALVOL"
+                    dpNeutralVol := valNum / 1000000.0
+                else if key == "MINS"
+                    dpCollectionMins := valNum
         else
             int t = 3
             while t < array.size(tokens)
@@ -439,6 +519,10 @@ if shouldRebuild
                             else if recordType == "NETVOL"
                                 array.push(netVolStrikes, strike)
                                 array.push(netVolValues, val)
+                            else if recordType == "DARKPOOL"
+                                parsedDarkPool += 1
+                                array.push(darkPoolStrikes, strike)
+                                array.push(darkPoolValues, val)
                 t += 1
 
     float netGexMaxAbs = 0
@@ -446,6 +530,12 @@ if shouldRebuild
     if netGexItemCount > 0
         for i = 0 to netGexItemCount - 1
             netGexMaxAbs := math.max(netGexMaxAbs, math.abs(array.get(netGexValues, i)))
+
+    float darkPoolMaxAbs = 0
+    int darkPoolItemCount = math.min(array.size(darkPoolStrikes), array.size(darkPoolValues))
+    if darkPoolItemCount > 0
+        for i = 0 to darkPoolItemCount - 1
+            darkPoolMaxAbs := math.max(darkPoolMaxAbs, math.abs(array.get(darkPoolValues, i)))
 
     // Plot HVL
     if showHvl and f_hasZone(zoneHvl)
@@ -559,6 +649,56 @@ if shouldRebuild
                 f_drawLevelLayout(g_lines, g_labels, g_boxes, strike, absVal, netGexMaxAbs, val, f_levelWidth(sideRank), lineColor, wallText, f_levelStyle(sideRank), resolvedStrikeTextSize, resolvedInfoTextSize, lineColor)
             array.set(absVals, idx, -1)
 
+    if showDarkPoolZones and array.size(dpZoneLows) > 0
+        int zoneCount = math.min(20, math.min(array.size(dpZoneLows), math.min(array.size(dpZoneHighs), array.size(dpZoneScores))))
+        int zoneLeft = bar_index
+        int zoneRight = bar_index + levelRightBars
+        for i = 0 to zoneCount - 1
+            float zoneLow = array.get(dpZoneLows, i)
+            float zoneHigh = array.get(dpZoneHighs, i)
+            float score = array.get(dpZoneScores, i)
+            color fill = score >= 0 ? color.new(darkPoolBuyColor, 80) : color.new(darkPoolSellColor, 80)
+            box bxDp = box.new(left = zoneLeft, right = zoneRight, bottom = math.min(zoneLow, zoneHigh), top = math.max(zoneLow, zoneHigh), bgcolor = fill, border_color = color.new(fill, 25))
+            array.push(g_boxes, bxDp)
+
+    if showDarkPoolLevels and darkPoolItemCount > 0
+        array<float> dpAbsVals = array.new<float>()
+        for i = 0 to darkPoolItemCount - 1
+            array.push(dpAbsVals, math.abs(array.get(darkPoolValues, i)))
+
+        int dpLimit = math.min(maxDarkPoolLevels, darkPoolItemCount)
+        int dpBuyRank = 0
+        int dpSellRank = 0
+        for levelIndex = 0 to dpLimit - 1
+            int idx = f_maxIndex(dpAbsVals)
+            if na(idx)
+                break
+            float absVal = array.get(dpAbsVals, idx)
+            float localPct = darkPoolMaxAbs > 0 ? absVal / darkPoolMaxAbs * 100.0 : 0
+            if localPct < minDarkPoolAbsPercent
+                array.set(dpAbsVals, idx, -1)
+                continue
+            float strike = array.get(darkPoolStrikes, idx)
+            float val = array.get(darkPoolValues, idx)
+            float zoneScore = f_zoneScoreAtPrice(dpZoneLows, dpZoneHighs, dpZoneScores, strike)
+            string flowText = na(zoneScore) ? f_pctAbs(absVal, darkPoolMaxAbs) : f_formatFlow(math.abs(zoneScore))
+            string labelText = "DP" + str.tostring(levelIndex + 1)
+            int sideRank = 0
+            color lineColor = na
+            if val > 0
+                dpBuyRank += 1
+                sideRank := dpBuyRank
+                labelText := "DP" + str.tostring(dpBuyRank) + " Support " + flowText
+                lineColor := f_applyOpacity(darkPoolBuyColor, f_levelOpacity(sideRank))
+            else if val < 0
+                dpSellRank += 1
+                sideRank := dpSellRank
+                labelText := "DP" + str.tostring(dpSellRank) + " Resistance " + flowText
+                lineColor := f_applyOpacity(darkPoolSellColor, f_levelOpacity(sideRank))
+            if not na(lineColor)
+                f_drawLevelLayout(g_lines, g_labels, g_boxes, strike, absVal, darkPoolMaxAbs, val, f_levelWidth(sideRank), lineColor, labelText, line.style_dashed, resolvedStrikeTextSize, resolvedInfoTextSize, lineColor)
+            array.set(dpAbsVals, idx, -1)
+
     // Profiles (horizontal bars by strike)
     int profileOffset = profileOffsetBars
     if showAbsProfile and array.size(absGexStrikes) > 0
@@ -580,12 +720,29 @@ if shouldRebuild
         for i = 0 to array.size(netVolValues) - 1
             maxAbs := math.max(maxAbs, math.abs(array.get(netVolValues, i)))
         f_drawProfileBars(g_boxes, g_labels, netVolStrikes, netVolValues, maxAbs, profileOffset, "NETVOL", false, netGexStrikes, netGexValues)
+        profileOffset += profileSpacingBars
+
+    if showDarkPoolProfile and array.size(darkPoolStrikes) > 0
+        f_drawProfileBars(g_boxes, g_labels, darkPoolStrikes, darkPoolValues, darkPoolMaxAbs, profileOffset, "DARKPOOL", false, netGexStrikes, netGexValues)
+
+    if showDarkPoolStats and (not na(dpDarkVol) or not na(dpDarkPct))
+        string statsText = "DP " + f_formatFlow(dpDarkVol) + " | " + str.tostring(dpDarkPct, "#.0") + "% | B/S " + str.tostring(dpBuySell, "#.##") + " | Prints " + str.tostring(dpPrintCount, "#")
+        if not na(dpDarkPrintCount)
+            statsText += " / Dark " + str.tostring(dpDarkPrintCount, "#")
+        if not na(dpNeutralPct)
+            statsText += " | Neutral " + str.tostring(dpNeutralPct, "#.0") + "%"
+        if not na(dpNeutralVol)
+            statsText += " (" + f_formatFlow(dpNeutralVol) + ")"
+        statsText += " | " + str.tostring(dpCollectionMins, "#") + "m"
+        float statsY = high + atr14 * 0.5
+        label lbStats = label.new(x = bar_index + levelRightBars, y = statsY, text = statsText, style = label.style_label_left, textcolor = NORD6, color = color.new(NORD0, 15), size = resolvedInfoTextSize)
+        array.push(g_labels, lbStats)
 
     lastDataText := dataText
     lastRenderDate := todayInt
 
     if showDebug
-        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nToday: {2}\nLines: {3}\nMatched: {4}\nZones: {5}\nMetrics: {6}\nFlips: {7}", syminfo.tickerid, syminfo.ticker, str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips))
+        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nToday: {2}\nLines: {3}\nMatched: {4}\nZones: {5}\nMetrics: {6}\nFlips: {7}\nDarkPool: {8}", syminfo.tickerid, syminfo.ticker, str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips), str.tostring(parsedDarkPool))
         if showParseDetails
             dbg += "\nLastType: " + lastRecordType
             dbg += "\nLastLine: " + (lastMatchedLine == "" ? "<none>" : lastMatchedLine)

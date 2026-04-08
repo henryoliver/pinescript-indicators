@@ -3,7 +3,7 @@
 // Ticker Tape - Tick-by-tick order flow tape
 
 //@version=6
-indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_bars_back = 0)
+indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_bars_back = 0, max_labels_count = 500)
 
 // Ticker tape, introduced in 1867 by Edward Calahan and perfected by Thomas Edison,
 // was the first mechanical system for transmitting stock prices over telegraph lines.
@@ -31,6 +31,14 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
+// Input Groups
+const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_TABLE = "📋 Table"
+const string GROUP_LAYOUT = "📐 Layout"
+const string GROUP_RETAIL = "🛍️ Retail / Amateur"
+const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
+const string GROUP_BLOCK = "🐋 Block Trades"
+
 // 🧩 TYPE DEFINITIONS
 
 // Custom type to store complete tick data as a structured record
@@ -42,14 +50,30 @@ type TickData
     float ask      // Ask price at time of execution
     int   direction // 1 = buy/up, -1 = sell/down, 0 = neutral/unknown
 
-// 🎛️ USER INPUT SETTINGS
+type BlockTradeState
+    int count = 0
 
-// Input Groups
-const string GROUP_GENERAL = "⚙️ General"
-const string GROUP_TABLE = "📋 Table"
-const string GROUP_LAYOUT = "📐 Layout"
-const string GROUP_RETAIL = "🛍️ Retail / Amateur"
-const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
+type TapeProcessingState
+    int processedTickCount = 0
+    float tapePrice = na
+
+type LastRecordedTick
+    float price = na
+    float volume = na
+    int time = na
+    int direction = na
+
+type TailTracker
+    float price = na
+    float volume = na
+    int time = na
+
+type RealtimeBarState
+    float volume = na
+    float price = na
+    int updateTime = na
+
+// 🎛️ USER INPUT SETTINGS
 
 // General Settings
 showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
@@ -57,27 +81,27 @@ showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Ord
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all)", group = GROUP_GENERAL)
-largeOrderSize = input.int(defval = 10000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted. Set to 0 to disable large order highlighting.", group = GROUP_GENERAL)
-largeOrderTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Large Order Text", inline = "large", group = GROUP_GENERAL)
-largeOrderBackgroundColor = input.color(defval = color.new(NORD10, 40), title = "Large Order BG", inline = "large", group = GROUP_GENERAL)
+largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
+largeOrderTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
+largeOrderBackgroundColor = input.color(defval = color.new(NORD10, 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBold = input.bool(defval = true, title = "Bold", inline = "large", group = GROUP_GENERAL)
-backgroundColor = input.color(defval = NORD0, title = "Table Background", group = GROUP_GENERAL)
-defaultTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Default Text", group = GROUP_GENERAL)
-askTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Ask Text", inline = "ask", group = GROUP_GENERAL)
-askBackgroundColor = input.color(defval = color.new(#88C0D0, 90), title = "Ask BG", inline = "ask", group = GROUP_GENERAL)
-aboveAskTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Above Ask Text", inline = "above_ask", group = GROUP_GENERAL)
-aboveAskBackgroundColor = input.color(defval = color.new(NORD8, 50), title = "Above Ask BG", inline = "above_ask", group = GROUP_GENERAL)
+backgroundColor = input.color(defval = NORD0, title = "Table Background", tooltip = "Background color for the tape table.", group = GROUP_GENERAL)
+defaultTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Default Text", tooltip = "Default text color for neutral table cells.", group = GROUP_GENERAL)
+askTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Ask Text", tooltip = "Text color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
+askBackgroundColor = input.color(defval = color.new(#88C0D0, 90), title = "Ask BG", tooltip = "Background color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
+aboveAskTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Above Ask Text", tooltip = "Text color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
+aboveAskBackgroundColor = input.color(defval = color.new(NORD8, 50), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
 aboveAskBold = input.bool(defval = true, title = "Bold", inline = "above_ask", group = GROUP_GENERAL)
-bidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Bid Text", inline = "bid", group = GROUP_GENERAL)
-bidBackgroundColor = input.color(defval = color.new(#BF616A, 90), title = "Bid BG", inline = "bid", group = GROUP_GENERAL)
-belowBidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Below Bid Text", inline = "below_bid", group = GROUP_GENERAL)
-belowBidBackgroundColor = input.color(defval = color.new(NORD11, 50), title = "Below Bid BG", inline = "below_bid", group = GROUP_GENERAL)
+bidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Bid Text", tooltip = "Text color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
+bidBackgroundColor = input.color(defval = color.new(#BF616A, 90), title = "Bid BG", tooltip = "Background color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
+belowBidTextColor = input.color(defval = color.new(#D8DEE9, 20), title = "Below Bid Text", tooltip = "Text color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
+belowBidBackgroundColor = input.color(defval = color.new(NORD11, 50), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBold = input.bool(defval = true, title = "Bold", inline = "below_bid", group = GROUP_GENERAL)
 
 // Table Settings
-tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group = GROUP_TABLE)
-textSize = input.string(defval = "normal", title = "Text Size", options = ["auto", "tiny", "small", "normal", "large", "huge"], group = GROUP_TABLE)
-fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], group = GROUP_TABLE)
+tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], tooltip = "Where the ticker tape table is anchored on the chart.", group = GROUP_TABLE)
+textSize = input.int(defval = 14, title = "Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Font size used for the table.", group = GROUP_TABLE)
+fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], tooltip = "Font family used for all table text.", group = GROUP_TABLE)
 headerTextAlign = input.string(defval = "center", title = "Header Text Alignment", options = ["left", "center", "right"], tooltip = "Text alignment for header row", group = GROUP_TABLE)
 timeColumnAlign = input.string(defval = "center", title = "Time Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
 priceColumnAlign = input.string(defval = "center", title = "Price Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
@@ -85,36 +109,37 @@ sizeColumnAlign = input.string(defval = "center", title = "Size Column Alignment
 condColumnAlign = input.string(defval = "center", title = "Cond Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
 
 // Layout Settings
-headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
-dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, group = GROUP_LAYOUT)
-columnWidth = input.float(defval = 4.5, title = "Column Width (all columns)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Width applied to all columns", group = GROUP_LAYOUT)
-frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, inline = "frame", group = GROUP_LAYOUT)
-frameColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "frame", group = GROUP_LAYOUT)
-borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, inline = "border", group = GROUP_LAYOUT)
-borderColor = input.color(defval = color.new(NORD0, 0), title = "", inline = "border", group = GROUP_LAYOUT)
+headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows.", group = GROUP_LAYOUT)
+dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of each tape data row.", group = GROUP_LAYOUT)
+columnWidth = input.float(defval = 3.0, title = "Column Width (all columns)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Width applied to all columns", group = GROUP_LAYOUT)
+frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, tooltip = "Width of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
+frameColor = input.color(defval = color.new(NORD0, 0), title = "", tooltip = "Color of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
+borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, tooltip = "Width of cell borders.", inline = "border", group = GROUP_LAYOUT)
+borderColor = input.color(defval = color.new(NORD0, 0), title = "", tooltip = "Color of cell borders.", inline = "border", group = GROUP_LAYOUT)
 
 // Retail / Amateur Settings
-showRetail = input.bool(defval = true, title = "Show Retail/Amateur", group = GROUP_RETAIL)
+showRetail = input.bool(defval = true, title = "Show Retail/Amateur", tooltip = "Show the retail/amateur tape section.", group = GROUP_RETAIL)
 retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, group = GROUP_RETAIL)
-retailMinSize = input.int(defval = 1, title = "Retail Min Size", minval = 0, step = 1, group = GROUP_RETAIL)
-retailMaxSize = input.int(defval = 300, title = "Retail Max Size", minval = 0, step = 1, group = GROUP_RETAIL)
-retailHeaderBg = input.color(defval = color.new(NORD2, 80), title = "Retail Header BG", group = GROUP_RETAIL)
+retailHeaderBg = input.color(defval = color.new(NORD2, 80), title = "Retail Header BG", tooltip = "Background color for the retail section label.", group = GROUP_RETAIL)
+retailMinSize = input.int(defval = 0, title = "Retail Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the retail/amateur section.", group = GROUP_RETAIL)
+retailMaxSize = input.int(defval = 100, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section.", group = GROUP_RETAIL)
 
 // Professional / Institutional Settings
-showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", group = GROUP_INSTITUTIONAL)
+showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", tooltip = "Show the institutional/professional tape section.", group = GROUP_INSTITUTIONAL)
 institutionalRows = input.int(defval = 10, title = "Institutional Rows", minval = 1, maxval = 50, group = GROUP_INSTITUTIONAL)
-institutionalMinSize = input.int(defval = 500, title = "Institutional Min Size", minval = 0, step = 1, group = GROUP_INSTITUTIONAL)
-institutionalMaxSize = input.int(defval = 100000, title = "Institutional Max Size", minval = 0, step = 1, group = GROUP_INSTITUTIONAL)
-institutionalHeaderBg = input.color(defval = color.new(NORD1, 80), title = "Institutional Header BG", group = GROUP_INSTITUTIONAL)
+institutionalHeaderBg = input.color(defval = color.new(NORD1, 80), title = "Institutional Header BG", tooltip = "Background color for the institutional section label.", group = GROUP_INSTITUTIONAL)
+institutionalMinSize = input.int(defval = 10000, title = "Institutional Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the institutional/professional section.", group = GROUP_INSTITUTIONAL)
+institutionalMaxSize = input.int(defval = 100000, title = "Institutional Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the institutional/professional section. Set to 0 to allow any size above the minimum.", group = GROUP_INSTITUTIONAL)
+
+// Block Trade Settings
+showBlockTradeMarkers = input.bool(defval = true, title = "Show Block Trade Markers", group = GROUP_BLOCK)
+blockSizeThreshold = input.int(defval = 10000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade.", group = GROUP_BLOCK)
 
 // 🧮 DATA & CALCULATIONS
 int retailRowsActive = showRetail ? retailRows : 0
 int instRowsActive = showInstitutional ? institutionalRows : 0
 bool showGap = showInstitutional and showRetail
 int totalRows = math.max(1, (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0))
-
-f_inRange(float value, int minValue, int maxValue) =>
-    value >= minValue and (maxValue <= 0 or value <= maxValue)
 
 // DATA FETCHING
 // Request tick-level data from lower timeframe (1T = 1 tick)
@@ -123,36 +148,60 @@ f_inRange(float value, int minValue, int maxValue) =>
      symbol            = syminfo.tickerid,
      timeframe         = "1T",
      expression        = [close, volume, time, bid, ask],
-     ignore_invalid_symbol = true
+     ignore_invalid_symbol = true,
+     ignore_invalid_timeframe = true
 )
-
 // PERSISTENT STORAGE
 // varip = variable that persists across script executions (real-time updates)
 // These arrays store validated TickData records that survive script recalculations
 varip array<TickData> institutionalTicks = array.new<TickData>()
 varip array<TickData> retailTicks = array.new<TickData>()
 
-// Track the last processed tick count to avoid reprocessing the same ticks
-varip int lastProcessedTickCount = 0
-varip float lastProcessedTapePrice = na
-varip float lastRecordedTickPrice = na
-varip float lastRecordedTickVolume = na
-varip int lastRecordedTickTime = na
-varip int lastRecordedTickDirection = na
-varip float lastSeenTailPrice = na
-varip float lastSeenTailVolume = na
-varip int lastSeenTailTime = na
-varip float lastRealtimeBarVolume = na
-varip float lastRealtimeBarPrice = na
-varip int lastRealtimeUpdateTime = na
+varip TapeProcessingState tapeState = TapeProcessingState.new()
+varip LastRecordedTick lastRecordedTick = LastRecordedTick.new()
+varip TailTracker tailTracker = TailTracker.new()
+varip RealtimeBarState realtimeBarState = RealtimeBarState.new()
+varip BlockTradeState blockState = BlockTradeState.new()
+var bool tableLayoutInitialized = false
 
-// TICK PROCESSING
-// Keep the tape rolling across bars; row caps trim the oldest visible records automatically.
-if barstate.isnew
-    lastProcessedTickCount := 0
-    lastRealtimeBarVolume := 0.0
-    lastRealtimeBarPrice := close
-    lastRealtimeUpdateTime := timenow
+// 🛠️ FUNCTIONS
+f_resetBlockTradeState(BlockTradeState state) =>
+    state.count := 0
+
+f_recordBlockTradeState(BlockTradeState state) =>
+    state.count += 1
+
+f_updateLastRecordedTick(LastRecordedTick state, float recordedPrice, float recordedVolume, int recordedTime, int recordedDirection) =>
+    state.price := recordedPrice
+    state.volume := recordedVolume
+    state.time := recordedTime
+    state.direction := recordedDirection
+
+f_isDuplicateLastRecordedTick(LastRecordedTick state, float candidatePrice, float candidateVolume, int candidateTime, int candidateDirection) =>
+    candidateTime == state.time and candidateDirection == state.direction and candidatePrice == state.price and candidateVolume == state.volume
+
+f_updateTailTracker(TailTracker state, float tailPrice, float tailVolume, int tailTime) =>
+    state.price := tailPrice
+    state.volume := tailVolume
+    state.time := tailTime
+
+f_hasTailChanged(TailTracker state, float tailPrice, float tailVolume, int tailTime) =>
+    tailPrice != state.price or tailVolume != state.volume or tailTime != state.time
+
+f_resetRealtimeBarState(RealtimeBarState state, float barPrice, int barUpdateTime) =>
+    state.volume := 0.0
+    state.price := barPrice
+    state.updateTime := barUpdateTime
+
+f_updateRealtimeBarState(RealtimeBarState state, float barVolume, float barPrice, int barUpdateTime) =>
+    state.volume := barVolume
+    state.price := barPrice
+    state.updateTime := barUpdateTime
+
+f_inRange(float value, float minValue, float maxValue) =>
+    bool passesMin = value >= minValue
+    bool passesMax = maxValue <= 0 or value <= maxValue
+    passesMin and passesMax
 
 f_hasValidQuotes(float tickBid, float tickAsk) =>
     not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
@@ -167,7 +216,7 @@ f_classifyDirection(float currentPrice, float tickBid, float tickAsk, float prev
     quoteDirection != 0 ? quoteDirection : syntheticDirection
 
 f_isDuplicatePrint(float currentPrice, float currentVolume, int currentTime, int currentDirection) =>
-    currentTime == lastRecordedTickTime and currentDirection == lastRecordedTickDirection and currentPrice == lastRecordedTickPrice and currentVolume == lastRecordedTickVolume
+    f_isDuplicateLastRecordedTick(lastRecordedTick, currentPrice, currentVolume, currentTime, currentDirection)
 
 f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
     int insertIndex = 0
@@ -182,8 +231,7 @@ f_storeTick(float tickPrice, float tickVolume, int tickTime, float tickBid, floa
     bool inInstitutionalRange = showInstitutional and f_inRange(tickVolume, institutionalMinSize, institutionalMaxSize)
     bool inRetailRange = showRetail and f_inRange(tickVolume, retailMinSize, retailMaxSize)
     bool passesSectionFilter = inInstitutionalRange or inRetailRange
-    bool isDuplicatePrint = f_isDuplicatePrint(tickPrice, tickVolume, tickTime, tickDirection)
-    if passesSectionFilter and not isDuplicatePrint
+    if passesSectionFilter
         TickData newTick = TickData.new(
             price = tickPrice,
             volume = tickVolume,
@@ -196,75 +244,79 @@ f_storeTick(float tickPrice, float tickVolume, int tickTime, float tickBid, floa
             f_insertSortedTick(ticks = institutionalTicks, newTick = newTick, maxRows = instRowsActive)
         else if inRetailRange and retailRowsActive > 0
             f_insertSortedTick(ticks = retailTicks, newTick = newTick, maxRows = retailRowsActive)
-    not isDuplicatePrint and passesSectionFilter
+    passesSectionFilter
 
-// Get the number of ticks available in the current bar
+
+f_blockTradeTransparency(int blockCount) =>
+    int opacityPercent = math.min(blockCount * 40, 100)
+    100 - opacityPercent
+
+
+f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk) =>
+    int tickDirection = f_classifyDirection(tickPrice, tickBid, tickAsk, tapeState.tapePrice)
+    bool isDuplicatePrint = f_isDuplicatePrint(tickPrice, tickVolume, tickTime, tickDirection)
+    bool passesAggressiveFilter = not showAggressiveOnly or tickDirection != 0
+    if passesAggressiveFilter and not isDuplicatePrint
+        bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickBid, tickAsk, tickDirection)
+        if storedTick
+            f_updateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
+    tapeState.tapePrice := tickPrice
+
+// 📰 TAPE PROCESSING
+// Keep the tape rolling across bars; row caps trim the oldest visible records automatically.
+if barstate.isnew
+    tapeState.processedTickCount := 0
+    f_resetRealtimeBarState(realtimeBarState, close, timenow)
+    f_resetBlockTradeState(blockState)
+    tableLayoutInitialized := false
+
+// 📰 LOWER-TF TICKS
 int availableTickCount = tickPrices.size()
 float currentTailPrice = availableTickCount > 0 ? tickPrices.get(availableTickCount - 1) : na
 float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
 int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
-bool tailTickChanged = availableTickCount > 0 and (currentTailPrice != lastSeenTailPrice or currentTailVolume != lastSeenTailVolume or currentTailTime != lastSeenTailTime)
-bool newTicksThisExec = availableTickCount > lastProcessedTickCount or tailTickChanged
+bool tailTickChanged = availableTickCount > 0 and f_hasTailChanged(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
+bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
 
-// Only process NEW ticks that we haven't seen yet
-// This prevents duplicate processing and performance issues
 if newTicksThisExec
-    int processStartIndex = availableTickCount > lastProcessedTickCount ? lastProcessedTickCount : math.max(availableTickCount - 1, 0)
-    // Process only the NEW ticks, or the changed tail tick when the last element updates in place.
-    for tickIndex = processStartIndex to availableTickCount - 1
-        // Step 1: Extract tick data from arrays
+    int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
+    // Lightweight pass over ALL new ticks for block trade detection only.
+    if showBlockTradeMarkers
+        for tickIndex = processStartIndex to availableTickCount - 1
+            float vol = tickVolumes.get(tickIndex)
+            if not na(vol) and vol >= blockSizeThreshold
+                f_recordBlockTradeState(blockState)
+    // Display pass capped to what fits on screen — older ticks would be pushed out anyway.
+    int cappedStartIndex = math.max(processStartIndex, availableTickCount - (instRowsActive + retailRowsActive))
+    for tickIndex = cappedStartIndex to availableTickCount - 1
         float currentTickPrice = tickPrices.get(tickIndex)
         float currentTickVolume = tickVolumes.get(tickIndex)
         int currentTickTime = tickTimes.get(tickIndex)
         float currentTickBid = tickBids.get(tickIndex)
         float currentTickAsk = tickAsks.get(tickIndex)
 
-        // Step 2: Validate - accept core print data even when quote fields are unavailable.
         bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
 
-        if isCompleteRecord
-            // Step 3: Apply user-defined filters
-            bool passesMinimumSize = currentTickVolume >= minimumSize
-            int currentTickDirection = f_classifyDirection(currentTickPrice, currentTickBid, currentTickAsk, lastProcessedTapePrice)
-            bool isDuplicatePrint = f_isDuplicatePrint(currentTickPrice, currentTickVolume, currentTickTime, currentTickDirection)
-
-            // Treat prints at/through the ask as buy-side aggressive and at/through the bid as sell-side aggressive.
-            bool passesAggressiveFilter = not showAggressiveOnly or currentTickDirection != 0
-
-            if passesMinimumSize and passesAggressiveFilter and not isDuplicatePrint
-                bool storedTick = f_storeTick(currentTickPrice, currentTickVolume, currentTickTime, currentTickBid, currentTickAsk, currentTickDirection)
-                if storedTick
-                    lastRecordedTickPrice := currentTickPrice
-                    lastRecordedTickVolume := currentTickVolume
-                    lastRecordedTickTime := currentTickTime
-                    lastRecordedTickDirection := currentTickDirection
-
-            lastProcessedTapePrice := currentTickPrice
+        if isCompleteRecord and currentTickVolume >= minimumSize
+            f_processAndStoreTick(currentTickPrice, currentTickVolume, currentTickTime, currentTickBid, currentTickAsk)
 
     // Update the last processed tick count to prevent reprocessing
-    lastProcessedTickCount := availableTickCount
-    lastSeenTailPrice := currentTailPrice
-    lastSeenTailVolume := currentTailVolume
-    lastSeenTailTime := currentTailTime
+    tapeState.processedTickCount := availableTickCount
+    f_updateTailTracker(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
 
+// ⚡ REALTIME FALLBACK
 bool noFreshLowerTfUpdate = not newTicksThisExec
 if barstate.isrealtime
-    float realtimeVolumeDelta = math.max(volume - nz(lastRealtimeBarVolume), 0)
-    bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != lastRealtimeUpdateTime
+    float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
+    bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
     if realtimePrintReady and noFreshLowerTfUpdate
-        int realtimeDirection = f_classifyDirection(close, bid, ask, lastProcessedTapePrice)
-        bool passesAggressiveFilter = not showAggressiveOnly or realtimeDirection != 0
-        if passesAggressiveFilter
-            bool storedTick = f_storeTick(close, realtimeVolumeDelta, timenow, bid, ask, realtimeDirection)
-            if storedTick
-                lastRecordedTickPrice := close
-                lastRecordedTickVolume := realtimeVolumeDelta
-                lastRecordedTickTime := timenow
-                lastRecordedTickDirection := realtimeDirection
-                lastProcessedTapePrice := close
-    lastRealtimeBarVolume := volume
-    lastRealtimeBarPrice := close
-    lastRealtimeUpdateTime := timenow
+        f_processAndStoreTick(close, realtimeVolumeDelta, timenow, bid, ask)
+    f_updateRealtimeBarState(realtimeBarState, volume, close, timenow)
+
+// 🐋 BLOCK TRADES
+bool showBlockTradeGlyph = showBlockTradeMarkers and blockState.count > 0
+int blockTradeTransparency = f_blockTradeTransparency(blockState.count)
+plotchar(series = showBlockTradeGlyph, title = "Block Trades", char = "■", location = location.belowbar, color = color.new(NORD3, blockTradeTransparency), size = size.tiny)
 
 // PRECOMPUTED VALUES & HELPERS
 // Convert text alignment strings to constants
@@ -292,6 +344,9 @@ tablePos = switch tablePosition
 
 // Create table (var = initialized once, persists across bars)
 var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = backgroundColor, border_width = borderWidth, border_color = borderColor, frame_width = frameWidth, frame_color = frameColor)
+
+f_tapeCell(int column, int row, string cellText, float cellHeight, color textColor, string textAlign, color cellBg, textFormatting) =>
+    table.cell(table_id = tapeTable, column = column, row = row, text = cellText, width = columnWidth, height = cellHeight, text_color = textColor, text_halign = textAlign, text_size = textSize, text_font_family = fontFamily, text_formatting = textFormatting, bgcolor = cellBg)
 
 f_renderTickRow(int tableRow, TickData currentTick) =>
     string conditionText = "mid"
@@ -344,16 +399,16 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
     string volumeText = str.tostring(value = currentTick.volume)
     rowFormatting = useBold ? text.format_bold : text.format_none
 
-    table.cell(table_id = tapeTable, column = 0, row = tableRow, text = timeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 1, row = tableRow, text = priceText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 2, row = tableRow, text = volumeText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
-    table.cell(table_id = tapeTable, column = 3, row = tableRow, text = conditionText, width = columnWidth, height = dataRowHeight, text_color = tickTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = rowFormatting, bgcolor = tickBgColor)
+    f_tapeCell(0, tableRow, timeText, dataRowHeight, tickTextColor, timeAlignValue, tickBgColor, rowFormatting)
+    f_tapeCell(1, tableRow, priceText, dataRowHeight, tickTextColor, priceAlignValue, tickBgColor, rowFormatting)
+    f_tapeCell(2, tableRow, volumeText, dataRowHeight, tickTextColor, sizeAlignValue, tickBgColor, rowFormatting)
+    f_tapeCell(3, tableRow, conditionText, dataRowHeight, tickTextColor, condAlignValue, tickBgColor, rowFormatting)
 
 f_clearTickRow(int tableRow) =>
-    table.cell(table_id = tapeTable, column = 0, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = timeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
-    table.cell(table_id = tapeTable, column = 1, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = priceAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
-    table.cell(table_id = tapeTable, column = 2, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = sizeAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
-    table.cell(table_id = tapeTable, column = 3, row = tableRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = condAlignValue, text_size = textSize, text_font_family = fontFamily, text_formatting = text.format_none, bgcolor = backgroundColor)
+    f_tapeCell(0, tableRow, "", dataRowHeight, defaultTextColor, timeAlignValue, backgroundColor, text.format_none)
+    f_tapeCell(1, tableRow, "", dataRowHeight, defaultTextColor, priceAlignValue, backgroundColor, text.format_none)
+    f_tapeCell(2, tableRow, "", dataRowHeight, defaultTextColor, sizeAlignValue, backgroundColor, text.format_none)
+    f_tapeCell(3, tableRow, "", dataRowHeight, defaultTextColor, condAlignValue, backgroundColor, text.format_none)
 
 f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int startRow) =>
     if rowsActive > 0
@@ -369,19 +424,13 @@ f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int st
 
 // 📊 RENDERING
 f_renderHeader(int row, color headerBg) =>
-    // Column 0: TIME
-    table.cell(table_id = tapeTable, column = 0, row = row, text = "TIME", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = headerBg)
-    // Column 1: PRICE
-    table.cell(table_id = tapeTable, column = 1, row = row, text = "PRICE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = headerBg)
-    // Column 2: SIZE
-    table.cell(table_id = tapeTable, column = 2, row = row, text = "SIZE", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = headerBg)
-    // Column 3: COND
-    table.cell(table_id = tapeTable, column = 3, row = row, text = "COND", width = columnWidth, height = headerHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = headerBg)
+    f_tapeCell(0, row, "TIME", headerHeight, defaultTextColor, headerAlignValue, headerBg, text.format_none)
+    f_tapeCell(1, row, "PRICE", headerHeight, defaultTextColor, headerAlignValue, headerBg, text.format_none)
+    f_tapeCell(2, row, "SIZE", headerHeight, defaultTextColor, headerAlignValue, headerBg, text.format_none)
+    f_tapeCell(3, row, "COND", headerHeight, defaultTextColor, headerAlignValue, headerBg, text.format_none)
 
-// ===================================================================
-// PERFORMANCE OPTIMIZATION: Only render table on the last bar
-// This avoids wasted work on historical bars
-// ===================================================================
+// ⚡ PERFORMANCE
+// Only render table on the last bar to avoid wasted work on historical bars.
 if barstate.islast
     // Get current tick count
     int instTickCount = array.size(id = institutionalTicks)
@@ -415,18 +464,24 @@ if barstate.islast
         retailStartRow := cursorRow
         cursorRow += retailRowsActive
 
+    if not tableLayoutInitialized
+        if showInstitutional
+            table.merge_cells(table_id = tapeTable, start_column = 0, start_row = instLabelRow, end_column = 3, end_row = instLabelRow)
+        if showGap
+            table.merge_cells(table_id = tapeTable, start_column = 0, start_row = gapRow, end_column = 3, end_row = gapRow)
+        if showRetail
+            table.merge_cells(table_id = tapeTable, start_column = 0, start_row = retailLabelRow, end_column = 3, end_row = retailLabelRow)
+        tableLayoutInitialized := true
+
     if showInstitutional
-        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = instLabelRow, end_column = 3, end_row = instLabelRow)
-        table.cell(table_id = tapeTable, column = 0, row = instLabelRow, text = "INSTITUTIONAL / PRO", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = institutionalHeaderBg)
+        f_tapeCell(0, instLabelRow, "INSTITUTIONAL / PRO", dataRowHeight, defaultTextColor, headerAlignValue, institutionalHeaderBg, text.format_none)
         f_renderHeader(instHeaderRow, backgroundColor)
 
     if showGap
-        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = gapRow, end_column = 3, end_row = gapRow)
-        table.cell(table_id = tapeTable, column = 0, row = gapRow, text = "", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = backgroundColor)
+        f_tapeCell(0, gapRow, "", dataRowHeight, defaultTextColor, headerAlignValue, backgroundColor, text.format_none)
 
     if showRetail
-        table.merge_cells(table_id = tapeTable, start_column = 0, start_row = retailLabelRow, end_column = 3, end_row = retailLabelRow)
-        table.cell(table_id = tapeTable, column = 0, row = retailLabelRow, text = "RETAIL / AMATEUR", width = columnWidth, height = dataRowHeight, text_color = defaultTextColor, text_halign = headerAlignValue, text_size = textSize, text_font_family = fontFamily, bgcolor = retailHeaderBg)
+        f_tapeCell(0, retailLabelRow, "RETAIL / AMATEUR", dataRowHeight, defaultTextColor, headerAlignValue, retailHeaderBg, text.format_none)
         f_renderHeader(retailHeaderRow, backgroundColor)
 
     if showInstitutional and instRowsActive > 0
