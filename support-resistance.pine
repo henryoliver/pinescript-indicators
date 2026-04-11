@@ -411,8 +411,10 @@ f_murreyLevelStyleName(int murreyLevelWeight) =>
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_VALUE = "7. 📦 Value Area"
 
-int valueAreaFootprintTicksPerRow = input.int(defval = 4, title = "Footprint Ticks Per Row", minval = 1, maxval = 100, tooltip = "Row size used by request.footprint() when building the prior-session value area from footprint data.", group = GROUP_VALUE)
-float valueAreaPercent = input.float(defval = 70.0, title = "Value Area Percent", minval = 50.0, maxval = 95.0, step = 1.0, tooltip = "Percent of prior-session volume included inside the value area between VAL and VAH.", group = GROUP_VALUE)
+int valueAreaFootprintTicksPerRow = input.int(defval = 2, title = "Footprint Ticks Per Row", minval = 1, maxval = 100, tooltip = "Row size used by request.footprint() when building the value area from footprint data. Lower values give finer resolution for tighter support and resistance. Default 2 is ideal for day trading.", group = GROUP_VALUE)
+float valueAreaPercent = input.float(defval = 70.0, title = "Value Area Percent", minval = 50.0, maxval = 95.0, step = 1.0, tooltip = "Percent of session volume included inside the value area between VAL and VAH. The standard 70% comes from the original Market Profile methodology.", group = GROUP_VALUE)
+bool showDevelopingValueArea = input.bool(defval = true, title = "Show Developing Value Area", tooltip = "Shows the current session developing VAL, POC, and VAH that update in real time as volume accumulates.", group = GROUP_VALUE)
+color valueAreaZoneColor = input.color(defval = color.new(color = #4C566A, transp = 90), title = "Value Area Zone Fill", tooltip = "Fill color for the shaded box between VAH and VAL.", group = GROUP_VALUE)
 
 f_accumulateProfileRow(array<float> rowPrices, array<float> rowVolumes, float rowPrice, float rowVolume) =>
     int existingRowIndex = array.indexof(id = rowPrices, value = rowPrice)
@@ -469,25 +471,57 @@ if isNewSession
     currentSessionStartBar := bar_index
 footprint currentFootprint = request.footprint(ticks_per_row = valueAreaFootprintTicksPerRow, va_percent = valueAreaPercent)
 float valueAreaRowHeight = valueAreaFootprintTicksPerRow * syminfo.mintick
-var array<float> sessionFootprintRowPrices = array.new<float>()
-var array<float> sessionFootprintRowVolumes = array.new<float>()
+var array<float> sessionCommittedRowPrices = array.new<float>()
+var array<float> sessionCommittedRowVolumes = array.new<float>()
+var array<float> sessionCurrentBarRowPrices = array.new<float>()
+var array<float> sessionCurrentBarRowVolumes = array.new<float>()
 var float prevSessionPoc = na
 var float prevSessionVah = na
 var float prevSessionVal = na
+var float devSessionPoc = na
+var float devSessionVah = na
+var float devSessionVal = na
+
+if barstate.isnew and not isNewSession and array.size(id = sessionCurrentBarRowPrices) > 0
+    for currentBarRowIndex = 0 to array.size(id = sessionCurrentBarRowPrices) - 1
+        f_accumulateProfileRow(rowPrices = sessionCommittedRowPrices, rowVolumes = sessionCommittedRowVolumes, rowPrice = array.get(id = sessionCurrentBarRowPrices, index = currentBarRowIndex), rowVolume = array.get(id = sessionCurrentBarRowVolumes, index = currentBarRowIndex))
+    array.clear(id = sessionCurrentBarRowPrices)
+    array.clear(id = sessionCurrentBarRowVolumes)
 
 if isNewSession
-    if array.size(id = sessionFootprintRowPrices) > 0
-        [calculatedPoc, calculatedVah, calculatedVal] = f_sessionFootprintProfile(rowPrices = sessionFootprintRowPrices, rowVolumes = sessionFootprintRowVolumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
+    array<float> previousSessionRowPrices = array.copy(id = sessionCommittedRowPrices)
+    array<float> previousSessionRowVolumes = array.copy(id = sessionCommittedRowVolumes)
+    if array.size(id = sessionCurrentBarRowPrices) > 0
+        for previousBarRowIndex = 0 to array.size(id = sessionCurrentBarRowPrices) - 1
+            f_accumulateProfileRow(rowPrices = previousSessionRowPrices, rowVolumes = previousSessionRowVolumes, rowPrice = array.get(id = sessionCurrentBarRowPrices, index = previousBarRowIndex), rowVolume = array.get(id = sessionCurrentBarRowVolumes, index = previousBarRowIndex))
+    if array.size(id = previousSessionRowPrices) > 0
+        [calculatedPoc, calculatedVah, calculatedVal] = f_sessionFootprintProfile(rowPrices = previousSessionRowPrices, rowVolumes = previousSessionRowVolumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
         prevSessionPoc := calculatedPoc
         prevSessionVah := calculatedVah
         prevSessionVal := calculatedVal
-    array.clear(id = sessionFootprintRowPrices)
-    array.clear(id = sessionFootprintRowVolumes)
+    array.clear(id = sessionCommittedRowPrices)
+    array.clear(id = sessionCommittedRowVolumes)
+    array.clear(id = sessionCurrentBarRowPrices)
+    array.clear(id = sessionCurrentBarRowVolumes)
 
 if not na(currentFootprint)
+    array.clear(id = sessionCurrentBarRowPrices)
+    array.clear(id = sessionCurrentBarRowVolumes)
     array<volume_row> footprintRows = currentFootprint.rows()
     for currentRow in footprintRows
-        f_accumulateProfileRow(rowPrices = sessionFootprintRowPrices, rowVolumes = sessionFootprintRowVolumes, rowPrice = volume_row.down_price(currentRow), rowVolume = volume_row.total_volume(currentRow))
+        f_accumulateProfileRow(rowPrices = sessionCurrentBarRowPrices, rowVolumes = sessionCurrentBarRowVolumes, rowPrice = volume_row.down_price(currentRow), rowVolume = volume_row.total_volume(currentRow))
+
+array<float> devRowPrices = array.copy(id = sessionCommittedRowPrices)
+array<float> devRowVolumes = array.copy(id = sessionCommittedRowVolumes)
+if array.size(id = sessionCurrentBarRowPrices) > 0
+    for devRowIndex = 0 to array.size(id = sessionCurrentBarRowPrices) - 1
+        f_accumulateProfileRow(rowPrices = devRowPrices, rowVolumes = devRowVolumes, rowPrice = array.get(id = sessionCurrentBarRowPrices, index = devRowIndex), rowVolume = array.get(id = sessionCurrentBarRowVolumes, index = devRowIndex))
+if array.size(id = devRowPrices) > 0
+    [devPoc, devVah, devVal] = f_sessionFootprintProfile(rowPrices = devRowPrices, rowVolumes = devRowVolumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
+    devSessionPoc := devPoc
+    devSessionVah := devVah
+    devSessionVal := devVal
+
 bool valueAreaPlotVisible = showValueArea and not showCluster
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -497,7 +531,6 @@ bool valueAreaPlotVisible = showValueArea and not showCluster
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_CLUSTER = "8. 🧲 Cluster"
 
-bool showGhostLines = input.bool(defval = false, title = "Show Source Indicators When Cluster Is On", tooltip = "Keeps the original source levels visible behind the cluster zones for extra context.", group = GROUP_CLUSTER)
 bool showIndicatorCount = input.bool(defval = true, title = "Show Indicator Count In Cluster Label", tooltip = "Adds the number of unique indicator families contributing to each cluster label.", group = GROUP_CLUSTER)
 bool showClusterSources = input.bool(defval = true, title = "Show Cluster Sources", tooltip = "Adds short source-family names to each cluster label so you can see which components formed the confluence.", group = GROUP_CLUSTER)
 color clusterZoneColor = input.color(defval = color.new(color = NORD3, transp = 60), title = "Cluster Zone Color", tooltip = "Fill color used for cluster boxes when nearby levels merge into a zone.", group = GROUP_CLUSTER)
@@ -821,8 +854,11 @@ var float renderCachedPrevDayClose = na
 var float renderCachedPrevSessionPoc = na
 var float renderCachedPrevSessionVah = na
 var float renderCachedPrevSessionVal = na
+var float renderCachedDevSessionPoc = na
+var float renderCachedDevSessionVah = na
+var float renderCachedDevSessionVal = na
 
-bool renderKeyChanged = not renderInitialized or f_floatChanged(currentValue = nearestMajorBase, cachedValue = renderCachedNearestMajorBase) or f_floatChanged(currentValue = murreyLower, cachedValue = renderCachedMurreyLower) or f_floatChanged(currentValue = murreyUpper, cachedValue = renderCachedMurreyUpper) or f_floatChanged(currentValue = fibLevelZero, cachedValue = renderCachedFibLevelZero) or f_floatChanged(currentValue = fibLevelHundred, cachedValue = renderCachedFibLevelHundred) or f_floatChanged(currentValue = roundMajorSpacing, cachedValue = renderCachedRoundMajorSpacing) or f_floatChanged(currentValue = prevDayHigh, cachedValue = renderCachedPrevDayHigh) or f_floatChanged(currentValue = prevDayLow, cachedValue = renderCachedPrevDayLow) or f_floatChanged(currentValue = prevDayClose, cachedValue = renderCachedPrevDayClose) or f_floatChanged(currentValue = prevSessionPoc, cachedValue = renderCachedPrevSessionPoc) or f_floatChanged(currentValue = prevSessionVah, cachedValue = renderCachedPrevSessionVah) or f_floatChanged(currentValue = prevSessionVal, cachedValue = renderCachedPrevSessionVal)
+bool renderKeyChanged = not renderInitialized or f_floatChanged(currentValue = nearestMajorBase, cachedValue = renderCachedNearestMajorBase) or f_floatChanged(currentValue = murreyLower, cachedValue = renderCachedMurreyLower) or f_floatChanged(currentValue = murreyUpper, cachedValue = renderCachedMurreyUpper) or f_floatChanged(currentValue = fibLevelZero, cachedValue = renderCachedFibLevelZero) or f_floatChanged(currentValue = fibLevelHundred, cachedValue = renderCachedFibLevelHundred) or f_floatChanged(currentValue = roundMajorSpacing, cachedValue = renderCachedRoundMajorSpacing) or f_floatChanged(currentValue = prevDayHigh, cachedValue = renderCachedPrevDayHigh) or f_floatChanged(currentValue = prevDayLow, cachedValue = renderCachedPrevDayLow) or f_floatChanged(currentValue = prevDayClose, cachedValue = renderCachedPrevDayClose) or f_floatChanged(currentValue = prevSessionPoc, cachedValue = renderCachedPrevSessionPoc) or f_floatChanged(currentValue = prevSessionVah, cachedValue = renderCachedPrevSessionVah) or f_floatChanged(currentValue = prevSessionVal, cachedValue = renderCachedPrevSessionVal) or f_floatChanged(currentValue = devSessionPoc, cachedValue = renderCachedDevSessionPoc) or f_floatChanged(currentValue = devSessionVah, cachedValue = renderCachedDevSessionVah) or f_floatChanged(currentValue = devSessionVal, cachedValue = renderCachedDevSessionVal)
 bool shouldRefreshRender = barstate.islast and (barstate.islastconfirmedhistory or barstate.isnew or renderKeyChanged)
 
 if shouldRefreshRender
@@ -835,13 +871,13 @@ if shouldRefreshRender
     color pivotWeight2Color = f_levelDisplayColor(baseColor = overallLevelColor, indicatorId = 3, levelWeight = 2)
     color pivotWeight1Color = f_levelDisplayColor(baseColor = overallLevelColor, indicatorId = 3, levelWeight = 1)
 
-    bool useFibonacciInCluster = showCluster or showFibonacci
-    bool usePivotsInCluster = showCluster or showPivots
-    bool usePreviousDayInCluster = showCluster or showPreviousDay
-    bool useRoundNumbersInCluster = showCluster or showRoundNumbers
-    bool useSwingsInCluster = showCluster or showSwings
-    bool useMurreyInCluster = showCluster or showMurrey
-    bool useValueAreaInCluster = showCluster or showValueArea
+    bool useFibonacciInCluster = showCluster ? true : showFibonacci
+    bool usePivotsInCluster = showCluster ? true : showPivots
+    bool usePreviousDayInCluster = showCluster ? true : showPreviousDay
+    bool useRoundNumbersInCluster = showCluster ? true : showRoundNumbers
+    bool useSwingsInCluster = showCluster ? true : showSwings
+    bool useMurreyInCluster = showCluster ? true : showMurrey
+    bool useValueAreaInCluster = showCluster ? true : showValueArea
     bool clusterUseProximityFilter = showCluster
 
     if useFibonacciInCluster and fibHasAnchors
@@ -963,9 +999,9 @@ if shouldRefreshRender
                         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = roundQ3, proximityDistance = levelProximityDistance)
                             f_pushLevel(levels = levels, levelPrice = roundQ3, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQ3, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Dotted")
 
-        if useMurreyInCluster
-            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyExtendedLow, proximityDistance = levelProximityDistance)
-                f_pushLevel(levels = levels, levelPrice = murreyExtendedLow, levelWeight = 2, indicatorId = 1, levelName = "-4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
+    if useMurreyInCluster
+        if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyExtendedLow, proximityDistance = levelProximityDistance)
+            f_pushLevel(levels = levels, levelPrice = murreyExtendedLow, levelWeight = 2, indicatorId = 1, levelName = "-4/8", levelColor = overallLevelColor, lineStyle = "Dashed")
         for murreyIndex = 0 to 8
             float murreyLevelPrice = murreyLower + murreyStep * murreyIndex
             int murreyWeight = f_murreyLevelWeight(murreyLevelIndex = murreyIndex)
@@ -979,22 +1015,20 @@ if shouldRefreshRender
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevSessionVal, proximityDistance = levelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = prevSessionVal, levelWeight = 3, indicatorId = 7, levelName = "VAL", levelColor = previousDayLowColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevSessionPoc, proximityDistance = levelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = prevSessionPoc, levelWeight = 3, indicatorId = 7, levelName = "POC", levelColor = previousDayCloseColor, lineStyle = "Dashed")
+            f_pushLevel(levels = levels, levelPrice = prevSessionPoc, levelWeight = 4, indicatorId = 7, levelName = "POC", levelColor = previousDayCloseColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevSessionVah, proximityDistance = levelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = prevSessionVah, levelWeight = 3, indicatorId = 7, levelName = "VAH", levelColor = previousDayHighColor, lineStyle = "Solid")
+        if showDevelopingValueArea
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = devSessionVal, proximityDistance = levelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = devSessionVal, levelWeight = 2, indicatorId = 7, levelName = "dVAL", levelColor = previousDayLowColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = devSessionPoc, proximityDistance = levelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = devSessionPoc, levelWeight = 3, indicatorId = 7, levelName = "dPOC", levelColor = previousDayCloseColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = devSessionVah, proximityDistance = levelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = devSessionVah, levelWeight = 2, indicatorId = 7, levelName = "dVAH", levelColor = previousDayHighColor, lineStyle = "Dashed")
 
     f_sortLevels(levels = levels)
 
     if showCluster and array.size(id = levels) > 0
-        if showGhostLines
-            for ghostIndex = 0 to array.size(id = levels) - 1
-                Level ghostLevel = array.get(id = levels, index = ghostIndex)
-                if ghostLevel.indicatorId == 2 or ghostLevel.indicatorId == 6
-                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = ghostLevel.price, labelText = ghostLevel.name, levelColor = ghostLevel.levelColor, styleName = ghostLevel.style, levelWeight = ghostLevel.weight, ghostMode = true)
-                else if ghostLevel.indicatorId == 5
-                    f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = ghostLevel.price, labelText = ghostLevel.name, levelColor = ghostLevel.levelColor, styleName = ghostLevel.style, levelWeight = ghostLevel.weight, startBar = ghostLevel.startBar, currentSessionStartBar = currentSessionStartBar, ghostMode = true)
-                else
-                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = ghostLevel.price, labelText = ghostLevel.name, levelColor = ghostLevel.levelColor, styleName = ghostLevel.style, levelWeight = ghostLevel.weight, indicatorId = ghostLevel.indicatorId, currentSessionStartBar = currentSessionStartBar, ghostMode = true)
         Level firstLevel = array.get(id = levels, index = 0)
         float zoneLow = firstLevel.zoneLow
         float zoneHigh = firstLevel.zoneHigh
@@ -1120,13 +1154,25 @@ if shouldRefreshRender
             if showPreviousDayCloseLevel
                 array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = rightProjectedLeftX, rightX = rightProjectedRightX), y = f_labelY(prevDayClose), text = "PDC", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
         if valueAreaPlotVisible
+            if not na(prevSessionVah) and not na(prevSessionVal)
+                array.push(id = renderedBoxes, value = box.new(left = rightProjectedLeftX, top = prevSessionVah, right = rightProjectedRightX, bottom = prevSessionVal, xloc = xloc.bar_index, bgcolor = valueAreaZoneColor, border_width = 0))
             array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevSessionVal, x2 = rightProjectedRightX, y2 = prevSessionVal, xloc = xloc.bar_index, extend = extend.none, color = previousDayLowColor, width = previousDayLowWidth, style = line.style_solid))
-            array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevSessionPoc, x2 = rightProjectedRightX, y2 = prevSessionPoc, xloc = xloc.bar_index, extend = extend.none, color = previousDayCloseColor, width = previousDayCloseWidth, style = line.style_dashed))
+            array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevSessionPoc, x2 = rightProjectedRightX, y2 = prevSessionPoc, xloc = xloc.bar_index, extend = extend.none, color = previousDayCloseColor, width = previousDayCloseWidth, style = line.style_solid))
             array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevSessionVah, x2 = rightProjectedRightX, y2 = prevSessionVah, xloc = xloc.bar_index, extend = extend.none, color = previousDayHighColor, width = previousDayHighWidth, style = line.style_solid))
+        if valueAreaPlotVisible and showDevelopingValueArea
+            if not na(devSessionVah) and not na(devSessionVal)
+                array.push(id = renderedBoxes, value = box.new(left = currentSessionStartBar, top = devSessionVah, right = bar_index, bottom = devSessionVal, xloc = xloc.bar_index, bgcolor = valueAreaZoneColor, border_width = 0))
+            array.push(id = renderedLines, value = line.new(x1 = currentSessionStartBar, y1 = devSessionVal, x2 = bar_index, y2 = devSessionVal, xloc = xloc.bar_index, extend = extend.none, color = color.new(color = previousDayLowColor, transp = 40), width = previousDayLowWidth, style = line.style_dashed))
+            array.push(id = renderedLines, value = line.new(x1 = currentSessionStartBar, y1 = devSessionPoc, x2 = bar_index, y2 = devSessionPoc, xloc = xloc.bar_index, extend = extend.none, color = color.new(color = previousDayCloseColor, transp = 40), width = previousDayCloseWidth, style = line.style_dashed))
+            array.push(id = renderedLines, value = line.new(x1 = currentSessionStartBar, y1 = devSessionVah, x2 = bar_index, y2 = devSessionVah, xloc = xloc.bar_index, extend = extend.none, color = color.new(color = previousDayHighColor, transp = 40), width = previousDayHighWidth, style = line.style_dashed))
         if valueAreaPlotVisible and showLevelLabels
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = rightProjectedLeftX, rightX = rightProjectedRightX), y = f_labelY(prevSessionVal), text = "VAL", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = rightProjectedLeftX, rightX = rightProjectedRightX), y = f_labelY(prevSessionPoc), text = "POC", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_labelX(leftX = rightProjectedLeftX, rightX = rightProjectedRightX), y = f_labelY(prevSessionVah), text = "VAH", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
+        if valueAreaPlotVisible and showDevelopingValueArea and showLevelLabels
+            array.push(id = renderedLabels, value = label.new(x = bar_index + labelHorizontalAdjustBars + LEFT_TO_RIGHT_EXTEND_BARS, y = f_labelY(devSessionVal), text = "dVAL", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.new(color = labelTextColor, transp = 40), color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
+            array.push(id = renderedLabels, value = label.new(x = bar_index + labelHorizontalAdjustBars + LEFT_TO_RIGHT_EXTEND_BARS, y = f_labelY(devSessionPoc), text = "dPOC", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.new(color = labelTextColor, transp = 40), color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
+            array.push(id = renderedLabels, value = label.new(x = bar_index + labelHorizontalAdjustBars + LEFT_TO_RIGHT_EXTEND_BARS, y = f_labelY(devSessionVah), text = "dVAH", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.new(color = labelTextColor, transp = 40), color = NORD0, size = labelSizeInput, textalign = f_labelTextAlign()))
         if murreyPlotVisible
             array.push(id = renderedLines, value = line.new(x1 = leftProjectedLeftX, y1 = murreyExtendedLow, x2 = leftProjectedRightX, y2 = murreyExtendedLow, xloc = xloc.bar_index, extend = extend.none, color = overallLevelColor, width = 1, style = line.style_dotted))
             for murreyPlotIndex = 0 to 8
@@ -1155,3 +1201,6 @@ if shouldRefreshRender
     renderCachedPrevSessionPoc := prevSessionPoc
     renderCachedPrevSessionVah := prevSessionVah
     renderCachedPrevSessionVal := prevSessionVal
+    renderCachedDevSessionPoc := devSessionPoc
+    renderCachedDevSessionVah := devSessionVah
+    renderCachedDevSessionVal := devSessionVal
