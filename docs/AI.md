@@ -562,7 +562,23 @@ adjustedTransp = color.t(baseColor) - 20       // inferred as float
 isActive = close > open                         // inferred as bool
 tickerId = ticker.modify(syminfo.tickerid, session = session.regular) // inferred as string
 pivotHighArray = array.new<pivotPoint>()        // inferred as array<pivotPoint>
+murreyPlotStyle = line.style_solid              // inferred from built-in line style constant
 ```
+
+#### Important Pine-specific restriction
+- Do not invent type keywords from built-in constants.
+- `line.style_solid`, `line.style_dashed`, etc. are valid values for `style`
+  parameters, but `line_style` is not a valid declaration type keyword.
+- In Pine, declaration types must be fundamental types, special types, UDTs,
+  or user-declared enums. If a variable stores a built-in style constant, leave
+  it inferred unless you are using a valid declared type from the docs.
+- Do not force explicit integer typing onto expressions built with
+  `math.max()`/`math.min()` or similar numeric helpers just for consistency.
+  Those expressions often resolve as float expressions in Pine, so `int x = ...`
+  can fail even when the runtime values look integer-like.
+- If a local variable is initialized from a numeric expression and Pine can infer
+  it correctly, prefer the inferred type unless a specific declared type is
+  required by the docs or by an `na` initialization.
 
 #### When types MUST be declared
 ```pine
@@ -570,6 +586,13 @@ float myPrice = na       // na alone is ambiguous — type required
 int myBar = na           // same: must declare when initializing to na
 var float persistedVal = na
 ```
+
+#### Important `bool` rule
+- Do not initialize `bool` variables with `na`.
+- In Pine, `bool` values are always either `true` or `false`, so cache flags and
+  state booleans must start from a real boolean value such as `false`.
+- If you need an "uninitialized" sentinel state, use a different type or a
+  separate boolean flag rather than `bool someFlag = na`.
 
 **Rule for this repository:** explicit types are recommended for readability and
 are required when initializing to `na`, but do not flag inferred-type locals as
