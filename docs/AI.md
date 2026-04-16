@@ -432,7 +432,8 @@ const color NORD15 = #B48EAD  // Purple (special)
 
 ### 1. ALWAYS Use Explicit Parameter Names
 
-**NON-NEGOTIABLE RULE**: Never use positional arguments. ALWAYS name ALL parameters explicitly.
+**NON-NEGOTIABLE RULE**: Name parameters explicitly by default.
+Exception: built-in functions that accept a variable number of arguments must use positional arguments because Pine rejects keyword arguments for them.
 
 #### ❌ WRONG - Positional Arguments
 ```pine
@@ -464,9 +465,26 @@ request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", 
 - All `label.*()`, `line.*()`, `box.*()` functions
 - **Even conditional expressions**: `plot(series = emaVisible ? ema : na, title = "EMA")`
 
+**Important exception for variadic built-ins:**
+- Functions such as `math.max()` and `math.min()` accept a variable number of arguments.
+- These functions cannot accept keyword arguments in Pine. Using names like
+  `number0 =` / `number1 =` causes `CE10119: Functions that accept a variable
+  number of arguments cannot accept keyword arguments`.
+- For variadic built-ins, use positional arguments:
+
+```pine
+// ✅ CORRECT
+float range = math.max(high - low, syminfo.mintick)
+int visibleStart = math.max(0, bar_index - lookbackBars + 1)
+
+// ❌ WRONG
+float range = math.max(number0 = high - low, number1 = syminfo.mintick)
+```
+
 **Verification Required:**
 - **Always check the Pine Script v6 Reference** for correct parameter names
-- If a function doesn't have documented parameter names, positional arguments are acceptable as last resort
+- If a function doesn't have documented parameter names, or if it is a variadic
+  built-in that rejects keywords, positional arguments are required
 - When in doubt, fetch: `https://raw.githubusercontent.com/codenamedevan/pinescriptv6/main/reference/functions/[namespace].md`
 
 ### 2. ALWAYS Use Meaningful Variable Names
@@ -572,6 +590,21 @@ murreyPlotStyle = line.style_solid              // inferred from built-in line s
 - In Pine, declaration types must be fundamental types, special types, UDTs,
   or user-declared enums. If a variable stores a built-in style constant, leave
   it inferred unless you are using a valid declared type from the docs.
+- If you write `line_style someVar = ...`, TradingView will fail compilation
+  with `CE10149: "line_style" is not a valid type keyword.`
+- Treat built-in style constants as values, not declaration keywords. This same
+  rule applies to other built-in style families such as `plot.style_*`.
+
+#### ✅ CORRECT — leave built-in style values inferred
+```pine
+resolvedTrendStyle = f_trendLineStyle(styleInput = trendLineStyleInput)
+murreyPlotStyle = line.style_solid
+```
+
+#### ❌ WRONG — invented type keyword from built-in constant family
+```pine
+line_style resolvedTrendStyle = f_trendLineStyle(styleInput = trendLineStyleInput)
+```
 - Do not force explicit integer typing onto expressions built with
   `math.max()`/`math.min()` or similar numeric helpers just for consistency.
   Those expressions often resolve as float expressions in Pine, so `int x = ...`
@@ -1078,6 +1111,15 @@ Before submitting any code changes, verify:
 - Use `ignore_invalid_symbol = true` for `request.*()` functions
 - Use `lookahead = barmerge.lookahead_on` for real-time accuracy
 - Render tables/labels only in `barstate.islast` or `barstate.islastconfirmedhistory`
+- Do not rescan an entire retained higher-timeframe history array on every new
+  HTF bar when the signal is natively confirmable with built-ins like
+  `ta.pivothigh()` / `ta.pivotlow()`. Prefer incremental maintenance:
+  request confirmed HTF pivots with `request.security()`, append only newly
+  confirmed candidates, prune aged-out candidates, and rebuild derived levels
+  only when the candidate set actually changes.
+- When TradingView's profiler shows a high percentage on an `if` line, treat
+  that as the cost of the whole block under that branch, not just the condition
+  itself.
 - Use `var` keyword for variables that should persist across bars
 - Cache constant `math.log()` results with `var` when used repeatedly (e.g.,
   `var float logTen = math.log(number = 10.0)`)

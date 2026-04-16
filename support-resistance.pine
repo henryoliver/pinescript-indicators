@@ -354,7 +354,8 @@ float currentBodyLow = math.min(open, close)
 bool canTestHighSwings = not na(nearestUnbrokenHighSwing) and high >= nearestUnbrokenHighSwing
 bool canTestLowSwings = not na(nearestUnbrokenLowSwing) and low <= nearestUnbrokenLowSwing
 
-if swingsIsActive and structuralSwingCount > 0 and (canTestHighSwings or canTestLowSwings)
+// Defer swing break/sweep state changes until bar close to avoid repeating this scan on every realtime tick.
+if swingsIsActive and barstate.isconfirmed and structuralSwingCount > 0 and (canTestHighSwings or canTestLowSwings)
     bool refreshNearestUnbroken = false
     for brokenIndex = 0 to structuralSwingCount - 1
         Swing trackedSwing = array.get(id = structuralSwings, index = brokenIndex)

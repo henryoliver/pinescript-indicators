@@ -1,0 +1,423 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Structure & Levels", shorttitle = "🏗️ S&L", overlay = true, max_lines_count = 500, calc_bars_count = 5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used across the indicator, including the Nord palette.
+// ═══════════════════════════════════════════════════════════════════════════════
+// Nord Theme Colors
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🧩 TYPE DEFINITIONS
+// Custom types keep related fields together and avoid parallel array drift.
+// ═══════════════════════════════════════════════════════════════════════════════
+type TrendSegment
+    int x1
+    float y1
+    int x2
+    float y2
+
+type IntradayLevel
+    float price
+    int barIndex
+
+type LongTermPivotCandidate
+    float price
+    int htfBarIndex
+
+type LongTermCluster
+    float price
+    int count
+
+type KeyLevel
+    float price
+    int strength
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚙️ GENERAL
+// Shared chart data, session state, and render orchestration state live here.
+// ═══════════════════════════════════════════════════════════════════════════════
+float chartClose = close
+float chartHigh = high
+float chartLow = low
+
+var int sessionStartBarIndex = na
+var int latestRegularSessionDayKey = na
+var array<line> renderedLines = array.new<line>()
+
+f_clearLines(array<line> lines) =>
+    int lineCount = array.size(id = lines)
+    if lineCount > 0
+        for lineIndex = 0 to lineCount - 1
+            line.delete(id = array.get(id = lines, index = lineIndex))
+    array.clear(id = lines)
+
+bool inRegularSession = session.ismarket
+int regularSessionDayKey = year * 10000 + month * 100 + dayofmonth
+int currentTradingDayKey = year(time = timenow) * 10000 + month(time = timenow) * 100 + dayofmonth(time = timenow)
+bool isCurrentTradingDay = regularSessionDayKey == currentTradingDayKey
+bool isNewTrackedSession = inRegularSession and isCurrentTradingDay and (na(latestRegularSessionDayKey) or regularSessionDayKey != latestRegularSessionDayKey)
+
+if isNewTrackedSession
+    latestRegularSessionDayKey := regularSessionDayKey
+    sessionStartBarIndex := bar_index
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🗺️ LONG-TERM S/R
+// Higher-timeframe pivot clustering builds the repeated support/resistance map.
+// ═══════════════════════════════════════════════════════════════════════════════
+const string GROUP_LONG_TERM = "🗺️ Long-Term Support/Resistance"
+const int LONG_TERM_MAX_BARS = 1200
+const int LONG_TERM_PIVOT_STRENGTH = 5
+const color LONG_TERM_STRUCTURE_COLOR = color.new(color = NORD3, transp = 60)
+
+bool showLongTermStructure = input.bool(defval = true, title = "Show Long-Term S/R", tooltip = "Draws repeated-pivot support/resistance zones from the current chart symbol using a higher timeframe lookback.", group = GROUP_LONG_TERM)
+string longTermTimeframe = input.timeframe(defval = "15", title = "Structure Timeframe", group = GROUP_LONG_TERM)
+int longTermLookbackDays = input.int(defval = 22, title = "Lookback (Trading Days)", minval = 10, maxval = 90, group = GROUP_LONG_TERM)
+int longTermLevelsPerSide = input.int(defval = 4, title = "Levels Above/Below Price", minval = 1, maxval = 6, group = GROUP_LONG_TERM)
+
+f_longTermLookbackBars(string structureTimeframe, int tradingDays) =>
+    int tfSeconds = timeframe.in_seconds(timeframe = structureTimeframe)
+    int sessionMinutes = 390
+    int barsPerDay = tfSeconds < 86400 ? math.max(1, math.ceil(number = sessionMinutes / math.max(tfSeconds / 60.0, 1.0))) : 1
+    math.min(LONG_TERM_MAX_BARS, barsPerDay * tradingDays)
+
+f_selectRepeatedKeyLevels(array<LongTermPivotCandidate> candidates, int maxLevels, series float tolerance) =>
+    array<LongTermCluster> clusters = array.new<LongTermCluster>()
+    int candidateCount = array.size(id = candidates)
+    if candidateCount > 0
+        array<float> sortedPrices = array.new<float>()
+        for candidateIndex = 0 to candidateCount - 1
+            LongTermPivotCandidate candidate = array.get(id = candidates, index = candidateIndex)
+            array.push(id = sortedPrices, value = candidate.price)
+        array.sort(id = sortedPrices, order = order.ascending)
+        for sortedIndex = 0 to array.size(id = sortedPrices) - 1
+            float candidatePrice = array.get(id = sortedPrices, index = sortedIndex)
+            int clusterCount = array.size(id = clusters)
+            if clusterCount == 0
+                array.push(id = clusters, value = LongTermCluster.new(price = candidatePrice, count = 1))
+            else
+                int lastClusterIndex = clusterCount - 1
+                LongTermCluster previousCluster = array.get(id = clusters, index = lastClusterIndex)
+                float previousPrice = previousCluster.price
+                if candidatePrice - previousPrice > tolerance
+                    array.push(id = clusters, value = LongTermCluster.new(price = candidatePrice, count = 1))
+                else
+                    int updatedCount = previousCluster.count + 1
+                    float updatedPrice = (previousPrice * previousCluster.count + candidatePrice) / updatedCount
+                    array.set(id = clusters, index = lastClusterIndex, value = LongTermCluster.new(price = updatedPrice, count = updatedCount))
+    int sortedClusterCount = array.size(id = clusters)
+    if sortedClusterCount > 1
+        for outerIndex = 1 to sortedClusterCount - 1
+            LongTermCluster sortCluster = array.get(id = clusters, index = outerIndex)
+            int innerIndex = outerIndex - 1
+            while innerIndex >= 0 and array.get(id = clusters, index = innerIndex).count < sortCluster.count
+                array.set(id = clusters, index = innerIndex + 1, value = array.get(id = clusters, index = innerIndex))
+                innerIndex -= 1
+            array.set(id = clusters, index = innerIndex + 1, value = sortCluster)
+    array<KeyLevel> selectedLevels = array.new<KeyLevel>()
+    if sortedClusterCount > 0
+        for selectedIndex = 0 to sortedClusterCount - 1
+            LongTermCluster cluster = array.get(id = clusters, index = selectedIndex)
+            if cluster.count >= 2
+                array.push(id = selectedLevels, value = KeyLevel.new(price = cluster.price, strength = cluster.count))
+                if array.size(id = selectedLevels) >= maxLevels
+                    break
+    selectedLevels
+
+f_lineWidthFromStrength(int strength) =>
+    strength >= 5 ? 4 : strength >= 4 ? 3 : strength >= 3 ? 2 : 1
+
+f_renderLongTermStructure(array<line> lines, array<KeyLevel> keyLevels, int levelsPerSide, float referencePrice) =>
+    int renderedAboveCount = 0
+    int renderedBelowCount = 0
+    int keyLevelCount = array.size(id = keyLevels)
+    if keyLevelCount > 0
+        for keyLevelIndex = 0 to keyLevelCount - 1
+            KeyLevel keyLevel = array.get(id = keyLevels, index = keyLevelIndex)
+            if keyLevel.price >= referencePrice and renderedAboveCount < levelsPerSide
+                int aboveWidth = f_lineWidthFromStrength(strength = keyLevel.strength)
+                line aboveLine = line.new(x1 = bar_index - 1, y1 = keyLevel.price, x2 = bar_index, y2 = keyLevel.price, xloc = xloc.bar_index, extend = extend.both, color = LONG_TERM_STRUCTURE_COLOR, width = aboveWidth, style = line.style_solid)
+                array.push(id = lines, value = aboveLine)
+                renderedAboveCount += 1
+            if keyLevel.price < referencePrice and renderedBelowCount < levelsPerSide
+                int belowWidth = f_lineWidthFromStrength(strength = keyLevel.strength)
+                line belowLine = line.new(x1 = bar_index - 1, y1 = keyLevel.price, x2 = bar_index, y2 = keyLevel.price, xloc = xloc.bar_index, extend = extend.both, color = LONG_TERM_STRUCTURE_COLOR, width = belowWidth, style = line.style_solid)
+                array.push(id = lines, value = belowLine)
+                renderedBelowCount += 1
+
+int longTermLookbackBars = f_longTermLookbackBars(structureTimeframe = longTermTimeframe, tradingDays = longTermLookbackDays)
+bool newLongTermBar = showLongTermStructure ? ta.change(source = time(timeframe = longTermTimeframe)) != 0 : false
+bool allowLongTermRefresh = showLongTermStructure and not isCurrentTradingDay
+float longTermConfirmedPivotHigh = na
+float longTermConfirmedPivotLow = na
+float longTermWindowHigh = na
+float longTermWindowLow = na
+float longTermClose = na
+var string longTermRegularTicker = ticker.modify(syminfo.tickerid, session = session.regular)
+[requestedLongTermConfirmedPivotHigh, requestedLongTermConfirmedPivotLow, requestedLongTermWindowHigh, requestedLongTermWindowLow, requestedLongTermClose] = request.security(
+     symbol = longTermRegularTicker,
+     timeframe = longTermTimeframe,
+     expression = [ta.pivothigh(source = high, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), ta.pivotlow(source = low, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), ta.highest(source = high, length = longTermLookbackBars), ta.lowest(source = low, length = longTermLookbackBars), close],
+     lookahead = barmerge.lookahead_off,
+     gaps = barmerge.gaps_off,
+     ignore_invalid_symbol = true
+ )
+longTermConfirmedPivotHigh := requestedLongTermConfirmedPivotHigh
+longTermConfirmedPivotLow := requestedLongTermConfirmedPivotLow
+longTermWindowHigh := requestedLongTermWindowHigh
+longTermWindowLow := requestedLongTermWindowLow
+longTermClose := requestedLongTermClose
+
+var array<LongTermPivotCandidate> longTermPivotCandidates = array.new<LongTermPivotCandidate>()
+var array<KeyLevel> longTermKeyLevels = array.new<KeyLevel>()
+var int longTermHTFBarCount = 0
+
+if not showLongTermStructure
+    array.clear(id = longTermPivotCandidates)
+    array.clear(id = longTermKeyLevels)
+    longTermHTFBarCount := 0
+
+if allowLongTermRefresh and newLongTermBar and not na(longTermClose[1])
+    longTermHTFBarCount += 1
+    bool refreshLongTermKeys = false
+    int oldestAllowedPivotBar = math.max(1, longTermHTFBarCount - longTermLookbackBars + 1)
+
+    if not na(longTermConfirmedPivotHigh)
+        array.push(id = longTermPivotCandidates, value = LongTermPivotCandidate.new(price = longTermConfirmedPivotHigh, htfBarIndex = math.max(1, longTermHTFBarCount - LONG_TERM_PIVOT_STRENGTH)))
+        refreshLongTermKeys := true
+
+    if not na(longTermConfirmedPivotLow)
+        array.push(id = longTermPivotCandidates, value = LongTermPivotCandidate.new(price = longTermConfirmedPivotLow, htfBarIndex = math.max(1, longTermHTFBarCount - LONG_TERM_PIVOT_STRENGTH)))
+        refreshLongTermKeys := true
+
+    while array.size(id = longTermPivotCandidates) > 0
+        LongTermPivotCandidate oldestCandidate = array.get(id = longTermPivotCandidates, index = 0)
+        if oldestCandidate.htfBarIndex < oldestAllowedPivotBar
+            array.shift(id = longTermPivotCandidates)
+            refreshLongTermKeys := true
+        else
+            break
+
+    if refreshLongTermKeys
+        if array.size(id = longTermPivotCandidates) > 0
+            float longTermRange = math.max(longTermWindowHigh - longTermWindowLow, syminfo.mintick)
+            float longTermTolerance = math.max(syminfo.mintick * 2.0, longTermRange * 0.025)
+            longTermKeyLevels := f_selectRepeatedKeyLevels(candidates = longTermPivotCandidates, maxLevels = longTermLevelsPerSide * 2, tolerance = longTermTolerance)
+        else
+            array.clear(id = longTermKeyLevels)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📍 INTRADAY S/R
+// Session pivots become visible support and resistance levels for the current day.
+// ═══════════════════════════════════════════════════════════════════════════════
+const string GROUP_INTRADAY_SR = "📍 Intraday Support/Resistance"
+const int INTRADAY_MAX_LEVELS = 80
+const int INTRADAY_DEFAULT_LINE_WIDTH = 2
+const color INTRADAY_STRUCTURE_COLOR = NORD3
+
+bool showIntradayStructure = input.bool(defval = true, title = "Show Intraday S/R", tooltip = "Draws intraday support/resistance from confirmed body pivots in the current session.", group = GROUP_INTRADAY_SR)
+int intradaySRPivotStrength = input.int(defval = 3, title = "Pivot Strength", minval = 1, maxval = 10, group = GROUP_INTRADAY_SR)
+int intradaySRMaxLevels = input.int(defval = 20, title = "Max Levels", minval = 5, maxval = INTRADAY_MAX_LEVELS, group = GROUP_INTRADAY_SR)
+int intradayVisibleLevelsPerSide = input.int(defval = 2, title = "Visible Levels Per Side", minval = 1, maxval = 6, group = GROUP_INTRADAY_SR)
+int intradaySRExtensionBars = input.int(defval = 60, title = "Line Extension (Bars)", minval = 1, maxval = 200, group = GROUP_INTRADAY_SR)
+int intradaySRProjectionBars = input.int(defval = 20, title = "Forward Projection (Bars)", minval = 1, maxval = 200, group = GROUP_INTRADAY_SR)
+int intradaySRLineWidth = input.int(defval = INTRADAY_DEFAULT_LINE_WIDTH, title = "Line Width", minval = 1, maxval = 4, group = GROUP_INTRADAY_SR)
+
+f_trimIntradayLevels(array<IntradayLevel> levels, int maxSize) =>
+    while array.size(id = levels) > maxSize
+        array.shift(id = levels)
+
+f_selectVisibleIntradayLevels(array<IntradayLevel> levels, float referencePrice, int visiblePerSide, bool isResistance) =>
+    array<IntradayLevel> visibleLevels = array.new<IntradayLevel>()
+    int levelCount = array.size(id = levels)
+    if levelCount > 0
+        for levelIndex = 0 to levelCount - 1
+            IntradayLevel candidateLevel = array.get(id = levels, index = levelIndex)
+            bool isOnCorrectSide = isResistance ? candidateLevel.price > referencePrice : candidateLevel.price < referencePrice
+            if isOnCorrectSide
+                float candidateDistance = math.abs(number = candidateLevel.price - referencePrice)
+                int insertIndex = array.size(id = visibleLevels)
+                int visibleCount = array.size(id = visibleLevels)
+                if visibleCount > 0
+                    for visibleIndex = 0 to visibleCount - 1
+                        IntradayLevel visibleLevel = array.get(id = visibleLevels, index = visibleIndex)
+                        float visibleDistance = math.abs(number = visibleLevel.price - referencePrice)
+                        if candidateDistance < visibleDistance
+                            insertIndex := visibleIndex
+                            break
+                if insertIndex < visiblePerSide
+                    array.insert(id = visibleLevels, index = insertIndex, value = candidateLevel)
+                    if array.size(id = visibleLevels) > visiblePerSide
+                        array.pop(id = visibleLevels)
+    visibleLevels
+
+f_renderIntradayStructure(array<line> lines, array<IntradayLevel> resistanceLevels, array<IntradayLevel> supportLevels, int sessionStartBar, int visiblePerSide, int extensionBars, int projectionBars, int lineWidth, float referencePrice) =>
+    array<IntradayLevel> visibleResistanceLevels = f_selectVisibleIntradayLevels(levels = resistanceLevels, referencePrice = referencePrice, visiblePerSide = visiblePerSide, isResistance = true)
+    array<IntradayLevel> visibleSupportLevels = f_selectVisibleIntradayLevels(levels = supportLevels, referencePrice = referencePrice, visiblePerSide = visiblePerSide, isResistance = false)
+
+    int resistanceCount = array.size(id = visibleResistanceLevels)
+    if resistanceCount > 0
+        for resistanceIndex = 0 to resistanceCount - 1
+            IntradayLevel resistanceLevel = array.get(id = visibleResistanceLevels, index = resistanceIndex)
+            if resistanceLevel.barIndex >= sessionStartBar
+                int resistanceEndBar = math.max(resistanceLevel.barIndex + extensionBars, bar_index + projectionBars)
+                line resistanceLine = line.new(x1 = resistanceLevel.barIndex, y1 = resistanceLevel.price, x2 = resistanceEndBar, y2 = resistanceLevel.price, xloc = xloc.bar_index, extend = extend.none, color = INTRADAY_STRUCTURE_COLOR, width = lineWidth, style = line.style_solid)
+                array.push(id = lines, value = resistanceLine)
+
+    int supportCount = array.size(id = visibleSupportLevels)
+    if supportCount > 0
+        for supportIndex = 0 to supportCount - 1
+            IntradayLevel supportLevel = array.get(id = visibleSupportLevels, index = supportIndex)
+            if supportLevel.barIndex >= sessionStartBar
+                int supportEndBar = math.max(supportLevel.barIndex + extensionBars, bar_index + projectionBars)
+                line supportLine = line.new(x1 = supportLevel.barIndex, y1 = supportLevel.price, x2 = supportEndBar, y2 = supportLevel.price, xloc = xloc.bar_index, extend = extend.none, color = INTRADAY_STRUCTURE_COLOR, width = lineWidth, style = line.style_solid)
+                array.push(id = lines, value = supportLine)
+
+float intradaySRPivotHigh = showIntradayStructure ? ta.pivothigh(source = chartHigh, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
+float intradaySRPivotLow = showIntradayStructure ? ta.pivotlow(source = chartLow, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
+int intradaySRPivotHighBar = not na(intradaySRPivotHigh) ? bar_index - intradaySRPivotStrength : na
+int intradaySRPivotLowBar = not na(intradaySRPivotLow) ? bar_index - intradaySRPivotStrength : na
+
+var array<IntradayLevel> intradayResistanceLevels = array.new<IntradayLevel>()
+var array<IntradayLevel> intradaySupportLevels = array.new<IntradayLevel>()
+
+if isNewTrackedSession
+    array.clear(id = intradayResistanceLevels)
+    array.clear(id = intradaySupportLevels)
+
+if not showIntradayStructure
+    array.clear(id = intradayResistanceLevels)
+    array.clear(id = intradaySupportLevels)
+
+if showIntradayStructure and inRegularSession and isCurrentTradingDay and barstate.isconfirmed and not na(sessionStartBarIndex)
+    if not na(intradaySRPivotHigh) and intradaySRPivotHighBar >= sessionStartBarIndex
+        array.push(id = intradayResistanceLevels, value = IntradayLevel.new(price = intradaySRPivotHigh, barIndex = intradaySRPivotHighBar))
+        f_trimIntradayLevels(levels = intradayResistanceLevels, maxSize = intradaySRMaxLevels)
+
+    if not na(intradaySRPivotLow) and intradaySRPivotLowBar >= sessionStartBarIndex
+        array.push(id = intradaySupportLevels, value = IntradayLevel.new(price = intradaySRPivotLow, barIndex = intradaySRPivotLowBar))
+        f_trimIntradayLevels(levels = intradaySupportLevels, maxSize = intradaySRMaxLevels)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📐 INTRADAY TREND LINES
+// Confirmed session pivots define the active higher-low and lower-high trend segments.
+// ═══════════════════════════════════════════════════════════════════════════════
+const string GROUP_TREND = "📐 Intraday Trend Lines"
+const int TREND_DEFAULT_LINE_WIDTH = 2
+
+bool showTrendLines = input.bool(defval = true, title = "Show Trend Lines", tooltip = "Draws intraday trend lines from confirmed higher-lows / lower-highs in the current session.", group = GROUP_TREND)
+int trendLinePivotStrength = input.int(defval = 3, title = "Pivot Strength", minval = 1, maxval = 10, group = GROUP_TREND)
+int trendLineWidth = input.int(defval = TREND_DEFAULT_LINE_WIDTH, title = "Line Width", minval = 1, maxval = 4, group = GROUP_TREND)
+int trendLineLookbackBars = input.int(defval = 60, title = "Lookback (Bars)", minval = 10, maxval = 200, group = GROUP_TREND)
+int trendLineProjectionBars = input.int(defval = 60, title = "Projection (Bars)", minval = 1, maxval = 200, group = GROUP_TREND)
+string trendLineStyleInput = input.string(defval = "Dotted", title = "Style", options = ["Dotted", "Dashed", "Solid"], group = GROUP_TREND)
+
+f_trendLineStyle(string styleInput) =>
+    styleInput == "Solid" ? line.style_solid : styleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+f_lineValueAtBar(int x1, float y1, int x2, float y2, int targetBar) =>
+    x2 == x1 ? y2 : y1 + (y2 - y1) * (targetBar - x1) / (x2 - x1)
+
+f_renderTrendLines(array<line> lines, TrendSegment upTrendSegment, TrendSegment downTrendSegment, int sessionStartBar, int lookbackBars, int projectionBars, int lineWidth, string styleInput) =>
+    resolvedTrendStyle = f_trendLineStyle(styleInput = styleInput)
+    int trendVisibleWindowStart = math.max(0, bar_index - lookbackBars + 1)
+
+    if not na(downTrendSegment) and downTrendSegment.x1 >= sessionStartBar and downTrendSegment.x2 >= trendVisibleWindowStart
+        int downTrendEndBar = bar_index + projectionBars
+        int downTrendVisibleStart = math.max(downTrendSegment.x1, trendVisibleWindowStart)
+        if downTrendEndBar > downTrendVisibleStart
+            float downTrendVisibleStartY = f_lineValueAtBar(x1 = downTrendSegment.x1, y1 = downTrendSegment.y1, x2 = downTrendSegment.x2, y2 = downTrendSegment.y2, targetBar = downTrendVisibleStart)
+            float downTrendVisibleEndY = f_lineValueAtBar(x1 = downTrendSegment.x1, y1 = downTrendSegment.y1, x2 = downTrendSegment.x2, y2 = downTrendSegment.y2, targetBar = downTrendEndBar)
+            line activeDownTrendLine = line.new(x1 = downTrendVisibleStart, y1 = downTrendVisibleStartY, x2 = downTrendEndBar, y2 = downTrendVisibleEndY, xloc = xloc.bar_index, extend = extend.none, color = NORD3, width = lineWidth, style = resolvedTrendStyle)
+            array.push(id = lines, value = activeDownTrendLine)
+
+    if not na(upTrendSegment) and upTrendSegment.x1 >= sessionStartBar and upTrendSegment.x2 >= trendVisibleWindowStart
+        int upTrendEndBar = bar_index + projectionBars
+        int upTrendVisibleStart = math.max(upTrendSegment.x1, trendVisibleWindowStart)
+        if upTrendEndBar > upTrendVisibleStart
+            float upTrendVisibleStartY = f_lineValueAtBar(x1 = upTrendSegment.x1, y1 = upTrendSegment.y1, x2 = upTrendSegment.x2, y2 = upTrendSegment.y2, targetBar = upTrendVisibleStart)
+            float upTrendVisibleEndY = f_lineValueAtBar(x1 = upTrendSegment.x1, y1 = upTrendSegment.y1, x2 = upTrendSegment.x2, y2 = upTrendSegment.y2, targetBar = upTrendEndBar)
+            line activeUpTrendLine = line.new(x1 = upTrendVisibleStart, y1 = upTrendVisibleStartY, x2 = upTrendEndBar, y2 = upTrendVisibleEndY, xloc = xloc.bar_index, extend = extend.none, color = NORD3, width = lineWidth, style = resolvedTrendStyle)
+            array.push(id = lines, value = activeUpTrendLine)
+
+float trendPivotHigh = showTrendLines ? ta.pivothigh(source = chartHigh, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
+float trendPivotLow = showTrendLines ? ta.pivotlow(source = chartLow, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
+int trendPivotHighBar = not na(trendPivotHigh) ? bar_index - trendLinePivotStrength : na
+int trendPivotLowBar = not na(trendPivotLow) ? bar_index - trendLinePivotStrength : na
+
+var float previousTrendHighLevel = na
+var int previousTrendHighBar = na
+var float previousTrendLowLevel = na
+var int previousTrendLowBar = na
+var TrendSegment activeUpTrend = na
+var TrendSegment activeDownTrend = na
+
+if isNewTrackedSession
+    previousTrendHighLevel := na
+    previousTrendHighBar := na
+    previousTrendLowLevel := na
+    previousTrendLowBar := na
+    activeUpTrend := na
+    activeDownTrend := na
+
+if not showTrendLines
+    previousTrendHighLevel := na
+    previousTrendHighBar := na
+    previousTrendLowLevel := na
+    previousTrendLowBar := na
+    activeUpTrend := na
+    activeDownTrend := na
+
+if showTrendLines and inRegularSession and isCurrentTradingDay and barstate.isconfirmed and not na(sessionStartBarIndex)
+    if not na(trendPivotHigh) and trendPivotHighBar >= sessionStartBarIndex
+        if not na(previousTrendHighLevel) and trendPivotHigh < previousTrendHighLevel
+            activeDownTrend := TrendSegment.new(x1 = previousTrendHighBar, y1 = previousTrendHighLevel, x2 = trendPivotHighBar, y2 = trendPivotHigh)
+        previousTrendHighLevel := trendPivotHigh
+        previousTrendHighBar := trendPivotHighBar
+
+    if not na(trendPivotLow) and trendPivotLowBar >= sessionStartBarIndex
+        if not na(previousTrendLowLevel) and trendPivotLow > previousTrendLowLevel
+            activeUpTrend := TrendSegment.new(x1 = previousTrendLowBar, y1 = previousTrendLowLevel, x2 = trendPivotLowBar, y2 = trendPivotLow)
+        previousTrendLowLevel := trendPivotLow
+        previousTrendLowBar := trendPivotLowBar
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎨 RENDER ENGINE
+// Shared render orchestration clears stale objects and delegates drawing to each feature.
+// ═══════════════════════════════════════════════════════════════════════════════
+if barstate.islastconfirmedhistory or barstate.islast
+    f_clearLines(lines = renderedLines)
+    bool showCurrentSessionIntraday = latestRegularSessionDayKey == currentTradingDayKey and not na(sessionStartBarIndex)
+
+    if showIntradayStructure and showCurrentSessionIntraday
+        f_renderIntradayStructure(lines = renderedLines, resistanceLevels = intradayResistanceLevels, supportLevels = intradaySupportLevels, sessionStartBar = sessionStartBarIndex, visiblePerSide = intradayVisibleLevelsPerSide, extensionBars = intradaySRExtensionBars, projectionBars = intradaySRProjectionBars, lineWidth = intradaySRLineWidth, referencePrice = chartClose)
+
+    if showTrendLines and showCurrentSessionIntraday
+        f_renderTrendLines(lines = renderedLines, upTrendSegment = activeUpTrend, downTrendSegment = activeDownTrend, sessionStartBar = sessionStartBarIndex, lookbackBars = trendLineLookbackBars, projectionBars = trendLineProjectionBars, lineWidth = trendLineWidth, styleInput = trendLineStyleInput)
+
+    if showLongTermStructure
+        f_renderLongTermStructure(lines = renderedLines, keyLevels = longTermKeyLevels, levelsPerSide = longTermLevelsPerSide, referencePrice = chartClose)
