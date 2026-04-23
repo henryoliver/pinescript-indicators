@@ -8,8 +8,10 @@ indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_b
 // Ticker tape, introduced in 1867 by Edward Calahan and perfected by Thomas Edison,
 // was the first mechanical system for transmitting stock prices over telegraph lines.
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
 // Nord Theme Color
+// ═════════════════════════════════════════════════════════════════════════════
 // Polar Night
 const color NORD0 = #2E3440
 const color NORD1 = #3B4252
@@ -35,11 +37,11 @@ const color NORD15 = #B48EAD
 const string GROUP_GENERAL = "⚙️ General"
 const string GROUP_TABLE = "📋 Table"
 const string GROUP_LAYOUT = "📐 Layout"
-const string GROUP_RETAIL = "🛍️ Retail / Amateur"
-const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
-const string GROUP_BLOCK = "🐋 Block Trades"
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧩 TYPE DEFINITIONS
+// Custom Pine types used by the tape engine and block-trade tracker.
+// ═════════════════════════════════════════════════════════════════════════════
 
 // Custom type to store complete tick data as a structured record
 type TickData
@@ -73,9 +75,13 @@ type RealtimeBarState
     float price = na
     int updateTime = na
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🎛️ USER INPUT SETTINGS
+// Shared controls and section-owned inputs for tape rendering and block markers.
+// ═════════════════════════════════════════════════════════════════════════════
 
 // General Settings
+featureMode = input.string(defval = "Tape + Block Trades", title = "Feature Mode", options = ["Tape + Block Trades", "Tape Only", "Block Trades Only"], tooltip = "Choose whether to run the full tape, only the tape table, or only the block trade markers. Block-trades-only mode skips tape calculations to reduce runtime work.", group = GROUP_GENERAL)
 showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
 
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
@@ -117,12 +123,16 @@ frameColor = input.color(defval = color.new(color = NORD0, transp = 0), title = 
 borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, tooltip = "Width of cell borders.", inline = "border", group = GROUP_LAYOUT)
 borderColor = input.color(defval = color.new(color = NORD0, transp = 0), title = "", tooltip = "Color of cell borders.", inline = "border", group = GROUP_LAYOUT)
 
+const string GROUP_RETAIL = "🛍️ Retail / Amateur"
+
 // Retail / Amateur Settings
 showRetail = input.bool(defval = true, title = "Show Retail/Amateur", tooltip = "Show the retail/amateur tape section.", group = GROUP_RETAIL)
 retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, tooltip = "Maximum number of retail/amateur prints shown in the table.", group = GROUP_RETAIL)
 retailHeaderBg = input.color(defval = color.new(color = NORD2, transp = 80), title = "Retail Header BG", tooltip = "Background color for the retail section label.", group = GROUP_RETAIL)
 retailMinSize = input.int(defval = 0, title = "Retail Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the retail/amateur section.", group = GROUP_RETAIL)
 retailMaxSize = input.int(defval = 100, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section.", group = GROUP_RETAIL)
+
+const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
 
 // Professional / Institutional Settings
 showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", tooltip = "Show the institutional/professional tape section.", group = GROUP_INSTITUTIONAL)
@@ -131,27 +141,57 @@ institutionalHeaderBg = input.color(defval = color.new(color = NORD1, transp = 8
 institutionalMinSize = input.int(defval = 1000, title = "Institutional Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the institutional/professional section.", group = GROUP_INSTITUTIONAL)
 institutionalMaxSize = input.int(defval = 100000, title = "Institutional Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the institutional/professional section. Set to 0 to allow any size above the minimum.", group = GROUP_INSTITUTIONAL)
 
+const string GROUP_BLOCK = "🐋 Block Trades"
+
 // Block Trade Settings
 showBlockTradeMarkers = input.bool(defval = true, title = "Show Block Trade Markers", tooltip = "Plots a square marker below bars that contain at least one qualifying block trade.", group = GROUP_BLOCK)
 blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade.", group = GROUP_BLOCK)
 blockTradeColor = input.color(defval = NORD4, title = "Block Marker Color", tooltip = "Color used for the block trade square marker.", group = GROUP_BLOCK)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧮 DATA & CALCULATIONS
-int retailRowsActive = showRetail ? retailRows : 0
-int instRowsActive = showInstitutional ? institutionalRows : 0
-bool showGap = showInstitutional and showRetail
-int totalRows = math.max(1, (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0))
+// Shared execution-path gating, lower-timeframe requests, and persistent state.
+// ═════════════════════════════════════════════════════════════════════════════
+bool tapeEnabled = featureMode != "Block Trades Only"
+bool blockTradesEnabled = featureMode != "Tape Only"
+bool blockTradesActive = blockTradesEnabled and showBlockTradeMarkers
+int retailRowsActive = tapeEnabled and showRetail ? retailRows : 0
+int instRowsActive = tapeEnabled and showInstitutional ? institutionalRows : 0
+bool showGap = tapeEnabled and showInstitutional and showRetail
+int totalRows = tapeEnabled ? math.max(1, (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0)) : 1
 
 // DATA FETCHING
 // Request tick-level data from lower timeframe (1T = 1 tick)
 // Returns arrays of tick data for the current bar
-[tickPrices, tickVolumes, tickTimes, tickBids, tickAsks] = request.security_lower_tf(
-     symbol            = syminfo.tickerid,
-     timeframe         = "1T",
-     expression        = [close, volume, time, bid, ask],
-     ignore_invalid_symbol = true,
-     ignore_invalid_timeframe = true
-)
+array<float> tickPrices = array.new<float>()
+array<float> tickVolumes = array.new<float>()
+array<int> tickTimes = array.new<int>()
+array<float> tickBids = array.new<float>()
+array<float> tickAsks = array.new<float>()
+
+if tapeEnabled
+    [requestedTickPrices, requestedTickVolumes, requestedTickTimes, requestedTickBids, requestedTickAsks] = request.security_lower_tf(
+         symbol            = syminfo.tickerid,
+         timeframe         = "1T",
+         expression        = [close, volume, time, bid, ask],
+         ignore_invalid_symbol = true,
+         ignore_invalid_timeframe = true
+    )
+    tickPrices := requestedTickPrices
+    tickVolumes := requestedTickVolumes
+    tickTimes := requestedTickTimes
+    tickBids := requestedTickBids
+    tickAsks := requestedTickAsks
+else if blockTradesActive
+    [requestedTickVolumes, requestedTickTimes] = request.security_lower_tf(
+         symbol            = syminfo.tickerid,
+         timeframe         = "1T",
+         expression        = [volume, time],
+         ignore_invalid_symbol = true,
+         ignore_invalid_timeframe = true
+    )
+    tickVolumes := requestedTickVolumes
+    tickTimes := requestedTickTimes
 // PERSISTENT STORAGE
 // varip = variable that persists across script executions (real-time updates)
 // These arrays store validated TickData records that survive script recalculations
@@ -167,14 +207,38 @@ var bool tableLayoutInitialized = false
 
 // PRECOMPUTED VALUES & HELPERS
 // Convert text alignment strings to constants
-headerAlignValue = headerTextAlign == "left" ? text.align_left : headerTextAlign == "center" ? text.align_center : text.align_right
-timeAlignValue = timeColumnAlign == "left" ? text.align_left : timeColumnAlign == "center" ? text.align_center : text.align_right
-priceAlignValue = priceColumnAlign == "left" ? text.align_left : priceColumnAlign == "center" ? text.align_center : text.align_right
-sizeAlignValue = sizeColumnAlign == "left" ? text.align_left : sizeColumnAlign == "center" ? text.align_center : text.align_right
-condAlignValue = condColumnAlign == "left" ? text.align_left : condColumnAlign == "center" ? text.align_center : text.align_right
+headerAlignValue = switch headerTextAlign
+    "left" => text.align_left
+    "center" => text.align_center
+    => text.align_right
+
+timeAlignValue = switch timeColumnAlign
+    "left" => text.align_left
+    "center" => text.align_center
+    => text.align_right
+
+priceAlignValue = switch priceColumnAlign
+    "left" => text.align_left
+    "center" => text.align_center
+    => text.align_right
+
+sizeAlignValue = switch sizeColumnAlign
+    "left" => text.align_left
+    "center" => text.align_center
+    => text.align_right
+
+condAlignValue = switch condColumnAlign
+    "left" => text.align_left
+    "center" => text.align_center
+    => text.align_right
 
 // Build price format string
-priceFormat = priceDecimals <= 1 ? "#,###.0" : priceDecimals == 2 ? "#,###.00" : priceDecimals == 3 ? "#,###.000" : "#,###.0000"
+priceFormat = switch priceDecimals
+    0 => "#,###"
+    1 => "#,###.0"
+    2 => "#,###.00"
+    3 => "#,###.000"
+    => "#,###.0000"
 
 // Convert table position string to position constant
 tablePos = switch tablePosition
@@ -190,9 +254,12 @@ tablePos = switch tablePosition
     => position.top_right
 
 // Create table (var = initialized once, persists across bars)
-var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = backgroundColor, border_width = borderWidth, border_color = borderColor, frame_width = frameWidth, frame_color = frameColor)
+var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = tapeEnabled ? backgroundColor : color.new(backgroundColor, 100), border_width = tapeEnabled ? borderWidth : 0, border_color = borderColor, frame_width = tapeEnabled ? frameWidth : 0, frame_color = frameColor)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🛠️ FUNCTIONS
+// Tape storage, classification, rendering, and block-trade helpers.
+// ═════════════════════════════════════════════════════════════════════════════
 f_resetBlockTradeState(BlockTradeState state) =>
     state.count := 0
 
@@ -215,6 +282,9 @@ f_updateTailTracker(TailTracker state, float tailPrice, float tailVolume, int ta
 
 f_hasTailChanged(TailTracker state, float tailPrice, float tailVolume, int tailTime) =>
     tailPrice != state.price or tailVolume != state.volume or tailTime != state.time
+
+f_hasBlockTailChanged(TailTracker state, float tailVolume, int tailTime) =>
+    tailVolume != state.volume or tailTime != state.time
 
 f_resetRealtimeBarState(RealtimeBarState state, float barPrice, int barUpdateTime) =>
     state.volume := 0.0
@@ -363,14 +433,17 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
     bool isDuplicatePrint = f_isDuplicateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
     bool passesAggressiveFilter = not showAggressiveOnly or tickDirection != 0
     if passesAggressiveFilter and not isDuplicatePrint
-        if showBlockTradeMarkers and tickVolume >= blockSizeThreshold
+        if blockTradesActive and tickVolume >= blockSizeThreshold
             f_recordBlockTradeState(blockState)
         bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickBid, tickAsk, tickDirection)
         if storedTick
             f_updateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
     tapeState.tapePrice := tickPrice
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 📰 TAPE PROCESSING
+// Branch into tape or block-only execution so disabled features do no work.
+// ═════════════════════════════════════════════════════════════════════════════
 // Keep the tape rolling across bars; row caps trim the oldest visible records automatically.
 if barstate.isnew
     tapeState.processedTickCount := 0
@@ -379,49 +452,82 @@ if barstate.isnew
     tableLayoutInitialized := false
 
 // 📰 LOWER-TF TICKS
-int availableTickCount = tickPrices.size()
-float currentTailPrice = availableTickCount > 0 ? tickPrices.get(availableTickCount - 1) : na
-float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
-int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
-bool tailTickChanged = availableTickCount > 0 and f_hasTailChanged(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
-bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
+if tapeEnabled
+    int availableTickCount = tickPrices.size()
+    float currentTailPrice = availableTickCount > 0 ? tickPrices.get(availableTickCount - 1) : na
+    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
+    int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
+    bool tailTickChanged = availableTickCount > 0 and f_hasTailChanged(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
+    bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
 
-if newTicksThisExec
-    int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
-    // Process all new lower-TF prints so block markers and section routing stay stable on the live bar.
-    for tickIndex = processStartIndex to availableTickCount - 1
-        float currentTickPrice = tickPrices.get(tickIndex)
-        float currentTickVolume = tickVolumes.get(tickIndex)
-        int currentTickTime = tickTimes.get(tickIndex)
-        float currentTickBid = tickBids.get(tickIndex)
-        float currentTickAsk = tickAsks.get(tickIndex)
+    if newTicksThisExec
+        int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
+        // Process all new lower-TF prints so block markers and section routing stay stable on the live bar.
+        for tickIndex = processStartIndex to availableTickCount - 1
+            float currentTickPrice = tickPrices.get(tickIndex)
+            float currentTickVolume = tickVolumes.get(tickIndex)
+            int currentTickTime = tickTimes.get(tickIndex)
+            float currentTickBid = tickBids.get(tickIndex)
+            float currentTickAsk = tickAsks.get(tickIndex)
 
-        bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
+            bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
 
-        if isCompleteRecord and currentTickVolume >= minimumSize
-            f_processAndStoreTick(currentTickPrice, currentTickVolume, currentTickTime, currentTickBid, currentTickAsk)
+            if isCompleteRecord and currentTickVolume >= minimumSize
+                f_processAndStoreTick(currentTickPrice, currentTickVolume, currentTickTime, currentTickBid, currentTickAsk)
 
-    // Update the last processed tick count to prevent reprocessing
-    tapeState.processedTickCount := availableTickCount
-    f_updateTailTracker(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
+        // Update the last processed tick count to prevent reprocessing
+        tapeState.processedTickCount := availableTickCount
+        f_updateTailTracker(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
 
-// ⚡ REALTIME FALLBACK
-bool noFreshLowerTfUpdate = not newTicksThisExec
-if barstate.isrealtime
-    float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
-    bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
-    if realtimePrintReady and noFreshLowerTfUpdate
-        f_processAndStoreTick(close, realtimeVolumeDelta, timenow, bid, ask)
-    f_updateRealtimeBarState(realtimeBarState, volume, close, timenow)
+    // ⚡ REALTIME FALLBACK
+    bool noFreshLowerTfUpdate = not newTicksThisExec
+    if barstate.isrealtime
+        float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
+        bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
+        if realtimePrintReady and noFreshLowerTfUpdate
+            f_processAndStoreTick(close, realtimeVolumeDelta, timenow, bid, ask)
+        f_updateRealtimeBarState(realtimeBarState, volume, close, timenow)
+else if blockTradesActive
+    int availableTickCount = tickVolumes.size()
+    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
+    int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
+    bool tailTickChanged = availableTickCount > 0 and f_hasBlockTailChanged(tailTracker, currentTailVolume, currentTailTime)
+    bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
 
+    if newTicksThisExec
+        int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
+        for tickIndex = processStartIndex to availableTickCount - 1
+            float currentTickVolume = tickVolumes.get(tickIndex)
+            int currentTickTime = tickTimes.get(tickIndex)
+            bool isCompleteRecord = not na(currentTickVolume) and not na(currentTickTime) and currentTickVolume > 0 and currentTickTime > 0
+            if isCompleteRecord and currentTickVolume >= blockSizeThreshold
+                f_recordBlockTradeState(blockState)
+
+        tapeState.processedTickCount := availableTickCount
+        f_updateTailTracker(tailTracker, na, currentTailVolume, currentTailTime)
+
+    bool noFreshLowerTfUpdate = not newTicksThisExec
+    if barstate.isrealtime
+        float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
+        bool realtimeBlockReady = realtimeVolumeDelta >= blockSizeThreshold and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
+        if realtimeBlockReady and noFreshLowerTfUpdate
+            f_recordBlockTradeState(blockState)
+        f_updateRealtimeBarState(realtimeBarState, volume, close, timenow)
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 🐋 BLOCK TRADES
-bool showBlockTradeGlyph = showBlockTradeMarkers and blockState.count > 0
+// Render the per-bar block marker with opacity tied to block count.
+// ═════════════════════════════════════════════════════════════════════════════
+bool showBlockTradeGlyph = blockTradesActive and blockState.count > 0
 int blockTradeTransparency = f_blockTradeTransparency(blockState.count)
 plotchar(series = showBlockTradeGlyph, title = "Block Trades", char = "■", location = location.belowbar, color = color.new(color = blockTradeColor, transp = blockTradeTransparency), size = size.tiny)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // ⚡ PERFORMANCE
+// Render the table only on the last bar, and clear it when tape mode is off.
+// ═════════════════════════════════════════════════════════════════════════════
 // Only render table on the last bar to avoid wasted work on historical bars.
-if barstate.islast
+if barstate.islast and tapeEnabled
     // Get current tick count
     int instTickCount = array.size(id = institutionalTicks)
     int retailTickCount = array.size(id = retailTicks)
@@ -479,3 +585,5 @@ if barstate.islast
 
     if showRetail and retailRowsActive > 0
         f_renderTickSection(retailTicks, retailTickCount, retailRowsActive, retailStartRow)
+else if barstate.islast
+    table.clear(table_id = tapeTable, start_column = 0, start_row = 0, end_column = 3, end_row = totalRows - 1)
