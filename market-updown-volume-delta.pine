@@ -2,81 +2,117 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Market Up-Down Volume Delta", shorttitle = "📊 Vol Δ", overlay = false, dynamic_requests = true)
+indicator(title = "Market Up-Down Volume Delta", shorttitle = "📊 Vol Δ", overlay = true)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-const string GROUP_MARKET = "🌐 Market"
-const string GROUP_GENERAL = "⚙️ General"
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+const string PRESET_AUTO = "Auto"
+const string PRESET_NDX = "Nasdaq 100"
+const string PRESET_NDX_QQQ = "Nasdaq 100 / QQQ"
+const string PRESET_NDX_FUTURES = "Nasdaq 100 / NQ"
+const string PRESET_IXIC = "Nasdaq Composite"
+const string PRESET_SPX = "S&P 500"
+const string PRESET_SPX_SPY = "S&P 500 / SPY"
+const string PRESET_SPX_FUTURES = "S&P 500 / ES"
+const string PRESET_DJI = "Dow Jones"
+const string PRESET_DJI_DIA = "Dow Jones / DIA"
+const string PRESET_DJI_FUTURES = "Dow Jones / YM"
+const string PRESET_RUT = "Russell 2000"
+const string PRESET_RUT_IWM = "Russell 2000 / IWM"
+const string PRESET_RUT_FUTURES = "Russell 2000 / RTY"
+const string PRESET_CUSTOM = "Custom"
 
-// Nord Theme Colors
+const string MODE_RAW = "Raw Delta"
+const string MODE_PERCENT = "Delta %"
+const string MODE_RATIO = "Up/Down Ratio"
+
+// Nord Theme Color
+// Polar Night
 const color NORD0 = #2E3440
 const color NORD1 = #3B4252
 const color NORD2 = #434C5E
 const color NORD3 = #4C566A
+// Snow Storm
 const color NORD4 = #D8DEE9
 const color NORD5 = #E5E9F0
 const color NORD6 = #ECEFF4
+// Frost
 const color NORD7 = #8FBCBB
 const color NORD8 = #88C0D0
 const color NORD9 = #81A1C1
 const color NORD10 = #5E81AC
+// Aurora
 const color NORD11 = #BF616A
 const color NORD12 = #D08770
 const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// 🎛️ USER INPUT SETTINGS
+// ═════════════════════════════════════════════════════════════════════════════
+// 🌐 MARKET
+// Market breadth source selection and symbol overrides live here.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_MARKET = "🌐 Market"
+
 string marketPreset = input.string(
-     defval = "Auto",
+     defval = PRESET_AUTO,
      title = "Market",
-     options = ["Auto", "NASDAQ 100", "NASDAQ Composite", "NYSE / S&P 500", "Dow Jones", "Russell 2000", "Custom"],
-     tooltip = "Auto uses NASDAQ breadth for NDX/QQQ/NQ charts and NYSE breadth for SPX/SPY/DIA/IWM/ES/YM/RTY style charts.",
+     options = [PRESET_AUTO, PRESET_NDX, PRESET_NDX_QQQ, PRESET_NDX_FUTURES, PRESET_IXIC, PRESET_SPX, PRESET_SPX_SPY, PRESET_SPX_FUTURES, PRESET_DJI, PRESET_DJI_DIA, PRESET_DJI_FUTURES, PRESET_RUT, PRESET_RUT_IWM, PRESET_RUT_FUTURES, PRESET_CUSTOM],
+     tooltip = "Auto uses NASDAQ breadth for NDX/QQQ/NQ charts and NYSE breadth for SPX/SPY/DIA/IWM/ES/YM/RTY style charts. Use explicit presets for quicker selection by index, ETF, or futures symbol family.",
      group = GROUP_MARKET
  )
 
-string customUpVolumeSymbol = input.string(
+string customUpVolumeSymbol = input.symbol(
      defval = "USI:UVOLQ",
      title = "Custom Up-Volume Symbol",
      tooltip = "Used only when Market = Custom.",
      group = GROUP_MARKET
  )
 
-string customDownVolumeSymbol = input.string(
+string customDownVolumeSymbol = input.symbol(
      defval = "USI:DVOLQ",
      title = "Custom Down-Volume Symbol",
      tooltip = "Used only when Market = Custom.",
      group = GROUP_MARKET
  )
 
-bool regularSessionOnly = input.bool(
-     defval = true,
-     title = "Regular Session Only",
-     tooltip = "Uses regular-session data for the breadth symbols when available.",
-     group = GROUP_GENERAL
- )
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚙️ GENERAL
+// Shared display controls for the plotted volume delta series.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_GENERAL = "⚙️ General"
 
 string displayMode = input.string(
-     defval = "Delta %",
+     defval = MODE_RAW,
      title = "Display",
-     options = ["Raw Delta", "Delta %", "Up/Down Ratio"],
+     options = [MODE_RAW, MODE_PERCENT, MODE_RATIO],
      tooltip = "Raw Delta plots UVOL - DVOL. Delta % normalizes by total volume. Up/Down Ratio plots a signed ratio around zero.",
      group = GROUP_GENERAL
  )
 
 bool showSignalLine = input.bool(
-     defval = true,
-     title = "Show Signal Line",
-     tooltip = "Plots an EMA of the selected series.",
+     defval = false,
+     title = "Show Moving Average",
+     tooltip = "Plots a moving average of the selected volume delta series.",
+     group = GROUP_GENERAL
+ )
+
+string signalType = input.string(
+     defval = "EMA",
+     title = "Moving Average Type",
+     options = ["EMA", "SMA"],
+     tooltip = "Select the moving average type used for the signal line.",
      group = GROUP_GENERAL
  )
 
 int signalLength = input.int(
-     defval = 10,
-     title = "Signal Length",
+     defval = 15,
+     title = "Moving Average Length",
      minval = 1,
      maxval = 100,
-     tooltip = "EMA length for the signal line.",
+     tooltip = "Length for the selected moving average type.",
      group = GROUP_GENERAL
  )
 
@@ -87,41 +123,88 @@ bool showZeroLine = input.bool(
      group = GROUP_GENERAL
  )
 
-// 🧮 DATA & CALCULATIONS
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧮 VOLUME DELTA
+// Breadth requests, active-series selection, and final plot preparation.
+// ═════════════════════════════════════════════════════════════════════════════
 f_autoUsesNasdaq() =>
-    string symbolText = str.upper(syminfo.tickerid + " " + syminfo.ticker + " " + syminfo.root + " " + syminfo.description)
-    str.contains(symbolText, "NASDAQ") or
-     str.contains(symbolText, "NDX") or
-     str.contains(symbolText, "IXIC") or
-     str.contains(symbolText, "QQQ") or
-     str.contains(symbolText, "NQ1!") or
-     str.contains(symbolText, "MNQ1!") or
-     str.contains(symbolText, "NQ") or
-     str.contains(symbolText, "TQQQ") or
-     str.contains(symbolText, "SQQQ")
+    bool usesNasdaqBreadth = str.contains(source = str.upper(source = syminfo.prefix), str = "NASDAQ")
+    usesNasdaqBreadth := usesNasdaqBreadth or syminfo.ticker == "QQQ"
+    usesNasdaqBreadth := usesNasdaqBreadth or syminfo.ticker == "TQQQ"
+    usesNasdaqBreadth := usesNasdaqBreadth or syminfo.ticker == "SQQQ"
+    usesNasdaqBreadth := usesNasdaqBreadth or syminfo.ticker == "NDX"
+    usesNasdaqBreadth := usesNasdaqBreadth or syminfo.ticker == "IXIC"
+    usesNasdaqBreadth := usesNasdaqBreadth or str.startswith(source = syminfo.ticker, str = "NQ")
+    usesNasdaqBreadth := usesNasdaqBreadth or str.startswith(source = syminfo.ticker, str = "MNQ")
+    usesNasdaqBreadth
 
 f_resolveSymbols(string preset, string customUpSymbol, string customDownSymbol) =>
     string resolvedUpSymbol = "USI:UVOL"
     string resolvedDownSymbol = "USI:DVOL"
     string resolvedLabel = "NYSE Breadth"
 
-    if preset == "Custom"
-        resolvedUpSymbol := customUpSymbol
-        resolvedDownSymbol := customDownSymbol
-        resolvedLabel := "Custom"
-    else if preset == "NASDAQ 100" or preset == "NASDAQ Composite"
-        resolvedUpSymbol := "USI:UVOLQ"
-        resolvedDownSymbol := "USI:DVOLQ"
-        resolvedLabel := "NASDAQ Breadth"
-    else if preset == "NYSE / S&P 500" or preset == "Dow Jones" or preset == "Russell 2000"
-        resolvedUpSymbol := "USI:UVOL"
-        resolvedDownSymbol := "USI:DVOL"
-        resolvedLabel := "NYSE Breadth"
-    else
-        bool useNasdaqBreadth = f_autoUsesNasdaq()
-        resolvedUpSymbol := useNasdaqBreadth ? "USI:UVOLQ" : "USI:UVOL"
-        resolvedDownSymbol := useNasdaqBreadth ? "USI:DVOLQ" : "USI:DVOL"
-        resolvedLabel := useNasdaqBreadth ? "Auto: NASDAQ Breadth" : "Auto: NYSE Breadth"
+    switch preset
+        PRESET_CUSTOM =>
+            resolvedUpSymbol := customUpSymbol
+            resolvedDownSymbol := customDownSymbol
+            resolvedLabel := "Custom"
+        PRESET_NDX =>
+            resolvedUpSymbol := "USI:UVOLQ"
+            resolvedDownSymbol := "USI:DVOLQ"
+            resolvedLabel := "NASDAQ Breadth"
+        PRESET_NDX_QQQ =>
+            resolvedUpSymbol := "USI:UVOLQ"
+            resolvedDownSymbol := "USI:DVOLQ"
+            resolvedLabel := "NASDAQ Breadth"
+        PRESET_NDX_FUTURES =>
+            resolvedUpSymbol := "USI:UVOLQ"
+            resolvedDownSymbol := "USI:DVOLQ"
+            resolvedLabel := "NASDAQ Breadth"
+        PRESET_IXIC =>
+            resolvedUpSymbol := "USI:UVOLQ"
+            resolvedDownSymbol := "USI:DVOLQ"
+            resolvedLabel := "NASDAQ Breadth"
+        PRESET_SPX =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_SPX_SPY =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_SPX_FUTURES =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_DJI =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_DJI_DIA =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_DJI_FUTURES =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_RUT =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_RUT_IWM =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        PRESET_RUT_FUTURES =>
+            resolvedUpSymbol := "USI:UVOL"
+            resolvedDownSymbol := "USI:DVOL"
+            resolvedLabel := preset + " Breadth"
+        =>
+            bool useNasdaqBreadth = f_autoUsesNasdaq()
+            resolvedUpSymbol := useNasdaqBreadth ? "USI:UVOLQ" : "USI:UVOL"
+            resolvedDownSymbol := useNasdaqBreadth ? "USI:DVOLQ" : "USI:DVOL"
+            resolvedLabel := useNasdaqBreadth ? "Auto: NASDAQ Breadth" : "Auto: NYSE Breadth"
 
     [resolvedUpSymbol, resolvedDownSymbol, resolvedLabel]
 
@@ -131,11 +214,8 @@ f_resolveSymbols(string preset, string customUpSymbol, string customDownSymbol) 
      customDownSymbol = customDownVolumeSymbol
  )
 
-string upVolumeRequestSymbol = regularSessionOnly ? ticker.modify(upVolumeSymbol, session = session.regular) : upVolumeSymbol
-string downVolumeRequestSymbol = regularSessionOnly ? ticker.modify(downVolumeSymbol, session = session.regular) : downVolumeSymbol
-
 float upVolume = request.security(
-     symbol = upVolumeRequestSymbol,
+     symbol = upVolumeSymbol,
      timeframe = timeframe.period,
      expression = close,
      lookahead = barmerge.lookahead_off,
@@ -144,7 +224,7 @@ float upVolume = request.security(
  )
 
 float downVolume = request.security(
-     symbol = downVolumeRequestSymbol,
+     symbol = downVolumeSymbol,
      timeframe = timeframe.period,
      expression = close,
      lookahead = barmerge.lookahead_off,
@@ -157,20 +237,26 @@ float totalVolume = upVolume + downVolume
 float deltaPercent = totalVolume > 0 ? rawDelta / totalVolume * 100.0 : na
 float signedRatio = upVolume > downVolume ? upVolume / math.max(downVolume, 1.0) : downVolume > upVolume ? -(downVolume / math.max(upVolume, 1.0)) : 0.0
 
-float activeSeries = displayMode == "Raw Delta" ? rawDelta : displayMode == "Delta %" ? deltaPercent : signedRatio
-float signalLine = ta.ema(source = activeSeries, length = signalLength)
+float activeSeries = switch displayMode
+    MODE_RAW => rawDelta
+    MODE_PERCENT => deltaPercent
+    => signedRatio
+
+float signalLine = signalType == "EMA" ? ta.ema(source = activeSeries, length = signalLength) : ta.sma(source = activeSeries, length = signalLength)
 
 bool hasData = not na(upVolume) and not na(downVolume)
 bool seriesReady = hasData and not na(activeSeries)
-bool isPositive = nz(activeSeries, 0) >= 0
-color histogramColor = isPositive ? color.new(color = NORD14, transp = 0) : color.new(color = NORD11, transp = 0)
-color lineColor = nz(activeSeries, 0) >= nz(activeSeries[1], activeSeries) ? color.new(color = NORD8, transp = 0) : color.new(color = NORD9, transp = 0)
+bool isPositive = nz(source = activeSeries, replacement = 0) >= 0
+color volumeLineColor = isPositive ? color.new(color = NORD8, transp = 80) : color.new(color = NORD9, transp = 40)
+color lineColor = NORD9
+if nz(source = activeSeries, replacement = 0) >= nz(source = activeSeries[1], replacement = activeSeries)
+    lineColor := NORD8
 
 plot(
      series = seriesReady ? activeSeries : na,
      title = "Volume Delta",
-     color = histogramColor,
-     style = plot.style_histogram,
+     color = volumeLineColor,
+     style = plot.style_line,
      linewidth = 3
  )
 
@@ -185,51 +271,7 @@ plot(
 hline(
      price = 0,
      title = "Zero Line",
-     color = showZeroLine ? NORD3 : na,
+     color = showZeroLine ? NORD3 : color.new(color = NORD3, transp = 100),
      linestyle = hline.style_solid,
      linewidth = 2
  )
-
-var label statusLabel = na
-
-if barstate.islast
-    if not na(statusLabel)
-        label.delete(id = statusLabel)
-
-    if seriesReady
-        string modeLabel = displayMode == "Raw Delta" ? "Raw" : displayMode == "Delta %" ? "Percent" : "Ratio"
-        string statusText = str.format(
-             "{0}\nUVOL: {1,number,###,###,###}\nDVOL: {2,number,###,###,###}\nMode: {3}",
-             sourceLabel,
-             upVolume,
-             downVolume,
-             modeLabel
-         )
-        statusLabel := label.new(
-             x = bar_index,
-             y = nz(activeSeries, 0),
-             text = statusText,
-             xloc = xloc.bar_index,
-             yloc = yloc.price,
-             style = label.style_label_left,
-             textcolor = NORD6,
-             color = color.new(color = NORD1, transp = 15),
-             size = size.small
-         )
-    else
-        string errorText = str.format(
-             "No breadth data for:\n{0}\n{1}\nSwitch Market or use Custom symbols.",
-             upVolumeSymbol,
-             downVolumeSymbol
-         )
-        statusLabel := label.new(
-             x = bar_index,
-             y = 0,
-             text = errorText,
-             xloc = xloc.bar_index,
-             yloc = yloc.price,
-             style = label.style_label_left,
-             textcolor = NORD6,
-             color = color.new(color = NORD11, transp = 15),
-             size = size.small
-         )

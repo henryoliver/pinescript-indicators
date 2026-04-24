@@ -1,0 +1,339 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Composite Breadth Indicator", shorttitle = "📊 CBI", format = format.price, precision = 2)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+// Snow Storm
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+// Frost
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🏛️ MARKET SELECTION
+// Market selection inputs and symbol resolution live together here.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_MARKET = "🏛️ Market Selection"
+const string GROUP_CUSTOM = "🔧 Custom Symbols"
+
+const string MARKET_AUTO        = "Auto"
+const string MARKET_NDX         = "Nasdaq 100"
+const string MARKET_NDX_QQQ     = "Nasdaq 100 / QQQ"
+const string MARKET_NDX_FUTURES = "Nasdaq 100 / NQ"
+const string MARKET_IXIC        = "Nasdaq Composite"
+const string MARKET_SPX         = "S&P 500"
+const string MARKET_SPX_SPY     = "S&P 500 / SPY"
+const string MARKET_SPX_FUTURES = "S&P 500 / ES"
+const string MARKET_DJI         = "Dow Jones"
+const string MARKET_DJI_DIA     = "Dow Jones / DIA"
+const string MARKET_DJI_FUTURES = "Dow Jones / YM"
+const string MARKET_RUT         = "Russell 2000"
+const string MARKET_RUT_IWM     = "Russell 2000 / IWM"
+const string MARKET_RUT_FUTURES = "Russell 2000 / RTY"
+const string MARKET_CUSTOM      = "Custom"
+
+const string TICK_NY = "USI:TICK"
+const string ADD_NY  = "USI:ADD"
+const string VOLD_NY = "USI:VOLD"
+
+const string TICK_NQ = "USI:TICKQ"
+const string ADD_NQ  = "USI:ADDQ"
+const string VOLD_NQ = "USI:VOLDQ"
+
+f_isNasdaqChart() =>
+    bool isNasdaqChart = str.contains(source = str.upper(source = syminfo.prefix), str = "NASDAQ")
+    isNasdaqChart := isNasdaqChart or syminfo.ticker == "QQQ"
+    isNasdaqChart := isNasdaqChart or syminfo.ticker == "TQQQ"
+    isNasdaqChart := isNasdaqChart or syminfo.ticker == "SQQQ"
+    isNasdaqChart := isNasdaqChart or syminfo.ticker == "NDX"
+    isNasdaqChart := isNasdaqChart or syminfo.ticker == "IXIC"
+    isNasdaqChart := isNasdaqChart or str.startswith(source = syminfo.ticker, str = "NQ")
+    isNasdaqChart
+
+string marketSelection = input.string(defval = MARKET_AUTO, title = "Market",
+     options = [MARKET_AUTO, MARKET_NDX, MARKET_NDX_QQQ, MARKET_NDX_FUTURES, MARKET_IXIC, MARKET_SPX, MARKET_SPX_SPY, MARKET_SPX_FUTURES, MARKET_DJI, MARKET_DJI_DIA, MARKET_DJI_FUTURES, MARKET_RUT, MARKET_RUT_IWM, MARKET_RUT_FUTURES, MARKET_CUSTOM],
+     tooltip = "Select the market for breadth data. Auto detects based on the current chart symbol. Use explicit presets for index, ETF, or futures symbol families.",
+     group = GROUP_MARKET)
+
+string customTickSymbol = input.symbol(defval = "USI:TICKQ", title = "TICK Symbol",
+     tooltip = "Custom TICK index symbol.", group = GROUP_CUSTOM)
+string customAddSymbol = input.symbol(defval = "USI:ADDQ", title = "ADD Symbol",
+     tooltip = "Custom Advance-Decline symbol.", group = GROUP_CUSTOM)
+string customVoldSymbol = input.symbol(defval = "USI:VOLDQ", title = "VOLD Symbol",
+     tooltip = "Custom Up/Down Volume symbol.", group = GROUP_CUSTOM)
+
+bool marketIsNasdaq = f_isNasdaqChart()
+
+string marketTickSymbol = TICK_NY
+string marketAddSymbol = ADD_NY
+string marketVoldSymbol = VOLD_NY
+
+if marketSelection == MARKET_AUTO
+    if marketIsNasdaq
+        marketTickSymbol := TICK_NQ
+        marketAddSymbol := ADD_NQ
+        marketVoldSymbol := VOLD_NQ
+else if marketSelection == MARKET_NDX or marketSelection == MARKET_NDX_QQQ or marketSelection == MARKET_NDX_FUTURES or marketSelection == MARKET_IXIC
+    marketTickSymbol := TICK_NQ
+    marketAddSymbol := ADD_NQ
+    marketVoldSymbol := VOLD_NQ
+else if marketSelection == MARKET_CUSTOM
+    marketTickSymbol := customTickSymbol
+    marketAddSymbol := customAddSymbol
+    marketVoldSymbol := customVoldSymbol
+
+string marketLabel = marketSelection
+if marketSelection == MARKET_AUTO
+    marketLabel := marketIsNasdaq ? "NASDAQ" : "NYSE"
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚖️ COMPONENT WEIGHTS
+// Relative component weight inputs are applied only to active breadth series.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_WEIGHTS = "⚖️ Component Weights"
+
+float weightVold = input.float(defval = 40, title = "VOLD Weight", minval = 0, maxval = 100, step = 5,
+     tooltip = "Relative weight for Up/Down Volume. Volume tends to lead price.", group = GROUP_WEIGHTS)
+float weightAdd = input.float(defval = 35, title = "ADD Weight", minval = 0, maxval = 100, step = 5,
+     tooltip = "Relative weight for Advance-Decline. Confirms breadth participation.", group = GROUP_WEIGHTS)
+float weightTick = input.float(defval = 25, title = "TICK Weight", minval = 0, maxval = 100, step = 5,
+     tooltip = "Relative weight for TICK. Instantaneous uptick/downtick momentum.", group = GROUP_WEIGHTS)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧮 CALCULATION
+// Data fetching, normalization, composite construction, and cumulative mode.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_CALC = "🧮 Calculation"
+
+const string MODE_OSCILLATOR = "Oscillator"
+const string MODE_CUMULATIVE = "Cumulative"
+
+const color DIFFUSION_BULL_STRONG = color.new(color = NORD14, transp = 85)
+const color DIFFUSION_BULL_WEAK   = color.new(color = NORD14, transp = 93)
+const color DIFFUSION_BEAR_STRONG = color.new(color = NORD11, transp = 85)
+const color DIFFUSION_BEAR_WEAK   = color.new(color = NORD11, transp = 93)
+
+const color HISTOGRAM_BULL_STRONG = color.new(color = NORD14, transp = 20)
+const color HISTOGRAM_BULL_MEDIUM = color.new(color = NORD14, transp = 50)
+const color HISTOGRAM_BULL_WEAK   = color.new(color = NORD14, transp = 75)
+const color HISTOGRAM_BEAR_STRONG = color.new(color = NORD11, transp = 20)
+const color HISTOGRAM_BEAR_MEDIUM = color.new(color = NORD11, transp = 50)
+const color HISTOGRAM_BEAR_WEAK   = color.new(color = NORD11, transp = 75)
+
+f_normalize(float sourceValue, int length) =>
+    float highestValue = ta.highest(source = sourceValue, length = length)
+    float lowestValue = ta.lowest(source = sourceValue, length = length)
+    float sourceRange = highestValue - lowestValue
+    float normalizedValue = na
+    if not na(sourceValue) and not na(highestValue) and not na(lowestValue)
+        normalizedValue := sourceRange > 0 ? ((sourceValue - lowestValue) / sourceRange) * 200.0 - 100.0 : 0.0
+    normalizedValue
+
+string displayMode = input.string(defval = MODE_OSCILLATOR, title = "Display Mode",
+     options = [MODE_OSCILLATOR, MODE_CUMULATIVE],
+     tooltip = "Oscillator: normalized composite score per bar (-100 to +100).\nCumulative: running sum from session open — shows directional drift for the day.",
+     group = GROUP_CALC)
+int normLength = input.int(defval = 390, title = "Normalization Lookback", minval = 10, maxval = 2000, step = 10,
+     tooltip = "Rolling lookback for min/max normalization. 390 = full RTH session on a 1-min chart.",
+     group = GROUP_CALC)
+int signalLength = input.int(defval = 13, title = "Signal EMA Length", minval = 1, maxval = 100, step = 1,
+     tooltip = "EMA period for the signal line.", group = GROUP_CALC)
+int smoothLength = input.int(defval = 5, title = "Composite Smoothing", minval = 1, maxval = 50, step = 1,
+     tooltip = "EMA smoothing applied to the raw composite score to reduce noise.", group = GROUP_CALC)
+
+float tickValue = request.security(symbol = marketTickSymbol, timeframe = timeframe.period, expression = close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float addValue = request.security(symbol = marketAddSymbol, timeframe = timeframe.period, expression = close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float voldValue = request.security(symbol = marketVoldSymbol, timeframe = timeframe.period, expression = close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+
+float normalizedTick = f_normalize(sourceValue = tickValue, length = normLength)
+float normalizedAdd = f_normalize(sourceValue = addValue, length = normLength)
+float normalizedVold = f_normalize(sourceValue = voldValue, length = normLength)
+
+float activeWeightTotal = 0.0
+float weightedCompositeSum = 0.0
+
+if not na(normalizedVold)
+    activeWeightTotal += weightVold
+    weightedCompositeSum += weightVold * normalizedVold
+
+if not na(normalizedAdd)
+    activeWeightTotal += weightAdd
+    weightedCompositeSum += weightAdd * normalizedAdd
+
+if not na(normalizedTick)
+    activeWeightTotal += weightTick
+    weightedCompositeSum += weightTick * normalizedTick
+
+float compositeRaw = activeWeightTotal > 0 ? weightedCompositeSum / activeWeightTotal : na
+float compositeValue = ta.ema(source = compositeRaw, length = smoothLength)
+
+bool useCumulativeMode = displayMode == MODE_CUMULATIVE
+bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
+
+var float cumulativeComposite = 0.0
+if useCumulativeMode
+    if isNewSession
+        cumulativeComposite := na(compositeValue) ? 0.0 : compositeValue
+    else if not na(compositeValue)
+        cumulativeComposite += compositeValue
+
+float mainValue = useCumulativeMode ? cumulativeComposite : compositeValue
+float signalLine = ta.ema(source = mainValue, length = signalLength)
+
+int activeComponents = (na(tickValue) ? 0 : 1) + (na(addValue) ? 0 : 1) + (na(voldValue) ? 0 : 1)
+int bullCount = 0
+if not na(tickValue) and tickValue > 0
+    bullCount += 1
+if not na(addValue) and addValue > 0
+    bullCount += 1
+if not na(voldValue) and voldValue > 0
+    bullCount += 1
+int bearCount = activeComponents - bullCount
+
+color diffusionColor = na
+if activeComponents > 0
+    if bullCount == activeComponents
+        diffusionColor := DIFFUSION_BULL_STRONG
+    else if bullCount == 0
+        diffusionColor := DIFFUSION_BEAR_STRONG
+    else if bullCount > bearCount
+        diffusionColor := DIFFUSION_BULL_WEAK
+    else
+        diffusionColor := DIFFUSION_BEAR_WEAK
+
+color histogramColor = na
+if not na(mainValue) and activeComponents > 0
+    if mainValue >= 0
+        if bullCount == activeComponents
+            histogramColor := HISTOGRAM_BULL_STRONG
+        else if bullCount > bearCount
+            histogramColor := HISTOGRAM_BULL_MEDIUM
+        else
+            histogramColor := HISTOGRAM_BULL_WEAK
+    else if bearCount == activeComponents
+        histogramColor := HISTOGRAM_BEAR_STRONG
+    else if bearCount > bullCount
+        histogramColor := HISTOGRAM_BEAR_MEDIUM
+    else
+        histogramColor := HISTOGRAM_BEAR_WEAK
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📋 DISPLAY
+// Plot controls and table rendering live here.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_DISPLAY = "📋 Display"
+
+const string TABLE_TEXT_NA = "--"
+
+const color TABLE_POSITIVE_BACKGROUND = color.new(color = NORD14, transp = 80)
+const color TABLE_NEGATIVE_BACKGROUND = color.new(color = NORD11, transp = 80)
+
+f_formatNumber(float value) =>
+    if na(value)
+        TABLE_TEXT_NA
+    else
+        float absoluteValue = math.abs(number = value)
+        string signPrefix = value >= 0 ? "+" : "-"
+        string formattedValue = ""
+        if absoluteValue >= 1000000000
+            formattedValue := signPrefix + str.tostring(value = absoluteValue / 1000000000, format = "#.##") + "B"
+        else if absoluteValue >= 1000000
+            formattedValue := signPrefix + str.tostring(value = absoluteValue / 1000000, format = "#.##") + "M"
+        else if absoluteValue >= 1000
+            formattedValue := signPrefix + str.tostring(value = absoluteValue / 1000, format = "#.##") + "K"
+        else
+            formattedValue := signPrefix + str.tostring(value = absoluteValue, format = "#.#")
+        formattedValue
+
+f_valueText(float value) =>
+    if na(value)
+        TABLE_TEXT_NA
+    else
+        string signPrefix = value >= 0 ? "+" : ""
+        signPrefix + str.tostring(value = value, format = "#.#")
+
+f_labelCell(table tableId, int columnIndex, int rowIndex, string cellText, color textColor, color backgroundColor) =>
+    table.cell(table_id = tableId, column = columnIndex, row = rowIndex, text = cellText,
+         text_color = textColor, text_size = size.small, bgcolor = backgroundColor)
+
+f_valueCell(table tableId, int columnIndex, int rowIndex, string cellText, color backgroundColor) =>
+    table.cell(table_id = tableId, column = columnIndex, row = rowIndex, text = cellText,
+         text_color = NORD6, text_size = size.small, bgcolor = backgroundColor)
+
+bool showHistogram = input.bool(defval = true, title = "Show Histogram",
+     tooltip = "Composite score as histogram bars. Color intensity reflects component alignment.", group = GROUP_DISPLAY)
+bool showSignalLine = input.bool(defval = true, title = "Show Signal Line",
+     tooltip = "EMA signal line for trend direction and crossover signals.", group = GROUP_DISPLAY)
+bool showDiffusionBg = input.bool(defval = true, title = "Show Diffusion Background",
+     tooltip = "Background color based on how many components (VOLD, ADD, TICK) agree in direction.", group = GROUP_DISPLAY)
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line",
+     tooltip = "Toggle the dashed zero reference line.", group = GROUP_DISPLAY)
+bool showInfoTable = input.bool(defval = true, title = "Show Info Table",
+     tooltip = "Compact table showing raw component values and composite score.", group = GROUP_DISPLAY)
+
+var table infoTable = table.new(position = position.bottom_right, columns = 5, rows = 2,
+     bgcolor = NORD0, border_width = 1, border_color = NORD2)
+
+if showInfoTable and barstate.islast
+    color marketHeaderColor = NORD8
+    color headerBackgroundColor = NORD1
+    color neutralBackgroundColor = NORD0
+    color tickCellBackgroundColor = neutralBackgroundColor
+    if not na(tickValue)
+        tickCellBackgroundColor := tickValue >= 0 ? TABLE_POSITIVE_BACKGROUND : TABLE_NEGATIVE_BACKGROUND
+    color addCellBackgroundColor = neutralBackgroundColor
+    if not na(addValue)
+        addCellBackgroundColor := addValue >= 0 ? TABLE_POSITIVE_BACKGROUND : TABLE_NEGATIVE_BACKGROUND
+    color voldCellBackgroundColor = neutralBackgroundColor
+    if not na(voldValue)
+        voldCellBackgroundColor := voldValue >= 0 ? TABLE_POSITIVE_BACKGROUND : TABLE_NEGATIVE_BACKGROUND
+    color compositeCellBackgroundColor = neutralBackgroundColor
+    if not na(mainValue)
+        compositeCellBackgroundColor := mainValue >= 0 ? TABLE_POSITIVE_BACKGROUND : TABLE_NEGATIVE_BACKGROUND
+    color breadthTextColor = bullCount > bearCount ? NORD14 : bullCount < bearCount ? NORD11 : NORD4
+    string breadthSummaryText = str.tostring(value = bullCount) + "/" + str.tostring(value = activeComponents)
+
+    f_labelCell(tableId = infoTable, columnIndex = 0, rowIndex = 0, cellText = marketLabel, textColor = marketHeaderColor, backgroundColor = headerBackgroundColor)
+    f_labelCell(tableId = infoTable, columnIndex = 1, rowIndex = 0, cellText = "VOLD", textColor = NORD4, backgroundColor = headerBackgroundColor)
+    f_labelCell(tableId = infoTable, columnIndex = 2, rowIndex = 0, cellText = "ADD", textColor = NORD4, backgroundColor = headerBackgroundColor)
+    f_labelCell(tableId = infoTable, columnIndex = 3, rowIndex = 0, cellText = "TICK", textColor = NORD4, backgroundColor = headerBackgroundColor)
+    f_labelCell(tableId = infoTable, columnIndex = 4, rowIndex = 0, cellText = "CBI", textColor = marketHeaderColor, backgroundColor = headerBackgroundColor)
+
+    f_labelCell(tableId = infoTable, columnIndex = 0, rowIndex = 1, cellText = breadthSummaryText, textColor = breadthTextColor, backgroundColor = neutralBackgroundColor)
+    f_valueCell(tableId = infoTable, columnIndex = 1, rowIndex = 1, cellText = f_formatNumber(value = voldValue), backgroundColor = voldCellBackgroundColor)
+    f_valueCell(tableId = infoTable, columnIndex = 2, rowIndex = 1, cellText = f_formatNumber(value = addValue), backgroundColor = addCellBackgroundColor)
+    f_valueCell(tableId = infoTable, columnIndex = 3, rowIndex = 1, cellText = f_formatNumber(value = tickValue), backgroundColor = tickCellBackgroundColor)
+    f_valueCell(tableId = infoTable, columnIndex = 4, rowIndex = 1, cellText = f_valueText(value = mainValue), backgroundColor = compositeCellBackgroundColor)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📊 PLOTS
+// Final Pine plot calls remain at the bottom of the file.
+// ═════════════════════════════════════════════════════════════════════════════
+bgcolor(color = showDiffusionBg ? diffusionColor : na, title = "Diffusion Background")
+hline(price = 0, title = "Zero Line", color = showZeroLine ? NORD3 : na, linestyle = hline.style_dashed, linewidth = 1)
+plot(series = showHistogram ? mainValue : na, title = "Composite", style = plot.style_histogram, color = histogramColor, linewidth = 2)
+plot(series = showSignalLine ? signalLine : na, title = "Signal", color = NORD9, linewidth = 2)
