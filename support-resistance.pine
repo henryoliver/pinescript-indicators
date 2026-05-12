@@ -3,7 +3,7 @@
 // Support & Resistance - multi-indicator cluster map
 
 //@version=6
-indicator(title = "Support & Resistance", shorttitle = "🎯 S&R", overlay = true, max_lines_count = 200, max_labels_count = 200, max_boxes_count = 100, calc_bars_count = 5000, max_bars_back = 5000)
+indicator(title = "Support & Resistance", shorttitle = "🎯 S&R", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 250, calc_bars_count = 5000, max_bars_back = 5000)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -58,6 +58,18 @@ type Swing
     bool isSwept
     float volume
 
+type HistoricalPoc
+    float price
+    int sessionBar
+    bool isNaked
+
+type FairValueGap
+    float lower
+    float upper
+    int midBar
+    bool isBullish
+    bool isMitigated
+
 type ClusterCandidate
     float zoneLow
     float zoneHigh
@@ -84,6 +96,12 @@ type RenderCache
     float devSessionPoc
     float devSessionVah
     float devSessionVal
+    float sessionVwap
+    float sessionVwapUpper1
+    float sessionVwapLower1
+    float sessionVwapUpper2
+    float sessionVwapLower2
+    float weeklyVwap
     bool showFibonacci
     bool showPivots
     bool showPreviousDay
@@ -91,8 +109,31 @@ type RenderCache
     bool showSwings
     bool showMurrey
     bool showValueArea
+    bool showVwap
+    bool showSessionLevels
+    bool showSmc
     bool showCluster
     bool showLevelLabels
+    bool showMurreyLabels
+    bool showFibonacciLabels
+    bool showPivotLabels
+    bool showPreviousDayLabels
+    bool showSwingLabels
+    bool showRoundNumberLabels
+    bool showValueAreaLabels
+    bool showVwapLabels
+    bool showSessionLabels
+    bool showSmcLabels
+    bool showClusterLabels
+    bool showCamarilla
+    bool showNakedPocs
+    bool showVwapBands
+    bool showWeeklyVwap
+    bool showInitialBalance
+    bool showOvernightHL
+    bool showWeeklyHL
+    bool showMonthlyHL
+    bool clusterUseApproachPenalty
     string murreySessionMode
     bool murreyLockToSession
     string murreySourceTimeframeInput
@@ -132,15 +173,18 @@ bool showPivots = input.bool(defval = true, title = "Show Pivot Points", tooltip
 bool showPreviousDay = input.bool(defval = true, title = "Show Previous Day", tooltip = "Shows the previous day high, low, and close. These session reference levels are often respected during the next trading day.", group = GROUP_GENERAL)
 bool showRoundNumbers = input.bool(defval = true, title = "Show Round Numbers", tooltip = "Shows major, half, and optional quarter round-number levels around current price. These are psychological areas where price often reacts.", group = GROUP_GENERAL)
 bool showSwings = input.bool(defval = true, title = "Show Major Swings", tooltip = "Shows recent confirmed swing highs and lows. These levels mark obvious structure-based support and resistance.", group = GROUP_GENERAL)
-bool showMurrey = input.bool(defval = true, title = "Show Murrey Math", tooltip = "Shows Murrey Math octave levels derived from a volatility-adjusted price frame. These act as structured support and resistance bands.", group = GROUP_GENERAL)
+bool showMurrey = input.bool(defval = false, title = "Show Murrey Math", tooltip = "Shows Murrey Math octave levels derived from a volatility-adjusted price frame. These act as structured support and resistance bands. Off by default — overlaps with Round Numbers as a price-grid system and has limited institutional adoption.", group = GROUP_GENERAL)
 bool showValueArea = input.bool(defval = true, title = "Show Value Area", tooltip = "Shows prior-session VAL, POC, and VAH from a simple volume profile. Useful for auction-market context and balance areas.", group = GROUP_GENERAL)
+bool showVwap = input.bool(defval = true, title = "Show VWAP", tooltip = "Shows session VWAP with 1σ/2σ bands and a weekly-anchored VWAP. Essential institutional reference.", group = GROUP_GENERAL)
+bool showSessionLevels = input.bool(defval = true, title = "Show Session Levels", tooltip = "Shows the Initial Balance H/L, overnight (Globex) H/L, prior-week H/L, and prior-month H/L. These intraday and HTF session references are widely watched.", group = GROUP_GENERAL)
+bool showSmc = input.bool(defval = false, title = "Show Fair Value Gaps", tooltip = "Shows unmitigated bullish and bearish 3-bar Fair Value Gaps (ICT-style imbalances). Off by default — a popular retail technique with limited institutional support.", group = GROUP_GENERAL)
 bool showCluster = input.bool(defval = false, title = "Enable Cluster Power", tooltip = "Activates all inner-indicator calculations so the cluster engine can consume their exported levels and build support/resistance confluence zones.", group = GROUP_POWER)
 
 bool showLevelLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each visible level or cluster.", group = GROUP_GENERAL)
 int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all level and cluster labels.", group = GROUP_GENERAL)
 int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars. Pine labels cannot be shifted horizontally in price ticks.", group = GROUP_GENERAL)
 int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_GENERAL)
-int murreyAtrLength = input.int(defval = 14, title = "Shared ATR Length", minval = 1, tooltip = "ATR lookback shared by Murrey sizing and the indicator's common volatility-based calculations.", group = GROUP_GENERAL)
+int sharedAtrLength = input.int(defval = 14, title = "Shared ATR Length", minval = 1, tooltip = "ATR lookback shared by Murrey sizing and the indicator's common volatility-based calculations.", group = GROUP_GENERAL)
 
 color overallLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Overall Line/Zone Color", tooltip = "Main line color shared by all inner indicators.", group = GROUP_GENERAL)
 color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by level and cluster labels.", group = GROUP_GENERAL)
@@ -156,11 +200,19 @@ bool roundNumbersIsActive = showRoundNumbers or showCluster
 bool swingsIsActive = showSwings or showCluster
 bool murreyIsActive = showMurrey or showCluster
 bool valueAreaIsActive = showValueArea or showCluster
-bool anyInnerIndicatorIsActive = fibonacciIsActive or pivotsIsActive or previousDayIsActive or roundNumbersIsActive or swingsIsActive or murreyIsActive or valueAreaIsActive
+bool vwapIsActive = showVwap or showCluster
+bool sessionLevelsIsActive = showSessionLevels or showCluster
+bool smcIsActive = showSmc or showCluster
+bool anyInnerIndicatorIsActive = fibonacciIsActive or pivotsIsActive or previousDayIsActive or roundNumbersIsActive or swingsIsActive or murreyIsActive or valueAreaIsActive or vwapIsActive or sessionLevelsIsActive or smcIsActive
 bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
+bool sharedInRegularSession = anyInnerIndicatorIsActive ? not na(time(timeframe = timeframe.period, session = session.regular)) : false
+bool sharedRegularSessionJustStarted = anyInnerIndicatorIsActive ? sharedInRegularSession and not sharedInRegularSession[1] : false
 string sharedRegularSymbol = ticker.modify(syminfo.tickerid, session = session.regular)
 string sharedSessionFullSymbol = syminfo.tickerid
-float sharedAtrValue = anyInnerIndicatorIsActive ? ta.atr(length = murreyAtrLength) : na
+float sharedAtrValue = anyInnerIndicatorIsActive ? ta.atr(length = sharedAtrLength) : na
+var int currentSessionStartBar = bar_index
+if isNewSession
+    currentSessionStartBar := bar_index
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌀 FIBONACCI
@@ -169,6 +221,7 @@ float sharedAtrValue = anyInnerIndicatorIsActive ? ta.atr(length = murreyAtrLeng
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_FIB = "1. 🌀 Fibonacci"
 
+bool showFibonacciLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows Fibonacci level labels when the global labels toggle is also enabled.", group = GROUP_FIB)
 int fibStrengthSensitivity = input.int(defval = 5, title = "Strength Sensitivity", minval = 1, maxval = 20, tooltip = "How strong a swing must be before it becomes a Fibonacci anchor. Higher values use more important swing points.", group = GROUP_FIB)
 int fibAtrPeriod = input.int(defval = 10, title = "ATR Period", minval = 1, tooltip = "ATR lookback used to normalize the Fibonacci pivot deviation threshold.", group = GROUP_FIB)
 float fibAtrMultiplier = input.float(defval = 3.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier. Higher values require larger ATR-normalized reversals before a new Fibonacci anchor is confirmed.", group = GROUP_FIB)
@@ -257,8 +310,10 @@ int fibAnchorBar = fibHasAnchors ? math.max(fibPreviousPivotBar, fibLastPivotBar
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_PIVOTS = "2. 📍 Floor Pivots"
 
+bool showPivotLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows pivot labels when the global labels toggle is also enabled.", group = GROUP_PIVOTS)
 string pivotResolutionInput = input.string(defval = "1 Day", title = "Resolution", options = ["4 Hours", "3 Hours", "2 Hours", "1 Hour", "1 Day", "3 Days", "9 Days", "1 Week", "1 Month", "3 Months", "6 Months", "12 Months"], tooltip = "Higher timeframe used to calculate the floor pivot set.", group = GROUP_PIVOTS)
 bool showPivotMidLevels = input.bool(defval = true, title = "Show Mid-Pivots", tooltip = "Adds midpoint pivot levels between PP/R1, R1/R2, PP/S1, and S1/S2. These are secondary references and work best as low-weight cluster contributors.", group = GROUP_PIVOTS)
+bool showCamarilla = input.bool(defval = false, title = "Show Camarilla Pivots", tooltip = "Adds Camarilla H3/H4/L3/L4 levels (Slade formula). Popular intraday alternative to floor pivots, especially as breakout/reversal levels.", group = GROUP_PIVOTS)
 
 string pivotResolution = switch pivotResolutionInput
     "4 Hours" => "240"
@@ -277,6 +332,8 @@ string pivotResolution = switch pivotResolutionInput
 float prevDayHigh = na
 float prevDayLow = na
 float prevDayClose = na
+// Previous Day and Pivot modules intentionally share the same confirmed daily
+// fetch so the script does not duplicate HTF requests for the same data.
 if pivotsIsActive or previousDayIsActive
     [requestedPrevDayHigh, requestedPrevDayLow, requestedPrevDayClose] = request.security(symbol = sharedRegularSymbol, timeframe = "D", expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
     prevDayHigh := requestedPrevDayHigh
@@ -306,6 +363,12 @@ float pivotMidPPS1 = (pivotPoint + pivotS1) / 2.0
 float pivotMidS1S2 = (pivotS1 + pivotS2) / 2.0
 float pivotMidPPR1 = (pivotPoint + pivotR1) / 2.0
 float pivotMidR1R2 = (pivotR1 + pivotR2) / 2.0
+// Camarilla — Slade formula. H4/L4 are typical breakout levels, H3/L3 are typical reversal levels.
+float camarillaRange = pivotPeriodHigh - pivotPeriodLow
+float camarillaH4 = pivotsIsActive and showCamarilla ? pivotPeriodClose + camarillaRange * 1.1 / 2.0 : na
+float camarillaH3 = pivotsIsActive and showCamarilla ? pivotPeriodClose + camarillaRange * 1.1 / 4.0 : na
+float camarillaL3 = pivotsIsActive and showCamarilla ? pivotPeriodClose - camarillaRange * 1.1 / 4.0 : na
+float camarillaL4 = pivotsIsActive and showCamarilla ? pivotPeriodClose - camarillaRange * 1.1 / 2.0 : na
 bool pivotPlotVisible = showPivots
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -317,6 +380,7 @@ bool pivotPlotVisible = showPivots
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_PDH = "3. 📅 Previous Day"
 
+bool showPreviousDayLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows previous-day labels when the global labels toggle is also enabled.", group = GROUP_PDH)
 bool showPreviousDayHighLevel = input.bool(defval = true, title = "Show High", tooltip = "Plots the previous day's high for each trading day.", group = GROUP_PDH)
 bool showPreviousDayLowLevel = input.bool(defval = true, title = "Show Low", tooltip = "Plots the previous day's low for each trading day.", group = GROUP_PDH)
 bool showPreviousDayCloseLevel = input.bool(defval = true, title = "Show Close", tooltip = "Plots the previous day's official daily close. For many futures symbols on TradingView daily data, this is the exchange settlement once the day is finalized.", group = GROUP_PDH)
@@ -336,6 +400,7 @@ bool previousDayPlotVisible = showPreviousDay
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_ROUND = "4. 🔢 Round Numbers"
 
+bool showRoundNumberLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows round-number labels when the global labels toggle is also enabled.", group = GROUP_ROUND)
 int roundLevelsEachSide = input.int(defval = 2, title = "Major Steps Above/Below Price", minval = 2, maxval = 20, tooltip = "Number of major round-number steps to plot above and below current price.", group = GROUP_ROUND)
 bool showRoundMidLevels = input.bool(defval = false, title = "Show Mid Sub-levels", tooltip = "Adds half-step round-number levels between the major levels.", group = GROUP_ROUND)
 bool showRoundQuarterLevels = input.bool(defval = false, title = "Show Quarter Sub-levels", tooltip = "Adds quarter-step round-number levels between the main and half-step levels.", group = GROUP_ROUND)
@@ -367,6 +432,7 @@ float nearestMajorBase = roundNumbersIsActive and not na(roundMajorSpacing) ? ma
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_SWINGS = "5. 🌊 Major Swings"
 
+bool showSwingLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows swing labels when the global labels toggle is also enabled.", group = GROUP_SWINGS)
 int swingStrength = input.int(defval = 5, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low.", group = GROUP_SWINGS)
 string swingSourceMode = input.string(defval = "Bodies", title = "Swing Source", options = ["Bodies", "Wicks"], tooltip = "Bodies uses candle bodies for cleaner shelves. Wicks uses full highs and lows for more reactive liquidity levels.", group = GROUP_SWINGS)
 int swingLevelsPerSide = input.int(defval = 5, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing highs and swing lows to keep visible after merging. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
@@ -469,6 +535,7 @@ f_hasNearbySwing(array<float> existingPrices, float candidatePrice, float mergeD
 // support and resistance intervals.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_MURREY = "6. 🧱 Murrey Math"
+bool showMurreyLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows Murrey labels when the global labels toggle is also enabled.", group = GROUP_MURREY)
 int murreyBaseFrame = input.int(defval = 64, title = "Base Frame Size", minval = 8, maxval = 256, step = 8, tooltip = "Core Murrey lookback before volatility adaptivity changes the frame.", group = GROUP_MURREY)
 float murreyFrameMultiplier = input.float(defval = 2.0, title = "Frame Multiplier", minval = 0.5, maxval = 4.0, step = 0.25, tooltip = "Scales the Murrey frame size up or down before octave levels are calculated.", group = GROUP_MURREY)
 bool murreyIgnoreWicks = input.bool(defval = true, title = "Ignore Wicks", tooltip = "Uses open and close extremes instead of raw highs and lows to reduce wick noise in the Murrey frame.", group = GROUP_MURREY)
@@ -493,7 +560,7 @@ float murreyCalcClose = close
 float murreyCalcAtrValue = sharedAtrValue
 float murreyAtrBaseline = murreyIsActive ? ta.sma(source = sharedAtrValue / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback) : na
 if murreyIsActive and str.length(string = murreySourceTimeframe) > 0
-    [requestedMurreyClose, requestedMurreyAtrValue, requestedMurreyAtrBaseline] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [close, ta.atr(length = murreyAtrLength), ta.sma(source = ta.atr(length = murreyAtrLength) / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    [requestedMurreyClose, requestedMurreyAtrValue, requestedMurreyAtrBaseline] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [close, ta.atr(length = sharedAtrLength), ta.sma(source = ta.atr(length = sharedAtrLength) / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
     murreyCalcClose := requestedMurreyClose
     murreyCalcAtrValue := requestedMurreyAtrValue
     murreyAtrBaseline := requestedMurreyAtrBaseline
@@ -581,10 +648,13 @@ f_murreyIncludeInCluster(int murreyLevelIndex) =>
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_VALUE = "7. 📦 Value Area"
 
+bool showValueAreaLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows value-area labels when the global labels toggle is also enabled.", group = GROUP_VALUE)
 int valueAreaFootprintTicksPerRow = input.int(defval = 2, title = "Footprint Ticks Per Row", minval = 1, maxval = 100, tooltip = "Row size used by request.footprint() when building the value area from footprint data. Lower values give finer resolution for tighter support and resistance. Default 2 is ideal for day trading.", group = GROUP_VALUE)
 float valueAreaPercent = input.float(defval = 70.0, title = "Value Area Percent", minval = 50.0, maxval = 95.0, step = 1.0, tooltip = "Percent of session volume included inside the value area between VAL and VAH. The standard 70% comes from the original Market Profile methodology.", group = GROUP_VALUE)
 bool showDevelopingValueArea = input.bool(defval = true, title = "Show Developing Value Area", tooltip = "Shows the current session developing VAL, POC, and VAH that update in real time as volume accumulates.", group = GROUP_VALUE)
 bool showValueAreaZoneFill = input.bool(defval = true, title = "Show Value Area Zone Fill", tooltip = "Shows the shaded background between VAL and VAH for previous and developing value areas.", group = GROUP_VALUE)
+bool showNakedPocs = input.bool(defval = true, title = "Show Naked POCs", tooltip = "Plots prior-session POCs that have not yet been touched. Untouched POCs act as magnets — a Dalton/Steidlmayer concept.", group = GROUP_VALUE)
+int nakedPocMaxStored = input.int(defval = 8, title = "Max Naked POCs Stored", minval = 2, maxval = 20, tooltip = "Maximum number of historical POCs kept on the chart for naked-status tracking.", group = GROUP_VALUE)
 color valueAreaZoneColor = input.color(defval = color.new(color = #4C566A, transp = 90), title = "Value Area Zone Fill", tooltip = "Fill color for the shaded box between VAH and VAL.", group = GROUP_VALUE)
 
 var array<float> profileScratchPrices = array.new<float>()
@@ -654,9 +724,6 @@ f_sessionFootprintProfile(array<float> rowPrices, array<float> rowVolumes, float
         vahPrice := array.get(id = rowPrices, index = upperIndex) + rowHeight
     [pocPrice, vahPrice, valPrice]
 
-var int currentSessionStartBar = bar_index
-if isNewSession
-    currentSessionStartBar := bar_index
 footprint currentFootprint = valueAreaIsActive ? request.footprint(ticks_per_row = valueAreaFootprintTicksPerRow, va_percent = valueAreaPercent) : na
 float valueAreaRowHeight = valueAreaIsActive ? valueAreaFootprintTicksPerRow * syminfo.mintick : na
 var array<float> sessionCommittedRowPrices = array.new<float>()
@@ -676,6 +743,7 @@ if valueAreaIsActive and barstate.isnew and not isNewSession and array.size(id =
     array.clear(id = sessionCurrentBarRowPrices)
     array.clear(id = sessionCurrentBarRowVolumes)
 
+var array<HistoricalPoc> historicalPocs = array.new<HistoricalPoc>()
 if valueAreaIsActive and isNewSession
     array<float> previousSessionRowPrices = array.copy(id = sessionCommittedRowPrices)
     array<float> previousSessionRowVolumes = array.copy(id = sessionCommittedRowVolumes)
@@ -686,10 +754,24 @@ if valueAreaIsActive and isNewSession
         prevSessionPoc := calculatedPoc
         prevSessionVah := calculatedVah
         prevSessionVal := calculatedVal
+        if not na(calculatedPoc)
+            HistoricalPoc newHistoricalPoc = HistoricalPoc.new(price = calculatedPoc, sessionBar = bar_index, isNaked = true)
+            array.unshift(id = historicalPocs, value = newHistoricalPoc)
+            while array.size(id = historicalPocs) > nakedPocMaxStored
+                array.pop(id = historicalPocs)
     array.clear(id = sessionCommittedRowPrices)
     array.clear(id = sessionCommittedRowVolumes)
     array.clear(id = sessionCurrentBarRowPrices)
     array.clear(id = sessionCurrentBarRowVolumes)
+
+if valueAreaIsActive and barstate.isconfirmed and array.size(id = historicalPocs) > 0
+    int historicalPocCount = array.size(id = historicalPocs)
+    for nakedScanIndex = 0 to historicalPocCount - 1
+        HistoricalPoc nakedScan = array.get(id = historicalPocs, index = nakedScanIndex)
+        float bodyHigh = math.max(open, close)
+        float bodyLow = math.min(open, close)
+        if nakedScan.isNaked and bodyHigh >= nakedScan.price and bodyLow <= nakedScan.price
+            nakedScan.isNaked := false
 
 if valueAreaIsActive and not na(currentFootprint)
     array.clear(id = sessionCurrentBarRowPrices)
@@ -716,12 +798,158 @@ if developingValueAreaIsActive and barstate.islast
 bool valueAreaPlotVisible = showValueArea
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 📈 VWAP
+// Builds session VWAP with 1σ/2σ standard-deviation bands plus a weekly
+// anchored VWAP. Volume-weighted average price is the institutional execution
+// benchmark, so it acts as a strong dynamic support/resistance reference.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_VWAP = "8. 📈 VWAP"
+
+bool showVwapLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows VWAP labels when the global labels toggle is also enabled.", group = GROUP_VWAP)
+bool showVwapBands = input.bool(defval = true, title = "Show Session Bands", tooltip = "Plots ±1σ and ±2σ standard-deviation bands around the session VWAP. Standard institutional reference for mean-reversion zones.", group = GROUP_VWAP)
+bool showWeeklyVwap = input.bool(defval = true, title = "Show Weekly Anchored VWAP", tooltip = "Plots a VWAP anchored at the start of each calendar week. Useful for swing context.", group = GROUP_VWAP)
+color vwapMainColor = input.color(defval = color.new(color = NORD13, transp = 30), title = "VWAP Color", tooltip = "Line color for session and weekly VWAP.", group = GROUP_VWAP)
+color vwapBandColor = input.color(defval = color.new(color = NORD13, transp = 75), title = "Band Color", tooltip = "Line color for session VWAP standard-deviation bands.", group = GROUP_VWAP)
+
+// Feed `na` outside RTH so the session VWAP only accumulates regular-session bars.
+float vwapSourcePrice = vwapIsActive and sharedInRegularSession ? hlc3 : na
+bool vwapSessionAnchor = vwapIsActive ? sharedRegularSessionJustStarted or barstate.isfirst and sharedInRegularSession : false
+bool vwapCalendarWeekChanged = vwapIsActive ? ta.change(source = time(timeframe = "W")) != 0 : false
+var bool vwapAwaitingWeeklyAnchor = false
+if vwapIsActive and vwapCalendarWeekChanged
+    vwapAwaitingWeeklyAnchor := true
+// A calendar week can flip while the market is closed, so defer the weekly reset
+// to the first regular-session bar when needed.
+bool vwapWeeklyAnchor = vwapIsActive and sharedInRegularSession and (vwapCalendarWeekChanged or sharedRegularSessionJustStarted and vwapAwaitingWeeklyAnchor or barstate.isfirst)
+if vwapWeeklyAnchor
+    vwapAwaitingWeeklyAnchor := false
+
+float sessionVwap = na
+float sessionVwapUpper1 = na
+float sessionVwapLower1 = na
+float sessionVwapUpper2 = na
+float sessionVwapLower2 = na
+float weeklyVwap = na
+if vwapIsActive
+    [vwapValue1, vwapUpperBand1, vwapLowerBand1] = ta.vwap(source = vwapSourcePrice, anchor = vwapSessionAnchor, stdev_mult = 1.0)
+    sessionVwap := vwapValue1
+    sessionVwapUpper1 := vwapUpperBand1
+    sessionVwapLower1 := vwapLowerBand1
+    [vwapValue2, vwapUpperBand2, vwapLowerBand2] = ta.vwap(source = vwapSourcePrice, anchor = vwapSessionAnchor, stdev_mult = 2.0)
+    sessionVwapUpper2 := vwapUpperBand2
+    sessionVwapLower2 := vwapLowerBand2
+    weeklyVwap := ta.vwap(source = vwapSourcePrice, anchor = vwapWeeklyAnchor)
+
+bool vwapPlotVisible = showVwap
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🕘 SESSION LEVELS
+// Initial Balance, overnight (Globex) extremes, and prior week / month high
+// and low. These intraday and HTF references are widely watched by futures and
+// swing traders.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_SESSION = "9. 🕘 Session Levels"
+
+bool showSessionLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows session-level labels when the global labels toggle is also enabled.", group = GROUP_SESSION)
+bool showInitialBalance = input.bool(defval = true, title = "Show Initial Balance", tooltip = "Plots the high and low formed during the configurable opening window of the regular session. Standard Market Profile reference.", group = GROUP_SESSION)
+int initialBalanceMinutes = input.int(defval = 60, title = "IB Window (Minutes)", minval = 5, maxval = 240, step = 5, tooltip = "Opening window length used to define the Initial Balance. The classic Steidlmayer/Dalton value is 60 minutes.", group = GROUP_SESSION)
+bool showOvernightHL = input.bool(defval = true, title = "Show Overnight H/L", tooltip = "Plots the high and low traded outside the regular session (overnight / Globex).", group = GROUP_SESSION)
+bool showWeeklyHL = input.bool(defval = true, title = "Show Prior Week H/L", tooltip = "Plots the high and low of the previous calendar week.", group = GROUP_SESSION)
+bool showMonthlyHL = input.bool(defval = false, title = "Show Prior Month H/L", tooltip = "Plots the high and low of the previous calendar month. Off by default — useful mostly for swing context.", group = GROUP_SESSION)
+
+bool sessionInRTH = sessionLevelsIsActive ? sharedInRegularSession : false
+bool sessionRthJustStarted = sessionLevelsIsActive ? sharedRegularSessionJustStarted : false
+var int sessionMinutesPerBar = math.max(1, int(timeframe.in_seconds(timeframe = timeframe.period) / 60))
+
+var int sessionRthFirstBar = na
+var float initialBalanceHigh = na
+var float initialBalanceLow = na
+if sessionLevelsIsActive and sessionRthJustStarted
+    sessionRthFirstBar := bar_index
+    initialBalanceHigh := high
+    initialBalanceLow := low
+else if sessionLevelsIsActive and sessionInRTH and not na(sessionRthFirstBar)
+    int sessionBarsForIB = math.max(1, initialBalanceMinutes / sessionMinutesPerBar)
+    if bar_index - sessionRthFirstBar < sessionBarsForIB
+        initialBalanceHigh := math.max(nz(source = initialBalanceHigh, replacement = high), high)
+        initialBalanceLow := math.min(nz(source = initialBalanceLow, replacement = low), low)
+
+var float overnightHighRunning = na
+var float overnightLowRunning = na
+var float overnightHighFrozen = na
+var float overnightLowFrozen = na
+if sessionLevelsIsActive and not sessionInRTH
+    overnightHighRunning := na(overnightHighRunning) ? high : math.max(overnightHighRunning, high)
+    overnightLowRunning := na(overnightLowRunning) ? low : math.min(overnightLowRunning, low)
+if sessionLevelsIsActive and sessionRthJustStarted
+    overnightHighFrozen := overnightHighRunning
+    overnightLowFrozen := overnightLowRunning
+    overnightHighRunning := na
+    overnightLowRunning := na
+
+float prevWeekHigh = na
+float prevWeekLow = na
+float prevMonthHigh = na
+float prevMonthLow = na
+if sessionLevelsIsActive
+    [requestedWeekHigh, requestedWeekLow] = request.security(symbol = sharedRegularSymbol, timeframe = "W", expression = [high[1], low[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    [requestedMonthHigh, requestedMonthLow] = request.security(symbol = sharedRegularSymbol, timeframe = "M", expression = [high[1], low[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    prevWeekHigh := requestedWeekHigh
+    prevWeekLow := requestedWeekLow
+    prevMonthHigh := requestedMonthHigh
+    prevMonthLow := requestedMonthLow
+
+bool sessionPlotVisible = showSessionLevels
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 💎 FAIR VALUE GAPS
+// Detects 3-bar bullish and bearish imbalances (ICT-style FVGs) and tracks
+// mitigation. Off by default — popular retail technique with limited
+// institutional support, kept lean to avoid bloat.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_SMC = "10. 💎 Fair Value Gaps"
+
+bool showSmcLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows FVG labels when the global labels toggle is also enabled.", group = GROUP_SMC)
+int smcMaxStored = input.int(defval = 12, title = "Max Stored Gaps", minval = 2, maxval = 30, tooltip = "Maximum number of unmitigated FVGs kept on the chart. Older gaps are dropped first.", group = GROUP_SMC)
+color smcBullColor = input.color(defval = color.new(color = NORD14, transp = 75), title = "Bullish FVG Color", group = GROUP_SMC)
+color smcBearColor = input.color(defval = color.new(color = NORD11, transp = 75), title = "Bearish FVG Color", group = GROUP_SMC)
+
+const int MAX_FVG_STORED = 30
+var int smcStoredCap = math.min(smcMaxStored, MAX_FVG_STORED)
+
+var array<FairValueGap> fvgList = array.new<FairValueGap>()
+
+if smcIsActive and barstate.isconfirmed and bar_index >= 2
+    if low > high[2]
+        FairValueGap bullishFvg = FairValueGap.new(lower = high[2], upper = low, midBar = bar_index - 1, isBullish = true, isMitigated = false)
+        array.unshift(id = fvgList, value = bullishFvg)
+    if high < low[2]
+        FairValueGap bearishFvg = FairValueGap.new(lower = high, upper = low[2], midBar = bar_index - 1, isBullish = false, isMitigated = false)
+        array.unshift(id = fvgList, value = bearishFvg)
+    while array.size(id = fvgList) > smcStoredCap
+        array.pop(id = fvgList)
+
+if smcIsActive and barstate.isconfirmed and array.size(id = fvgList) > 0
+    int fvgCount = array.size(id = fvgList)
+    for fvgScanIndex = 0 to fvgCount - 1
+        FairValueGap scanFvg = array.get(id = fvgList, index = fvgScanIndex)
+        bool fvgCanMitigate = bar_index > scanFvg.midBar + 1
+        if not scanFvg.isMitigated and fvgCanMitigate
+            if scanFvg.isBullish and low <= scanFvg.upper
+                scanFvg.isMitigated := true
+            else if not scanFvg.isBullish and high >= scanFvg.lower
+                scanFvg.isMitigated := true
+
+bool smcPlotVisible = showSmc
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧲 CLUSTER
 // Combines nearby levels from different indicator families into shared zones
 // so the map emphasizes confluence instead of isolated lines.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_CLUSTER = "8. 🧲 Cluster"
+const string GROUP_CLUSTER = "11. 🧲 Cluster"
 
+bool showClusterLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows Power Cluster labels when the global labels toggle is also enabled.", group = GROUP_CLUSTER)
 bool showIndicatorCount = input.bool(defval = true, title = "Show Indicator Count In Cluster Label", tooltip = "Adds the number of unique indicator families contributing to each cluster label.", group = GROUP_CLUSTER)
 bool showClusterSources = input.bool(defval = true, title = "Show Cluster Sources", tooltip = "Adds short source-family names to each cluster label so you can see which components formed the confluence.", group = GROUP_CLUSTER)
 color clusterZoneColor = input.color(defval = color.new(color = NORD3, transp = 60), title = "Cluster Zone Color", tooltip = "Fill color used for cluster boxes when nearby levels merge into a zone.", group = GROUP_CLUSTER)
@@ -729,16 +957,17 @@ string toleranceMode = input.string(defval = "ATR", title = "Cluster Tolerance M
 float tolerancePercent = input.float(defval = 0.08, title = "Cluster Tolerance Percent", minval = 0.01, maxval = 5.0, step = 0.01, tooltip = "Maximum distance between nearby levels, as a percent of price, before they merge into one cluster. Use this when you want a fixed relative threshold instead of a volatility-adaptive one.", group = GROUP_CLUSTER)
 float toleranceAtrMult = input.float(defval = 0.20, title = "Cluster Tolerance ATR Multiplier", minval = 0.05, maxval = 5.0, step = 0.05, tooltip = "Maximum distance between nearby levels, expressed as an ATR multiple, before they merge into one cluster. Slightly higher values produce a few more intraday confluence zones.", group = GROUP_CLUSTER)
 int clusterMinScore = input.int(defval = 7, title = "Minimum Cluster Score", minval = 2, maxval = 30, tooltip = "Only draws clusters whose combined level score reaches this threshold. Lower values show a few more confluence zones; higher values keep only the strongest ones.", group = GROUP_CLUSTER)
-int clusterMinIndicators = input.int(defval = 3, title = "Minimum Indicator Families", minval = 1, maxval = 7, tooltip = "Requires confluence from at least this many different indicator families before a cluster is drawn. Higher values produce fewer but more significant zones.", group = GROUP_CLUSTER)
+int clusterMinIndicators = input.int(defval = 3, title = "Minimum Indicator Families", minval = 1, maxval = 10, tooltip = "Requires confluence from at least this many different indicator families before a cluster is drawn. Higher values produce fewer but more significant zones.", group = GROUP_CLUSTER)
 bool clusterEnsureSideCoverage = input.bool(defval = true, title = "Ensure Above/Below Coverage", tooltip = "When enabled, the cluster engine will also show the best weaker candidate on a missing side of price so you keep one cluster above and one below current price when possible.", group = GROUP_CLUSTER)
 int clusterCoverageMinScore = input.int(defval = 4, title = "Coverage Minimum Score", minval = 1, maxval = 20, tooltip = "Minimum score allowed for a fallback coverage cluster when one side of price has no normal cluster.", group = GROUP_CLUSTER)
-int clusterCoverageMinIndicators = input.int(defval = 2, title = "Coverage Minimum Families", minval = 1, maxval = 7, tooltip = "Minimum indicator-family count allowed for a fallback coverage cluster on a missing side of price.", group = GROUP_CLUSTER)
+int clusterCoverageMinIndicators = input.int(defval = 2, title = "Coverage Minimum Families", minval = 1, maxval = 10, tooltip = "Minimum indicator-family count allowed for a fallback coverage cluster on a missing side of price.", group = GROUP_CLUSTER)
 float clusterProximityAtrWeight = input.float(defval = 2.0, title = "Price Proximity Weight (ATR)", minval = 0.5, maxval = 5.0, step = 0.25, tooltip = "How strongly cluster scoring favors zones close to current price. Lower values reward only very nearby zones; higher values spread the bonus across a wider ATR distance.", group = GROUP_CLUSTER)
 float clusterZoneCompression = input.float(defval = 0.15, title = "Zone Height Compression", minval = 0.05, maxval = 1.00, step = 0.05, tooltip = "Compresses the drawn cluster height around its center so magnet/reaction areas stay tighter. Lower values produce narrower zones.", group = GROUP_CLUSTER)
 float clusterMaxHeightAtr = input.float(defval = 0.25, title = "Max Zone Height (ATR Multiple)", minval = 0.05, maxval = 2.0, step = 0.05, tooltip = "Caps the absolute zone height as a fraction of ATR. Prevents wide zones that are useless for intraday entries. On NQ with ATR 200, a value of 0.25 caps zones at 50 points.", group = GROUP_CLUSTER)
 int clusterTouchLookback = input.int(defval = 80, title = "Acceptance Lookback", minval = 10, maxval = 300, tooltip = "Bars used to estimate how often price accepted a level as value instead of only rejecting it at an extreme.", group = GROUP_CLUSTER)
 int clusterFlipLookback = input.int(defval = 40, title = "Flip Lookback", minval = 10, maxval = 200, tooltip = "Bars used to detect whether price has traded on both sides of a cluster, which helps identify flip zones.", group = GROUP_CLUSTER)
 int clusterApproachLookback = input.int(defval = 6, title = "Approach Lookback", minval = 3, maxval = 20, tooltip = "Bars used to judge whether price is approaching a zone aggressively and may slice through it.", group = GROUP_CLUSTER)
+bool clusterUseApproachPenalty = input.bool(defval = false, title = "Use Approach Penalty", tooltip = "Penalizes clusters when price is racing aggressively toward them. Off by default — this heuristic is bespoke and the polarity literature actually argues strong momentum into a level often signals exhaustion, not breakthrough.", group = GROUP_CLUSTER)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧮 SHARED CALCULATIONS
@@ -807,8 +1036,12 @@ f_levelFreshnessScore(int indicatorId, int levelStartBar) =>
     else if indicatorId == 5 and not na(levelStartBar)
         int swingAgeBars = bar_index - levelStartBar
         swingAgeBars <= 150 ? 2 : swingAgeBars <= 400 ? 1 : 0
+    else if indicatorId == 10 and not na(levelStartBar)
+        // FVGs decay quickly — fresh imbalances are most magnetic.
+        int fvgAgeBars = bar_index - levelStartBar
+        fvgAgeBars <= 60 ? 2 : fvgAgeBars <= 200 ? 1 : 0
     else
-        indicatorId == 3 or indicatorId == 4 or indicatorId == 7 ? 1 : 0
+        indicatorId == 3 or indicatorId == 4 or indicatorId == 7 or indicatorId == 8 or indicatorId == 9 ? 1 : 0
 
 f_levelZoneHalfHeight(int indicatorId, int levelWeight, float atrBase, float swingBodyZoneFactor) =>
     float halfHeight = indicatorId == 5 ? atrBase * swingBodyZoneFactor :
@@ -816,6 +1049,9 @@ f_levelZoneHalfHeight(int indicatorId, int levelWeight, float atrBase, float swi
      indicatorId == 3 or indicatorId == 4 or indicatorId == 7 ? atrBase * 0.05 :
      indicatorId == 6 ? atrBase * 0.03 :
      indicatorId == 1 ? atrBase * 0.04 :
+     indicatorId == 8 ? atrBase * 0.03 :
+     indicatorId == 9 ? atrBase * 0.05 :
+     indicatorId == 10 ? atrBase * 0.02 :
      atrBase * 0.04
     math.max(halfHeight + syminfo.mintick * levelWeight, syminfo.mintick)
 
@@ -839,23 +1075,19 @@ f_sortLevels(array<Level> levels) =>
                 innerIndex -= 1
             array.set(id = levels, index = innerIndex + 1, value = sortLevel)
 
+var array<int> indicatorMaskBits = array.from(1, 2, 4, 8, 16, 32, 64, 128, 256, 512)
+var array<float> fibClusterPercents = array.from(-100.0, -76.4, -61.8, -50.0, -38.2, -23.6, 0.0, 23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0)
+
+f_indicatorMaskBit(int indicatorId) =>
+    array.get(id = indicatorMaskBits, index = math.max(0, math.min(array.size(id = indicatorMaskBits) - 1, indicatorId - 1)))
+
 f_maskHasIndicator(int indicatorMask, int indicatorId) =>
-    indicatorId == 1 ? indicatorMask % 2 == 1 :
-     indicatorId == 2 ? math.floor(number = indicatorMask / 2) % 2 == 1 :
-     indicatorId == 3 ? math.floor(number = indicatorMask / 4) % 2 == 1 :
-     indicatorId == 4 ? math.floor(number = indicatorMask / 8) % 2 == 1 :
-     indicatorId == 5 ? math.floor(number = indicatorMask / 16) % 2 == 1 :
-     indicatorId == 6 ? math.floor(number = indicatorMask / 32) % 2 == 1 :
-     math.floor(number = indicatorMask / 64) % 2 == 1
+    int indicatorMaskBit = f_indicatorMaskBit(indicatorId = indicatorId)
+    math.floor(number = indicatorMask / indicatorMaskBit) % 2 == 1
 
 f_addIndicatorMask(int indicatorMask, int indicatorId) =>
-    f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = indicatorId) ? indicatorMask :
-     indicatorId == 1 ? indicatorMask + 1 :
-     indicatorId == 2 ? indicatorMask + 2 :
-     indicatorId == 3 ? indicatorMask + 4 :
-     indicatorId == 4 ? indicatorMask + 8 :
-     indicatorId == 5 ? indicatorMask + 16 :
-     indicatorId == 6 ? indicatorMask + 32 : indicatorMask + 64
+    int indicatorMaskBit = f_indicatorMaskBit(indicatorId = indicatorId)
+    f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = indicatorId) ? indicatorMask : indicatorMask + indicatorMaskBit
 
 f_setFamilyMax(array<int> familyValues, int indicatorId, int candidateValue) =>
     int familyIndex = math.max(0, math.min(array.size(id = familyValues) - 1, indicatorId - 1))
@@ -885,6 +1117,12 @@ f_maskToSources(int indicatorMask) =>
         sourceText += "Round·"
     if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 7)
         sourceText += "ValA·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 8)
+        sourceText += "VWAP·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 9)
+        sourceText += "Sess·"
+    if f_maskHasIndicator(indicatorMask = indicatorMask, indicatorId = 10)
+        sourceText += "FVG·"
     str.length(string = sourceText) > 0 ? str.substring(source = sourceText, begin_pos = 0, end_pos = str.length(string = sourceText) - 1) : ""
 
 f_indicatorVisible(int indicatorId) =>
@@ -894,7 +1132,10 @@ f_indicatorVisible(int indicatorId) =>
      indicatorId == 4 ? showPreviousDay :
      indicatorId == 5 ? showSwings :
      indicatorId == 6 ? showRoundNumbers :
-     showValueArea
+     indicatorId == 7 ? showValueArea :
+     indicatorId == 8 ? showVwap :
+     indicatorId == 9 ? showSessionLevels :
+     showSmc
 
 f_levelLineWidth(int levelWeight) =>
     levelWeight >= 3 ? 3 : levelWeight == 2 ? 2 : 1
@@ -945,26 +1186,41 @@ f_rightToLeftLeftX() =>
 f_rightToLeftRightX() =>
     bar_index + renderRightToLeftRightBars
 
-f_drawHorizontalLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int indicatorId, int currentSessionStartBar, bool ghostMode) =>
+f_indicatorLabelToggle(int indicatorId) =>
+    switch indicatorId
+        1 => showMurreyLabels
+        2 => showFibonacciLabels
+        3 => showPivotLabels
+        4 => showPreviousDayLabels
+        5 => showSwingLabels
+        6 => showRoundNumberLabels
+        7 => showValueAreaLabels
+        8 => showVwapLabels
+        9 => showSessionLabels
+        10 => showSmcLabels
+        => false
+
+f_indicatorLabelsEnabled(int indicatorId) =>
+    showLevelLabels and f_indicatorLabelToggle(indicatorId = indicatorId)
+
+f_drawHorizontalLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int indicatorId, int currentSessionStartBar) =>
     color drawColor = f_levelColorByType(indicatorId = indicatorId, labelText = labelText, fallbackColor = levelColor)
     int levelLeftX = f_leftToRightLeftX(currentSessionStartBar = currentSessionStartBar)
     int levelRightX = f_leftToRightRightX()
     line newLine = line.new(x1 = levelLeftX, y1 = levelPrice, x2 = levelRightX, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = drawColor, width = f_levelWidthByType(indicatorId = indicatorId, labelText = labelText, levelWeight = levelWeight), style = f_lineStyle(styleName = styleName))
     array.push(id = lines, value = newLine)
-    if showLevelLabels
-        color textColor = ghostMode ? color.new(color = overallLevelColor, transp = 25) : labelTextColor
-        label newLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = textColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
+    if f_indicatorLabelsEnabled(indicatorId = indicatorId)
+        label newLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
         array.push(id = labels, value = newLabel)
 
-f_drawProjectedLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, bool ghostMode) =>
+f_drawProjectedLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int indicatorId) =>
     color drawColor = levelColor
     int fibLeftX = f_rightToLeftLeftX()
     int fibRightX = f_rightToLeftRightX()
     line newLine = line.new(x1 = fibLeftX, y1 = levelPrice, x2 = fibRightX, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = drawColor, width = f_levelLineWidth(levelWeight = levelWeight), style = f_lineStyle(styleName = styleName))
     array.push(id = lines, value = newLine)
-    if showLevelLabels
-        color textColor = ghostMode ? color.new(color = overallLevelColor, transp = 25) : labelTextColor
-        label newLabel = label.new(x = f_rightToLeftLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = textColor, color = NORD0, size = labelSizeInput, textalign = f_rightToLeftLabelTextAlign())
+    if f_indicatorLabelsEnabled(indicatorId = indicatorId)
+        label newLabel = label.new(x = f_rightToLeftLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_rightToLeftLabelTextAlign())
         array.push(id = labels, value = newLabel)
 
 f_drawProjectedLineOnly(array<line> lines, float levelPrice, color levelColor, string styleName, int levelWeight) =>
@@ -978,22 +1234,21 @@ f_drawProjectedLabelOnly(array<label> labels, float levelPrice, string labelText
     array.push(id = labels, value = newLabel)
 
 f_drawPivotStandalone(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int currentSessionStartBar) =>
-    f_drawHorizontalLevel(lines = lines, labels = labels, levelPrice = levelPrice, labelText = labelText, levelColor = levelColor, styleName = styleName, levelWeight = levelWeight, indicatorId = 3, currentSessionStartBar = currentSessionStartBar, ghostMode = false)
+    f_drawHorizontalLevel(lines = lines, labels = labels, levelPrice = levelPrice, labelText = labelText, levelColor = levelColor, styleName = styleName, levelWeight = levelWeight, indicatorId = 3, currentSessionStartBar = currentSessionStartBar)
 
 f_drawMurreyStandalone(array<line> lines, array<label> labels, float levelPrice, string labelText, string styleName, int levelWeight) =>
     f_drawProjectedLineOnly(lines = lines, levelPrice = levelPrice, levelColor = overallLevelColor, styleName = styleName, levelWeight = levelWeight)
-    if showLevelLabels
+    if f_indicatorLabelsEnabled(indicatorId = 1)
         f_drawProjectedLabelOnly(labels = labels, levelPrice = levelPrice, labelText = labelText, textColor = labelTextColor)
 
-f_drawSwingLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int startBar, int currentSessionStartBar, bool ghostMode) =>
+f_drawSwingLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, string styleName, int levelWeight, int startBar, int currentSessionStartBar) =>
     color drawColor = levelColor
-    int swingLeftX = currentSessionStartBar
+    int swingLeftX = na(startBar) ? currentSessionStartBar : startBar
     int swingRightX = f_leftToRightRightX()
     line newLine = line.new(x1 = swingLeftX, y1 = levelPrice, x2 = swingRightX, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = drawColor, width = f_levelLineWidth(levelWeight = levelWeight), style = f_lineStyle(styleName = styleName))
     array.push(id = lines, value = newLine)
-    if showLevelLabels
-        color textColor = ghostMode ? color.new(color = overallLevelColor, transp = 25) : labelTextColor
-        label newLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = textColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
+    if f_indicatorLabelsEnabled(indicatorId = 5)
+        label newLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
         array.push(id = labels, value = newLabel)
 
 f_recentCrossesZone(float zoneLow, float zoneHigh, int lookbackBars) =>
@@ -1035,9 +1290,6 @@ f_zonePriceProximityScore(float zoneMid, float atrBase) =>
      distanceAtr <= 0.75 * clusterProximityAtrWeight ? 2 :
      distanceAtr <= 1.25 * clusterProximityAtrWeight ? 1 : 0
 
-f_clusterIsAbovePrice(float zoneMid) =>
-    zoneMid >= close
-
 f_clusterPassesThresholds(int zoneScore, int zoneIndicatorCount, int minScore, int minIndicators) =>
     zoneScore >= minScore and zoneIndicatorCount >= minIndicators
 
@@ -1061,7 +1313,7 @@ f_drawClusterZone(array<box> boxes, array<label> labels, float zoneLow, float zo
     int zoneBorderWidth = 0
     box zoneBox = box.new(left = zoneLeftX, right = zoneRightX, top = zoneTop, bottom = zoneBottom, extend = extend.both, bgcolor = zoneFillColor, border_color = zoneBorderColor, border_width = zoneBorderWidth)
     array.push(id = boxes, value = zoneBox)
-    if showLevelLabels
+    if showLevelLabels and showClusterLabels
         label zoneLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(zoneMid), text = zoneLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
         array.push(id = labels, value = zoneLabel)
 
@@ -1074,13 +1326,13 @@ var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 var array<box> renderedBoxes = array.new<box>()
 var bool renderInitialized = false
-var RenderCache renderCache = RenderCache.new(nearestMajorBase = na, murreyLower = na, murreyUpper = na, fibLevelZero = na, fibLevelHundred = na, roundMajorSpacing = na, prevDayHigh = na, prevDayLow = na, prevDayClose = na, prevSessionPoc = na, prevSessionVah = na, prevSessionVal = na, devSessionPoc = na, devSessionVah = na, devSessionVal = na, showFibonacci = false, showPivots = false, showPreviousDay = false, showRoundNumbers = false, showSwings = false, showMurrey = false, showValueArea = false, showCluster = false, showLevelLabels = false, murreySessionMode = "", murreyLockToSession = false, murreySourceTimeframeInput = "", murreyClusterDetail = "", showPivotMidLevels = false, showPreviousDayHighLevel = false, showPreviousDayLowLevel = false, showPreviousDayCloseLevel = false, showRoundMidLevels = false, showRoundQuarterLevels = false, showDevelopingValueArea = false, showValueAreaZoneFill = false, showIndicatorCount = false, showClusterSources = false, clusterEnsureSideCoverage = false, leftToRightExtendBars = na, leftToRightRightBars = na, rightToLeftExtendBars = na, rightToLeftRightBars = na, clusterMinScore = na, clusterMinIndicators = na, clusterCoverageMinScore = na, clusterCoverageMinIndicators = na, clusterProximityAtrWeight = na)
+var RenderCache renderCache = RenderCache.new(nearestMajorBase = na, murreyLower = na, murreyUpper = na, fibLevelZero = na, fibLevelHundred = na, roundMajorSpacing = na, prevDayHigh = na, prevDayLow = na, prevDayClose = na, prevSessionPoc = na, prevSessionVah = na, prevSessionVal = na, devSessionPoc = na, devSessionVah = na, devSessionVal = na, sessionVwap = na, sessionVwapUpper1 = na, sessionVwapLower1 = na, sessionVwapUpper2 = na, sessionVwapLower2 = na, weeklyVwap = na, showFibonacci = false, showPivots = false, showPreviousDay = false, showRoundNumbers = false, showSwings = false, showMurrey = false, showValueArea = false, showVwap = false, showSessionLevels = false, showSmc = false, showCluster = false, showLevelLabels = false, showMurreyLabels = false, showFibonacciLabels = false, showPivotLabels = false, showPreviousDayLabels = false, showSwingLabels = false, showRoundNumberLabels = false, showValueAreaLabels = false, showVwapLabels = false, showSessionLabels = false, showSmcLabels = false, showClusterLabels = false, showCamarilla = false, showNakedPocs = false, showVwapBands = false, showWeeklyVwap = false, showInitialBalance = false, showOvernightHL = false, showWeeklyHL = false, showMonthlyHL = false, clusterUseApproachPenalty = false, murreySessionMode = "", murreyLockToSession = false, murreySourceTimeframeInput = "", murreyClusterDetail = "", showPivotMidLevels = false, showPreviousDayHighLevel = false, showPreviousDayLowLevel = false, showPreviousDayCloseLevel = false, showRoundMidLevels = false, showRoundQuarterLevels = false, showDevelopingValueArea = false, showValueAreaZoneFill = false, showIndicatorCount = false, showClusterSources = false, clusterEnsureSideCoverage = false, leftToRightExtendBars = na, leftToRightRightBars = na, rightToLeftExtendBars = na, rightToLeftRightBars = na, clusterMinScore = na, clusterMinIndicators = na, clusterCoverageMinScore = na, clusterCoverageMinIndicators = na, clusterProximityAtrWeight = na)
 
-bool renderDataChanged = f_floatChanged(currentValue = nearestMajorBase, cachedValue = renderCache.nearestMajorBase) or f_floatChanged(currentValue = murreyLower, cachedValue = renderCache.murreyLower) or f_floatChanged(currentValue = murreyUpper, cachedValue = renderCache.murreyUpper) or f_floatChanged(currentValue = fibLevelZero, cachedValue = renderCache.fibLevelZero) or f_floatChanged(currentValue = fibLevelHundred, cachedValue = renderCache.fibLevelHundred) or f_floatChanged(currentValue = roundMajorSpacing, cachedValue = renderCache.roundMajorSpacing) or f_floatChanged(currentValue = prevDayHigh, cachedValue = renderCache.prevDayHigh) or f_floatChanged(currentValue = prevDayLow, cachedValue = renderCache.prevDayLow) or f_floatChanged(currentValue = prevDayClose, cachedValue = renderCache.prevDayClose) or f_floatChanged(currentValue = prevSessionPoc, cachedValue = renderCache.prevSessionPoc) or f_floatChanged(currentValue = prevSessionVah, cachedValue = renderCache.prevSessionVah) or f_floatChanged(currentValue = prevSessionVal, cachedValue = renderCache.prevSessionVal) or f_floatChanged(currentValue = devSessionPoc, cachedValue = renderCache.devSessionPoc) or f_floatChanged(currentValue = devSessionVah, cachedValue = renderCache.devSessionVah) or f_floatChanged(currentValue = devSessionVal, cachedValue = renderCache.devSessionVal)
-bool renderVisibilityChanged = showFibonacci != renderCache.showFibonacci or showPivots != renderCache.showPivots or showPreviousDay != renderCache.showPreviousDay or showRoundNumbers != renderCache.showRoundNumbers or showSwings != renderCache.showSwings or showMurrey != renderCache.showMurrey or showValueArea != renderCache.showValueArea or showCluster != renderCache.showCluster or showLevelLabels != renderCache.showLevelLabels
-bool renderSectionInputChanged = murreySessionMode != renderCache.murreySessionMode or murreyLockToSession != renderCache.murreyLockToSession or murreySourceTimeframeInput != renderCache.murreySourceTimeframeInput or murreyClusterDetail != renderCache.murreyClusterDetail or showPivotMidLevels != renderCache.showPivotMidLevels or showPreviousDayHighLevel != renderCache.showPreviousDayHighLevel or showPreviousDayLowLevel != renderCache.showPreviousDayLowLevel or showPreviousDayCloseLevel != renderCache.showPreviousDayCloseLevel or showRoundMidLevels != renderCache.showRoundMidLevels or showRoundQuarterLevels != renderCache.showRoundQuarterLevels or showDevelopingValueArea != renderCache.showDevelopingValueArea or showValueAreaZoneFill != renderCache.showValueAreaZoneFill
+bool renderDataChanged = f_floatChanged(currentValue = nearestMajorBase, cachedValue = renderCache.nearestMajorBase) or f_floatChanged(currentValue = murreyLower, cachedValue = renderCache.murreyLower) or f_floatChanged(currentValue = murreyUpper, cachedValue = renderCache.murreyUpper) or f_floatChanged(currentValue = fibLevelZero, cachedValue = renderCache.fibLevelZero) or f_floatChanged(currentValue = fibLevelHundred, cachedValue = renderCache.fibLevelHundred) or f_floatChanged(currentValue = roundMajorSpacing, cachedValue = renderCache.roundMajorSpacing) or f_floatChanged(currentValue = prevDayHigh, cachedValue = renderCache.prevDayHigh) or f_floatChanged(currentValue = prevDayLow, cachedValue = renderCache.prevDayLow) or f_floatChanged(currentValue = prevDayClose, cachedValue = renderCache.prevDayClose) or f_floatChanged(currentValue = prevSessionPoc, cachedValue = renderCache.prevSessionPoc) or f_floatChanged(currentValue = prevSessionVah, cachedValue = renderCache.prevSessionVah) or f_floatChanged(currentValue = prevSessionVal, cachedValue = renderCache.prevSessionVal) or f_floatChanged(currentValue = devSessionPoc, cachedValue = renderCache.devSessionPoc) or f_floatChanged(currentValue = devSessionVah, cachedValue = renderCache.devSessionVah) or f_floatChanged(currentValue = devSessionVal, cachedValue = renderCache.devSessionVal) or f_floatChanged(currentValue = sessionVwap, cachedValue = renderCache.sessionVwap) or f_floatChanged(currentValue = sessionVwapUpper1, cachedValue = renderCache.sessionVwapUpper1) or f_floatChanged(currentValue = sessionVwapLower1, cachedValue = renderCache.sessionVwapLower1) or f_floatChanged(currentValue = sessionVwapUpper2, cachedValue = renderCache.sessionVwapUpper2) or f_floatChanged(currentValue = sessionVwapLower2, cachedValue = renderCache.sessionVwapLower2) or f_floatChanged(currentValue = weeklyVwap, cachedValue = renderCache.weeklyVwap)
+bool renderVisibilityChanged = showFibonacci != renderCache.showFibonacci or showPivots != renderCache.showPivots or showPreviousDay != renderCache.showPreviousDay or showRoundNumbers != renderCache.showRoundNumbers or showSwings != renderCache.showSwings or showMurrey != renderCache.showMurrey or showValueArea != renderCache.showValueArea or showVwap != renderCache.showVwap or showSessionLevels != renderCache.showSessionLevels or showSmc != renderCache.showSmc or showCluster != renderCache.showCluster or showLevelLabels != renderCache.showLevelLabels or showMurreyLabels != renderCache.showMurreyLabels or showFibonacciLabels != renderCache.showFibonacciLabels or showPivotLabels != renderCache.showPivotLabels or showPreviousDayLabels != renderCache.showPreviousDayLabels or showSwingLabels != renderCache.showSwingLabels or showRoundNumberLabels != renderCache.showRoundNumberLabels or showValueAreaLabels != renderCache.showValueAreaLabels or showVwapLabels != renderCache.showVwapLabels or showSessionLabels != renderCache.showSessionLabels or showSmcLabels != renderCache.showSmcLabels or showClusterLabels != renderCache.showClusterLabels
+bool renderSectionInputChanged = murreySessionMode != renderCache.murreySessionMode or murreyLockToSession != renderCache.murreyLockToSession or murreySourceTimeframeInput != renderCache.murreySourceTimeframeInput or murreyClusterDetail != renderCache.murreyClusterDetail or showPivotMidLevels != renderCache.showPivotMidLevels or showPreviousDayHighLevel != renderCache.showPreviousDayHighLevel or showPreviousDayLowLevel != renderCache.showPreviousDayLowLevel or showPreviousDayCloseLevel != renderCache.showPreviousDayCloseLevel or showRoundMidLevels != renderCache.showRoundMidLevels or showRoundQuarterLevels != renderCache.showRoundQuarterLevels or showDevelopingValueArea != renderCache.showDevelopingValueArea or showValueAreaZoneFill != renderCache.showValueAreaZoneFill or showCamarilla != renderCache.showCamarilla or showNakedPocs != renderCache.showNakedPocs or showVwapBands != renderCache.showVwapBands or showWeeklyVwap != renderCache.showWeeklyVwap or showInitialBalance != renderCache.showInitialBalance or showOvernightHL != renderCache.showOvernightHL or showWeeklyHL != renderCache.showWeeklyHL or showMonthlyHL != renderCache.showMonthlyHL
 bool renderLayoutChanged = renderLeftToRightExtendBars != renderCache.leftToRightExtendBars or renderLeftToRightRightBars != renderCache.leftToRightRightBars or renderRightToLeftExtendBars != renderCache.rightToLeftExtendBars or renderRightToLeftRightBars != renderCache.rightToLeftRightBars
-bool renderClusterInputChanged = showCluster and (showIndicatorCount != renderCache.showIndicatorCount or showClusterSources != renderCache.showClusterSources or clusterEnsureSideCoverage != renderCache.clusterEnsureSideCoverage or clusterMinScore != renderCache.clusterMinScore or clusterMinIndicators != renderCache.clusterMinIndicators or clusterCoverageMinScore != renderCache.clusterCoverageMinScore or clusterCoverageMinIndicators != renderCache.clusterCoverageMinIndicators or f_floatChanged(currentValue = clusterProximityAtrWeight, cachedValue = renderCache.clusterProximityAtrWeight))
+bool renderClusterInputChanged = showCluster and (showIndicatorCount != renderCache.showIndicatorCount or showClusterSources != renderCache.showClusterSources or clusterEnsureSideCoverage != renderCache.clusterEnsureSideCoverage or clusterMinScore != renderCache.clusterMinScore or clusterMinIndicators != renderCache.clusterMinIndicators or clusterCoverageMinScore != renderCache.clusterCoverageMinScore or clusterCoverageMinIndicators != renderCache.clusterCoverageMinIndicators or f_floatChanged(currentValue = clusterProximityAtrWeight, cachedValue = renderCache.clusterProximityAtrWeight) or clusterUseApproachPenalty != renderCache.clusterUseApproachPenalty)
 bool renderKeyChanged = not renderInitialized or renderDataChanged or renderVisibilityChanged or renderSectionInputChanged or renderLayoutChanged or renderClusterInputChanged
 // Rendering is object-heavy, so avoid rebuilding the scene on every realtime tick,
 // but still refresh immediately when inputs or computed render anchors change.
@@ -1108,53 +1360,67 @@ if shouldRefreshRender
     bool useSwingsInCluster = swingsIsActive
     bool useMurreyInCluster = murreyIsActive
     bool useValueAreaInCluster = valueAreaIsActive
+    bool useVwapInCluster = vwapIsActive
+    bool useSessionInCluster = sessionLevelsIsActive
+    bool useSmcInCluster = smcIsActive
     bool clusterUseProximityFilter = showCluster
 
     if useFibonacciInCluster and fibHasAnchors
-        array<float> fibLevels = array.from(-100.0, -76.4, -61.8, -50.0, -38.2, -23.6, 0.0, 23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0)
-        for fibIndex = 0 to array.size(id = fibLevels) - 1
-            float fibPercent = array.get(id = fibLevels, index = fibIndex)
+        // Keep Fib weights below the core floor pivots so confluence scoring
+        // favors the more structural session ladder first.
+        for fibIndex = 0 to array.size(id = fibClusterPercents) - 1
+            float fibPercent = array.get(id = fibClusterPercents, index = fibIndex)
             float fibPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01
             int fibWeight = 1
             if fibPercent == 38.2 or fibPercent == 50.0 or fibPercent == 61.8 or fibPercent == 100.0 or fibPercent == 161.8
-                fibWeight := 4
+                fibWeight := 3
             else if fibPercent == 23.6 or fibPercent == 76.4 or fibPercent == 123.6 or fibPercent == 176.4
                 fibWeight := 2
-            string fibStyle = fibWeight >= 4 ? "Solid" : fibWeight == 2 ? "Dashed" : "Dotted"
+            string fibStyle = fibWeight >= 3 ? "Solid" : fibWeight == 2 ? "Dashed" : "Dotted"
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = fibPrice, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = fibPrice, levelWeight = fibWeight, indicatorId = 2, levelName = str.tostring(value = fibPercent, format = "#.##") + "%", levelColor = overallLevelColor, lineStyle = fibStyle, levelStartBar = fibAnchorBar)
 
     if usePivotsInCluster and not na(pivotPoint)
+        // Keep the central floor-pivot ladder above Fibs in cluster scoring.
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotS4, proximityDistance = clusterLevelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = pivotS4, levelWeight = 1, indicatorId = 3, levelName = "S4", levelColor = overallLevelColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotS3, proximityDistance = clusterLevelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = pivotS3, levelWeight = 1, indicatorId = 3, levelName = "S3", levelColor = overallLevelColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotS2, proximityDistance = clusterLevelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = pivotS2, levelWeight = 1, indicatorId = 3, levelName = "S2", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levels = levels, levelPrice = pivotS2, levelWeight = 2, indicatorId = 3, levelName = "S2", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPivotMidLevels
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotMidS1S2, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = pivotMidS1S2, levelWeight = 1, indicatorId = 3, levelName = "M-S1S2", levelColor = overallLevelColor, lineStyle = "Dotted")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotS1, proximityDistance = clusterLevelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = pivotS1, levelWeight = 2, indicatorId = 3, levelName = "S1", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levels = levels, levelPrice = pivotS1, levelWeight = 3, indicatorId = 3, levelName = "S1", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPivotMidLevels
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotMidPPS1, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = pivotMidPPS1, levelWeight = 1, indicatorId = 3, levelName = "M-PPS1", levelColor = overallLevelColor, lineStyle = "Dotted")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotPoint, proximityDistance = clusterLevelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = pivotPoint, levelWeight = 3, indicatorId = 3, levelName = "PP", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levels = levels, levelPrice = pivotPoint, levelWeight = 4, indicatorId = 3, levelName = "PP", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPivotMidLevels
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotMidPPR1, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = pivotMidPPR1, levelWeight = 1, indicatorId = 3, levelName = "M-PPR1", levelColor = overallLevelColor, lineStyle = "Dotted")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotR1, proximityDistance = clusterLevelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = pivotR1, levelWeight = 2, indicatorId = 3, levelName = "R1", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levels = levels, levelPrice = pivotR1, levelWeight = 3, indicatorId = 3, levelName = "R1", levelColor = overallLevelColor, lineStyle = "Solid")
         if showPivotMidLevels
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotMidR1R2, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = pivotMidR1R2, levelWeight = 1, indicatorId = 3, levelName = "M-R1R2", levelColor = overallLevelColor, lineStyle = "Dotted")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotR2, proximityDistance = clusterLevelProximityDistance)
-            f_pushLevel(levels = levels, levelPrice = pivotR2, levelWeight = 1, indicatorId = 3, levelName = "R2", levelColor = overallLevelColor, lineStyle = "Solid")
+            f_pushLevel(levels = levels, levelPrice = pivotR2, levelWeight = 2, indicatorId = 3, levelName = "R2", levelColor = overallLevelColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotR3, proximityDistance = clusterLevelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = pivotR3, levelWeight = 1, indicatorId = 3, levelName = "R3", levelColor = overallLevelColor, lineStyle = "Solid")
         if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = pivotR4, proximityDistance = clusterLevelProximityDistance)
             f_pushLevel(levels = levels, levelPrice = pivotR4, levelWeight = 1, indicatorId = 3, levelName = "R4", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showCamarilla
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = camarillaH4, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = camarillaH4, levelWeight = 2, indicatorId = 3, levelName = "H4", levelColor = overallLevelColor, lineStyle = "Solid")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = camarillaH3, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = camarillaH3, levelWeight = 2, indicatorId = 3, levelName = "H3", levelColor = overallLevelColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = camarillaL3, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = camarillaL3, levelWeight = 2, indicatorId = 3, levelName = "L3", levelColor = overallLevelColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = camarillaL4, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = camarillaL4, levelWeight = 2, indicatorId = 3, levelName = "L4", levelColor = overallLevelColor, lineStyle = "Solid")
 
     if usePreviousDayInCluster
         if showPreviousDayHighLevel
@@ -1275,6 +1541,62 @@ if shouldRefreshRender
             if not na(devSessionVah)
                 if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = devSessionVah, proximityDistance = clusterLevelProximityDistance)
                     f_pushLevel(levels = levels, levelPrice = devSessionVah, levelWeight = 2, indicatorId = 7, levelName = "dVAH", levelColor = previousDayHighColor, lineStyle = "Dashed")
+        if showNakedPocs and array.size(id = historicalPocs) > 0
+            int nakedPocClusterCount = array.size(id = historicalPocs)
+            for nakedPocClusterIndex = 0 to nakedPocClusterCount - 1
+                HistoricalPoc nakedPocCluster = array.get(id = historicalPocs, index = nakedPocClusterIndex)
+                if nakedPocCluster.isNaked
+                    if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = nakedPocCluster.price, proximityDistance = clusterLevelProximityDistance)
+                        f_pushLevel(levels = levels, levelPrice = nakedPocCluster.price, levelWeight = 3, indicatorId = 7, levelName = "nPOC", levelColor = previousDayCloseColor, lineStyle = "Dotted", levelStartBar = nakedPocCluster.sessionBar)
+
+    if useVwapInCluster
+        if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = sessionVwap, proximityDistance = clusterLevelProximityDistance)
+            f_pushLevel(levels = levels, levelPrice = sessionVwap, levelWeight = 4, indicatorId = 8, levelName = "VWAP", levelColor = vwapMainColor, lineStyle = "Solid")
+        if showVwapBands
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = sessionVwapUpper1, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = sessionVwapUpper1, levelWeight = 2, indicatorId = 8, levelName = "VWAP+1σ", levelColor = vwapBandColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = sessionVwapLower1, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = sessionVwapLower1, levelWeight = 2, indicatorId = 8, levelName = "VWAP-1σ", levelColor = vwapBandColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = sessionVwapUpper2, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = sessionVwapUpper2, levelWeight = 1, indicatorId = 8, levelName = "VWAP+2σ", levelColor = vwapBandColor, lineStyle = "Dotted")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = sessionVwapLower2, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = sessionVwapLower2, levelWeight = 1, indicatorId = 8, levelName = "VWAP-2σ", levelColor = vwapBandColor, lineStyle = "Dotted")
+        if showWeeklyVwap
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = weeklyVwap, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = weeklyVwap, levelWeight = 3, indicatorId = 8, levelName = "wVWAP", levelColor = vwapMainColor, lineStyle = "Dashed")
+
+    if useSessionInCluster
+        if showInitialBalance
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = initialBalanceHigh, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = initialBalanceHigh, levelWeight = 3, indicatorId = 9, levelName = "IBH", levelColor = overallLevelColor, lineStyle = "Solid")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = initialBalanceLow, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = initialBalanceLow, levelWeight = 3, indicatorId = 9, levelName = "IBL", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showOvernightHL
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = overnightHighFrozen, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = overnightHighFrozen, levelWeight = 2, indicatorId = 9, levelName = "ONH", levelColor = overallLevelColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = overnightLowFrozen, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = overnightLowFrozen, levelWeight = 2, indicatorId = 9, levelName = "ONL", levelColor = overallLevelColor, lineStyle = "Dashed")
+        if showWeeklyHL
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevWeekHigh, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = prevWeekHigh, levelWeight = 3, indicatorId = 9, levelName = "PWH", levelColor = overallLevelColor, lineStyle = "Solid")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevWeekLow, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = prevWeekLow, levelWeight = 3, indicatorId = 9, levelName = "PWL", levelColor = overallLevelColor, lineStyle = "Solid")
+        if showMonthlyHL
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevMonthHigh, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = prevMonthHigh, levelWeight = 2, indicatorId = 9, levelName = "PMH", levelColor = overallLevelColor, lineStyle = "Dashed")
+            if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = prevMonthLow, proximityDistance = clusterLevelProximityDistance)
+                f_pushLevel(levels = levels, levelPrice = prevMonthLow, levelWeight = 2, indicatorId = 9, levelName = "PML", levelColor = overallLevelColor, lineStyle = "Dashed")
+
+    if useSmcInCluster and array.size(id = fvgList) > 0
+        int smcClusterCount = array.size(id = fvgList)
+        for smcClusterIndex = 0 to smcClusterCount - 1
+            FairValueGap smcCluster = array.get(id = fvgList, index = smcClusterIndex)
+            if not smcCluster.isMitigated
+                float smcMid = (smcCluster.lower + smcCluster.upper) * 0.5
+                color smcColor = smcCluster.isBullish ? smcBullColor : smcBearColor
+                string smcName = smcCluster.isBullish ? "FVG↑" : "FVG↓"
+                if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = smcMid, proximityDistance = clusterLevelProximityDistance)
+                    f_pushLevel(levels = levels, levelPrice = smcMid, levelWeight = 2, indicatorId = 10, levelName = smcName, levelColor = smcColor, lineStyle = "Dotted", levelStartBar = smcCluster.midBar, levelZoneLowOverride = smcCluster.lower, levelZoneHighOverride = smcCluster.upper)
 
     f_sortLevels(levels = levels)
 
@@ -1287,8 +1609,8 @@ if shouldRefreshRender
         float zoneWeightedSum = firstLevel.price * firstLevel.weight
         int zoneWeightTotal = firstLevel.weight
         int zoneMask = f_addIndicatorMask(indicatorMask = 0, indicatorId = firstLevel.indicatorId)
-        array<int> zoneFamilyWeights = array.new<int>(7, 0)
-        array<int> zoneFamilyFreshness = array.new<int>(7, 0)
+        array<int> zoneFamilyWeights = array.new<int>(10, 0)
+        array<int> zoneFamilyFreshness = array.new<int>(10, 0)
         int zoneIndicatorCount = 1
         f_setFamilyMax(familyValues = zoneFamilyWeights, indicatorId = firstLevel.indicatorId, candidateValue = firstLevel.weight)
         f_setFamilyMax(familyValues = zoneFamilyFreshness, indicatorId = firstLevel.indicatorId, candidateValue = firstLevel.freshnessScore)
@@ -1319,7 +1641,7 @@ if shouldRefreshRender
                     [clusterZoneBodyTouchCount, clusterZoneWickOnlyTouchCount] = f_countLevelTouches(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterTouchLookback)
                     int clusterZoneTouchScore = f_touchScore(bodyTouchCount = clusterZoneBodyTouchCount, wickOnlyTouchCount = clusterZoneWickOnlyTouchCount)
                     bool zoneRecentFlip = zoneHasFlip or f_recentCrossesZone(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterFlipLookback)
-                    int zoneApproachPenalty = f_zoneApproachPenalty(zoneMid = currentMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(sharedAtrValue, syminfo.mintick))
+                    int zoneApproachPenalty = clusterUseApproachPenalty ? f_zoneApproachPenalty(zoneMid = currentMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(sharedAtrValue, syminfo.mintick)) : 0
                     int zoneScore = f_sumIntArray(familyValues = zoneFamilyWeights) + f_sumIntArray(familyValues = zoneFamilyFreshness) + clusterZoneTouchScore + (zoneRecentFlip ? 1 : 0) + f_zonePriceProximityScore(zoneMid = currentMid, atrBase = math.max(sharedAtrValue, syminfo.mintick)) - zoneApproachPenalty
                     array.push(id = clusterCandidates, value = ClusterCandidate.new(zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = currentMid, zoneScore = zoneScore, indicatorMask = zoneMask, zoneIndicatorCount = zoneIndicatorCount, zoneIsFlip = zoneRecentFlip, approachPenalty = zoneApproachPenalty))
                 zoneLow := currentZoneLow
@@ -1328,8 +1650,8 @@ if shouldRefreshRender
                 zoneWeightTotal := currentWeight
                 zoneMask := f_addIndicatorMask(indicatorMask = 0, indicatorId = currentIndicator)
                 zoneIndicatorCount := 1
-                zoneFamilyWeights := array.new<int>(7, 0)
-                zoneFamilyFreshness := array.new<int>(7, 0)
+                zoneFamilyWeights := array.new<int>(10, 0)
+                zoneFamilyFreshness := array.new<int>(10, 0)
                 f_setFamilyMax(familyValues = zoneFamilyWeights, indicatorId = currentIndicator, candidateValue = currentWeight)
                 f_setFamilyMax(familyValues = zoneFamilyFreshness, indicatorId = currentIndicator, candidateValue = currentLevel.freshnessScore)
                 zoneHasFlip := currentLevel.flipFlag
@@ -1338,7 +1660,7 @@ if shouldRefreshRender
             [clusterFinalZoneBodyTouchCount, clusterFinalZoneWickOnlyTouchCount] = f_countLevelTouches(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterTouchLookback)
             int clusterFinalZoneTouchScore = f_touchScore(bodyTouchCount = clusterFinalZoneBodyTouchCount, wickOnlyTouchCount = clusterFinalZoneWickOnlyTouchCount)
             bool finalZoneFlip = zoneHasFlip or f_recentCrossesZone(zoneLow = zoneLow, zoneHigh = zoneHigh, lookbackBars = clusterFlipLookback)
-            int finalApproachPenalty = f_zoneApproachPenalty(zoneMid = finalZoneMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(sharedAtrValue, syminfo.mintick))
+            int finalApproachPenalty = clusterUseApproachPenalty ? f_zoneApproachPenalty(zoneMid = finalZoneMid, lookbackBars = clusterApproachLookback, approachAtr = math.max(sharedAtrValue, syminfo.mintick)) : 0
             int finalZoneScore = f_sumIntArray(familyValues = zoneFamilyWeights) + f_sumIntArray(familyValues = zoneFamilyFreshness) + clusterFinalZoneTouchScore + (finalZoneFlip ? 1 : 0) + f_zonePriceProximityScore(zoneMid = finalZoneMid, atrBase = math.max(sharedAtrValue, syminfo.mintick)) - finalApproachPenalty
             array.push(id = clusterCandidates, value = ClusterCandidate.new(zoneLow = zoneLow, zoneHigh = zoneHigh, zoneMid = finalZoneMid, zoneScore = finalZoneScore, indicatorMask = zoneMask, zoneIndicatorCount = zoneIndicatorCount, zoneIsFlip = finalZoneFlip, approachPenalty = finalApproachPenalty))
         bool drewStrictAbove = false
@@ -1350,7 +1672,7 @@ if shouldRefreshRender
         if array.size(id = clusterCandidates) > 0
             for candidateIndex = 0 to array.size(id = clusterCandidates) - 1
                 ClusterCandidate candidate = array.get(id = clusterCandidates, index = candidateIndex)
-                bool candidateAbove = f_clusterIsAbovePrice(zoneMid = candidate.zoneMid)
+                bool candidateAbove = candidate.zoneMid >= close
                 bool passesStrict = f_clusterPassesThresholds(zoneScore = candidate.zoneScore, zoneIndicatorCount = candidate.zoneIndicatorCount, minScore = clusterMinScore, minIndicators = clusterMinIndicators)
                 bool passesCoverage = f_clusterPassesThresholds(zoneScore = candidate.zoneScore, zoneIndicatorCount = candidate.zoneIndicatorCount, minScore = clusterCoverageMinScore, minIndicators = clusterCoverageMinIndicators)
                 if passesStrict
@@ -1373,18 +1695,20 @@ if shouldRefreshRender
                 if not drewStrictBelow and not na(bestCoverageBelowIndex)
                     ClusterCandidate fallbackBelow = array.get(id = clusterCandidates, index = bestCoverageBelowIndex)
                     f_drawClusterZone(boxes = renderedBoxes, labels = renderedLabels, zoneLow = fallbackBelow.zoneLow, zoneHigh = fallbackBelow.zoneHigh, zoneMid = fallbackBelow.zoneMid, zoneScore = fallbackBelow.zoneScore, indicatorMask = fallbackBelow.indicatorMask, zoneIndicatorCount = fallbackBelow.zoneIndicatorCount, zoneIsFlip = fallbackBelow.zoneIsFlip, approachPenalty = fallbackBelow.approachPenalty, currentSessionStartBar = currentSessionStartBar, atrCap = math.max(sharedAtrValue, syminfo.mintick))
-    if array.size(id = levels) > 0
+    if array.size(id = levels) > 0 or pivotPlotVisible or previousDayPlotVisible or valueAreaPlotVisible or murreyPlotVisible or vwapPlotVisible or sessionPlotVisible or smcPlotVisible
         int rightProjectedLeftX = f_leftToRightLeftX(currentSessionStartBar = currentSessionStartBar)
         int rightProjectedRightX = f_leftToRightRightX()
-        for levelIndex = 0 to array.size(id = levels) - 1
-            Level renderLevel = array.get(id = levels, index = levelIndex)
-            if f_indicatorVisible(indicatorId = renderLevel.indicatorId) and renderLevel.indicatorId != 1 and renderLevel.indicatorId != 3 and renderLevel.indicatorId != 4 and renderLevel.indicatorId != 7
-                if renderLevel.indicatorId == 2 or renderLevel.indicatorId == 6
-                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, ghostMode = false)
-                else if renderLevel.indicatorId == 5
-                    f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, startBar = renderLevel.startBar, currentSessionStartBar = currentSessionStartBar, ghostMode = false)
-                else
-                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, indicatorId = renderLevel.indicatorId, currentSessionStartBar = currentSessionStartBar, ghostMode = false)
+        if array.size(id = levels) > 0
+            for levelIndex = 0 to array.size(id = levels) - 1
+                Level renderLevel = array.get(id = levels, index = levelIndex)
+                // IDs 1/3/4/7/8/9/10 have dedicated standalone draw blocks below.
+                if f_indicatorVisible(indicatorId = renderLevel.indicatorId) and renderLevel.indicatorId != 1 and renderLevel.indicatorId != 3 and renderLevel.indicatorId != 4 and renderLevel.indicatorId != 7 and renderLevel.indicatorId != 8 and renderLevel.indicatorId != 9 and renderLevel.indicatorId != 10
+                    if renderLevel.indicatorId == 2 or renderLevel.indicatorId == 6
+                        f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, indicatorId = renderLevel.indicatorId)
+                    else if renderLevel.indicatorId == 5
+                        f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, startBar = renderLevel.startBar, currentSessionStartBar = currentSessionStartBar)
+                    else
+                        f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = renderLevel.price, labelText = renderLevel.name, levelColor = renderLevel.levelColor, styleName = renderLevel.style, levelWeight = renderLevel.weight, indicatorId = renderLevel.indicatorId, currentSessionStartBar = currentSessionStartBar)
         if pivotPlotVisible
             f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS4, labelText = "S4", levelColor = pivotWeight1Color, styleName = "Dashed", levelWeight = 1, currentSessionStartBar = currentSessionStartBar)
             f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS3, labelText = "S3", levelColor = pivotWeight1Color, styleName = "Dashed", levelWeight = 1, currentSessionStartBar = currentSessionStartBar)
@@ -1403,6 +1727,49 @@ if shouldRefreshRender
             f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR2, labelText = "R2", levelColor = pivotWeight1Color, styleName = "Solid", levelWeight = 1, currentSessionStartBar = currentSessionStartBar)
             f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR3, labelText = "R3", levelColor = pivotWeight1Color, styleName = "Dashed", levelWeight = 1, currentSessionStartBar = currentSessionStartBar)
             f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR4, labelText = "R4", levelColor = pivotWeight1Color, styleName = "Dashed", levelWeight = 1, currentSessionStartBar = currentSessionStartBar)
+            if showCamarilla
+                f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH4, labelText = "H4", levelColor = pivotWeight2Color, styleName = "Solid", levelWeight = 2, currentSessionStartBar = currentSessionStartBar)
+                f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH3, labelText = "H3", levelColor = pivotWeight2Color, styleName = "Dashed", levelWeight = 2, currentSessionStartBar = currentSessionStartBar)
+                f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL3, labelText = "L3", levelColor = pivotWeight2Color, styleName = "Dashed", levelWeight = 2, currentSessionStartBar = currentSessionStartBar)
+                f_drawPivotStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL4, labelText = "L4", levelColor = pivotWeight2Color, styleName = "Solid", levelWeight = 2, currentSessionStartBar = currentSessionStartBar)
+        // Outside RTH, VWAP values stay frozen at the last regular-session print so
+        // the final session VWAP map remains visible during ETH.
+        if vwapPlotVisible
+            if not na(sessionVwap)
+                f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = sessionVwap, labelText = "VWAP", levelColor = vwapMainColor, styleName = "Solid", levelWeight = 4, indicatorId = 8)
+            if showVwapBands
+                if not na(sessionVwapUpper1)
+                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = sessionVwapUpper1, labelText = "VWAP+1σ", levelColor = vwapBandColor, styleName = "Dashed", levelWeight = 2, indicatorId = 8)
+                if not na(sessionVwapLower1)
+                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = sessionVwapLower1, labelText = "VWAP-1σ", levelColor = vwapBandColor, styleName = "Dashed", levelWeight = 2, indicatorId = 8)
+                if not na(sessionVwapUpper2)
+                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = sessionVwapUpper2, labelText = "VWAP+2σ", levelColor = vwapBandColor, styleName = "Dotted", levelWeight = 1, indicatorId = 8)
+                if not na(sessionVwapLower2)
+                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = sessionVwapLower2, labelText = "VWAP-2σ", levelColor = vwapBandColor, styleName = "Dotted", levelWeight = 1, indicatorId = 8)
+            if showWeeklyVwap
+                if not na(weeklyVwap)
+                    f_drawProjectedLevel(lines = renderedLines, labels = renderedLabels, levelPrice = weeklyVwap, labelText = "wVWAP", levelColor = vwapMainColor, styleName = "Dashed", levelWeight = 3, indicatorId = 8)
+        if sessionPlotVisible
+            if showInitialBalance
+                if not na(initialBalanceHigh)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = initialBalanceHigh, labelText = "IBH", levelColor = overallLevelColor, styleName = "Solid", levelWeight = 3, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+                if not na(initialBalanceLow)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = initialBalanceLow, labelText = "IBL", levelColor = overallLevelColor, styleName = "Solid", levelWeight = 3, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+            if showOvernightHL
+                if not na(overnightHighFrozen)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = overnightHighFrozen, labelText = "ONH", levelColor = overallLevelColor, styleName = "Dashed", levelWeight = 2, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+                if not na(overnightLowFrozen)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = overnightLowFrozen, labelText = "ONL", levelColor = overallLevelColor, styleName = "Dashed", levelWeight = 2, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+            if showWeeklyHL
+                if not na(prevWeekHigh)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevWeekHigh, labelText = "PWH", levelColor = overallLevelColor, styleName = "Solid", levelWeight = 3, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+                if not na(prevWeekLow)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevWeekLow, labelText = "PWL", levelColor = overallLevelColor, styleName = "Solid", levelWeight = 3, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+            if showMonthlyHL
+                if not na(prevMonthHigh)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevMonthHigh, labelText = "PMH", levelColor = overallLevelColor, styleName = "Dashed", levelWeight = 2, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
+                if not na(prevMonthLow)
+                    f_drawHorizontalLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevMonthLow, labelText = "PML", levelColor = overallLevelColor, styleName = "Dashed", levelWeight = 2, indicatorId = 9, currentSessionStartBar = currentSessionStartBar)
         if previousDayPlotVisible
             if showPreviousDayHighLevel
                 array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevDayHigh, x2 = rightProjectedRightX, y2 = prevDayHigh, xloc = xloc.bar_index, extend = extend.none, color = previousDayHighColor, width = previousDayHighWidth, style = line.style_solid))
@@ -1410,7 +1777,7 @@ if shouldRefreshRender
                 array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevDayLow, x2 = rightProjectedRightX, y2 = prevDayLow, xloc = xloc.bar_index, extend = extend.none, color = previousDayLowColor, width = previousDayLowWidth, style = line.style_solid))
             if showPreviousDayCloseLevel
                 array.push(id = renderedLines, value = line.new(x1 = rightProjectedLeftX, y1 = prevDayClose, x2 = rightProjectedRightX, y2 = prevDayClose, xloc = xloc.bar_index, extend = extend.none, color = previousDayCloseColor, width = previousDayCloseWidth, style = line.style_dashed))
-        if previousDayPlotVisible and showLevelLabels
+        if previousDayPlotVisible and showLevelLabels and showPreviousDayLabels
             if showPreviousDayHighLevel
                 array.push(id = renderedLabels, value = label.new(x = f_leftToRightLabelX(), y = f_labelY(prevDayHigh), text = "PDH", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign()))
             if showPreviousDayLowLevel
@@ -1432,11 +1799,11 @@ if shouldRefreshRender
                 array.push(id = renderedLines, value = line.new(x1 = currentSessionStartBar, y1 = devSessionPoc, x2 = rightProjectedRightX, y2 = devSessionPoc, xloc = xloc.bar_index, extend = extend.none, color = color.new(color = previousDayCloseColor, transp = 40), width = previousDayCloseWidth, style = line.style_dashed))
             if not na(devSessionVah)
                 array.push(id = renderedLines, value = line.new(x1 = currentSessionStartBar, y1 = devSessionVah, x2 = rightProjectedRightX, y2 = devSessionVah, xloc = xloc.bar_index, extend = extend.none, color = color.new(color = previousDayHighColor, transp = 40), width = previousDayHighWidth, style = line.style_dashed))
-        if valueAreaPlotVisible and showLevelLabels
+        if valueAreaPlotVisible and showLevelLabels and showValueAreaLabels
             array.push(id = renderedLabels, value = label.new(x = f_leftToRightLabelX(), y = f_labelY(prevSessionVal), text = "VAL", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_leftToRightLabelX(), y = f_labelY(prevSessionPoc), text = "POC", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign()))
             array.push(id = renderedLabels, value = label.new(x = f_leftToRightLabelX(), y = f_labelY(prevSessionVah), text = "VAH", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign()))
-        if valueAreaPlotVisible and showDevelopingValueArea and showLevelLabels
+        if valueAreaPlotVisible and showDevelopingValueArea and showLevelLabels and showValueAreaLabels
             if not na(devSessionVal)
                 array.push(id = renderedLabels, value = label.new(x = f_leftToRightLabelX(), y = f_labelY(devSessionVal), text = "dVAL", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = color.new(color = labelTextColor, transp = 40), color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign()))
             if not na(devSessionPoc)
@@ -1455,6 +1822,29 @@ if shouldRefreshRender
             f_drawMurreyStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = murreyPlus18, labelText = "+1/8", styleName = "Dotted", levelWeight = 1)
             f_drawMurreyStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = murreyPlus28, labelText = "+2/8", styleName = "Dotted", levelWeight = 1)
             f_drawMurreyStandalone(lines = renderedLines, labels = renderedLabels, levelPrice = murreyPlus38, labelText = "+3/8", styleName = "Dotted", levelWeight = 1)
+        if valueAreaPlotVisible and showNakedPocs and array.size(id = historicalPocs) > 0
+            int nakedRenderCount = array.size(id = historicalPocs)
+            for nakedRenderIndex = 0 to nakedRenderCount - 1
+                HistoricalPoc nakedRender = array.get(id = historicalPocs, index = nakedRenderIndex)
+                if nakedRender.isNaked
+                    line nakedLine = line.new(x1 = nakedRender.sessionBar, y1 = nakedRender.price, x2 = rightProjectedRightX, y2 = nakedRender.price, xloc = xloc.bar_index, extend = extend.none, color = previousDayCloseColor, width = 1, style = line.style_dotted)
+                    array.push(id = renderedLines, value = nakedLine)
+                    if showLevelLabels and showValueAreaLabels
+                        label nakedLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(nakedRender.price), text = "nPOC", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
+                        array.push(id = renderedLabels, value = nakedLabel)
+        if smcPlotVisible and array.size(id = fvgList) > 0
+            int fvgRenderCount = array.size(id = fvgList)
+            for fvgRenderIndex = 0 to fvgRenderCount - 1
+                FairValueGap fvgRender = array.get(id = fvgList, index = fvgRenderIndex)
+                if not fvgRender.isMitigated
+                    color fvgFillColor = fvgRender.isBullish ? smcBullColor : smcBearColor
+                    box fvgBox = box.new(left = fvgRender.midBar, right = rightProjectedRightX, top = fvgRender.upper, bottom = fvgRender.lower, xloc = xloc.bar_index, bgcolor = fvgFillColor, border_color = na, border_width = 0)
+                    array.push(id = renderedBoxes, value = fvgBox)
+                    if showLevelLabels and showSmcLabels
+                        string fvgLabelText = fvgRender.isBullish ? "FVG↑" : "FVG↓"
+                        float fvgLabelMid = (fvgRender.lower + fvgRender.upper) * 0.5
+                        label fvgLabel = label.new(x = f_leftToRightLabelX(), y = f_labelY(fvgLabelMid), text = fvgLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = f_leftToRightLabelTextAlign())
+                        array.push(id = renderedLabels, value = fvgLabel)
 
     renderInitialized := true
     renderCache.nearestMajorBase := nearestMajorBase
@@ -1472,6 +1862,12 @@ if shouldRefreshRender
     renderCache.devSessionPoc := devSessionPoc
     renderCache.devSessionVah := devSessionVah
     renderCache.devSessionVal := devSessionVal
+    renderCache.sessionVwap := sessionVwap
+    renderCache.sessionVwapUpper1 := sessionVwapUpper1
+    renderCache.sessionVwapLower1 := sessionVwapLower1
+    renderCache.sessionVwapUpper2 := sessionVwapUpper2
+    renderCache.sessionVwapLower2 := sessionVwapLower2
+    renderCache.weeklyVwap := weeklyVwap
     renderCache.showFibonacci := showFibonacci
     renderCache.showPivots := showPivots
     renderCache.showPreviousDay := showPreviousDay
@@ -1479,8 +1875,31 @@ if shouldRefreshRender
     renderCache.showSwings := showSwings
     renderCache.showMurrey := showMurrey
     renderCache.showValueArea := showValueArea
+    renderCache.showVwap := showVwap
+    renderCache.showSessionLevels := showSessionLevels
+    renderCache.showSmc := showSmc
     renderCache.showCluster := showCluster
     renderCache.showLevelLabels := showLevelLabels
+    renderCache.showMurreyLabels := showMurreyLabels
+    renderCache.showFibonacciLabels := showFibonacciLabels
+    renderCache.showPivotLabels := showPivotLabels
+    renderCache.showPreviousDayLabels := showPreviousDayLabels
+    renderCache.showSwingLabels := showSwingLabels
+    renderCache.showRoundNumberLabels := showRoundNumberLabels
+    renderCache.showValueAreaLabels := showValueAreaLabels
+    renderCache.showVwapLabels := showVwapLabels
+    renderCache.showSessionLabels := showSessionLabels
+    renderCache.showSmcLabels := showSmcLabels
+    renderCache.showClusterLabels := showClusterLabels
+    renderCache.showCamarilla := showCamarilla
+    renderCache.showNakedPocs := showNakedPocs
+    renderCache.showVwapBands := showVwapBands
+    renderCache.showWeeklyVwap := showWeeklyVwap
+    renderCache.showInitialBalance := showInitialBalance
+    renderCache.showOvernightHL := showOvernightHL
+    renderCache.showWeeklyHL := showWeeklyHL
+    renderCache.showMonthlyHL := showMonthlyHL
+    renderCache.clusterUseApproachPenalty := clusterUseApproachPenalty
     renderCache.murreySessionMode := murreySessionMode
     renderCache.murreyLockToSession := murreyLockToSession
     renderCache.murreySourceTimeframeInput := murreySourceTimeframeInput

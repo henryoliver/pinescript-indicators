@@ -141,74 +141,21 @@ f_autoUsesNasdaq() =>
 f_resolveSymbols(string preset, string customUpSymbol, string customDownSymbol) =>
     string resolvedUpSymbol = "USI:UVOL"
     string resolvedDownSymbol = "USI:DVOL"
-    string resolvedLabel = "NYSE Breadth"
 
-    switch preset
-        PRESET_CUSTOM =>
-            resolvedUpSymbol := customUpSymbol
-            resolvedDownSymbol := customDownSymbol
-            resolvedLabel := "Custom"
-        PRESET_NDX =>
-            resolvedUpSymbol := "USI:UVOLQ"
-            resolvedDownSymbol := "USI:DVOLQ"
-            resolvedLabel := "NASDAQ Breadth"
-        PRESET_NDX_QQQ =>
-            resolvedUpSymbol := "USI:UVOLQ"
-            resolvedDownSymbol := "USI:DVOLQ"
-            resolvedLabel := "NASDAQ Breadth"
-        PRESET_NDX_FUTURES =>
-            resolvedUpSymbol := "USI:UVOLQ"
-            resolvedDownSymbol := "USI:DVOLQ"
-            resolvedLabel := "NASDAQ Breadth"
-        PRESET_IXIC =>
-            resolvedUpSymbol := "USI:UVOLQ"
-            resolvedDownSymbol := "USI:DVOLQ"
-            resolvedLabel := "NASDAQ Breadth"
-        PRESET_SPX =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_SPX_SPY =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_SPX_FUTURES =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_DJI =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_DJI_DIA =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_DJI_FUTURES =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_RUT =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_RUT_IWM =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        PRESET_RUT_FUTURES =>
-            resolvedUpSymbol := "USI:UVOL"
-            resolvedDownSymbol := "USI:DVOL"
-            resolvedLabel := preset + " Breadth"
-        =>
-            bool useNasdaqBreadth = f_autoUsesNasdaq()
-            resolvedUpSymbol := useNasdaqBreadth ? "USI:UVOLQ" : "USI:UVOL"
-            resolvedDownSymbol := useNasdaqBreadth ? "USI:DVOLQ" : "USI:DVOL"
-            resolvedLabel := useNasdaqBreadth ? "Auto: NASDAQ Breadth" : "Auto: NYSE Breadth"
+    if preset == PRESET_CUSTOM
+        resolvedUpSymbol := customUpSymbol
+        resolvedDownSymbol := customDownSymbol
+    else if preset == PRESET_NDX or preset == PRESET_NDX_QQQ or preset == PRESET_NDX_FUTURES or preset == PRESET_IXIC
+        resolvedUpSymbol := "USI:UVOLQ"
+        resolvedDownSymbol := "USI:DVOLQ"
+    else if preset == PRESET_AUTO
+        bool useNasdaqBreadth = f_autoUsesNasdaq()
+        resolvedUpSymbol := useNasdaqBreadth ? "USI:UVOLQ" : "USI:UVOL"
+        resolvedDownSymbol := useNasdaqBreadth ? "USI:DVOLQ" : "USI:DVOL"
 
-    [resolvedUpSymbol, resolvedDownSymbol, resolvedLabel]
+    [resolvedUpSymbol, resolvedDownSymbol]
 
-[upVolumeSymbol, downVolumeSymbol, sourceLabel] = f_resolveSymbols(
+[upVolumeSymbol, downVolumeSymbol] = f_resolveSymbols(
      preset = marketPreset,
      customUpSymbol = customUpVolumeSymbol,
      customDownSymbol = customDownVolumeSymbol
