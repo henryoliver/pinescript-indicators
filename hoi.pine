@@ -31,49 +31,50 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Market dropdown labels
-const string MARKET_SPX = "SPX"
-const string MARKET_IXIC = "IXIC"
-const string MARKET_DJI = "DJI"
-const string MARKET_RUT = "RUT"
-
-// Symbol Constants
-const string IDX_SPX = "SP:SPX"
-const string IDX_IXIC = "NASDAQ:IXIC"
-const string IDX_DJI = "DJ:DJI"
-const string IDX_RUT = "TVC:RUT"
-
-// SPX breadth (NYSE)
-const string ADV_SPX = "USI:ADVN.NY"
-const string DEC_SPX = "USI:DECL.NY"
-const string UNC_SPX = "USI:UNCH.NY"
-const string NH_SPX = "INDEX:HIGN"
-const string NL_SPX = "INDEX:LOWN"
-
-// IXIC breadth (NASDAQ)
-const string ADV_IXIC = "USI:ADVN.NQ"
-const string DEC_IXIC = "USI:DECL.NQ"
-const string UNC_IXIC = "USI:UNCH.NQ"
-const string NH_IXIC = "INDEX:NAHO"
-const string NL_IXIC = "INDEX:NALO"
-
-// DJI breadth (NYSE)
-const string ADV_DJI = "USI:ADVN.NY"
-const string DEC_DJI = "USI:DECL.NY"
-const string UNC_DJI = "USI:UNCH.NY"
-const string NH_DJI = "INDEX:HIGN"
-const string NL_DJI = "INDEX:LOWN"
-
-// RUT breadth (NYSE)
-const string ADV_RUT = "USI:ADVN.NY"
-const string DEC_RUT = "USI:DECL.NY"
-const string UNC_RUT = "USI:UNCH.NY"
-const string NH_RUT = "INDEX:HIGN"
-const string NL_RUT = "INDEX:LOWN"
-
 // 🎛️ USER INPUT SETTINGS
-// Market Selection
-string marketIndex = input.string(defval = MARKET_SPX, title = "Market/Index", options = [MARKET_SPX, MARKET_IXIC, MARKET_DJI, MARKET_RUT], tooltip = "Selects the index and matching breadth symbols used for the Hindenburg Omen calculation.", group = GROUP_MARKET)
+// Market Selection — unified dropdown across all market-aware indicators.
+// TradingView publishes USI breadth feeds with these suffixes only: .NY (NYSE),
+// .NQ (Nasdaq exchange), .DJ (Dow 30 — index-specific), .US (combined US).
+// No .SP or .RL suffix exists, so S&P 500 routes to NYSE breadth and Russell
+// 2000 routes to the US-wide composite as closest proxies.
+string market = input.string(
+     defval = "S&P 500",
+     title = "Market (Index)",
+     options = ["S&P 500", "NASDAQ 100", "Dow Jones", "Russell 2000"],
+     tooltip = "S&P 500 → NYSE breadth (.NY). NASDAQ 100 → Nasdaq exchange-wide (.NQ). Dow Jones → exact Dow 30 breadth (.DJ). Russell 2000 → US-wide composite (.US). New highs/lows route to NYSE-wide (HIGN/LOWN) for all except NASDAQ 100 which uses NAHO/NALO.",
+     group = GROUP_MARKET
+ )
+
+string indexSymbol = switch market
+    "S&P 500"      => "SP:SPX"
+    "NASDAQ 100"   => "NASDAQ:NDX"
+    "Dow Jones"    => "DJ:DJI"
+    "Russell 2000" => "TVC:RUT"
+    => "SP:SPX"
+
+string advSymbol = switch market
+    "S&P 500"      => "USI:ADVN.NY"
+    "NASDAQ 100"   => "USI:ADVN.NQ"
+    "Dow Jones"    => "USI:ADVN.DJ"
+    "Russell 2000" => "USI:ADVN.US"
+    => "USI:ADVN.NY"
+
+string decSymbol = switch market
+    "S&P 500"      => "USI:DECL.NY"
+    "NASDAQ 100"   => "USI:DECL.NQ"
+    "Dow Jones"    => "USI:DECL.DJ"
+    "Russell 2000" => "USI:DECL.US"
+    => "USI:DECL.NY"
+
+string uncSymbol = switch market
+    "S&P 500"      => "USI:UNCH.NY"
+    "NASDAQ 100"   => "USI:UNCH.NQ"
+    "Dow Jones"    => "USI:UNCH.DJ"
+    "Russell 2000" => "USI:UNCH.US"
+    => "USI:UNCH.NY"
+
+string newHighSymbol = market == "NASDAQ 100" ? "INDEX:NAHO" : "INDEX:HIGN"
+string newLowSymbol = market == "NASDAQ 100" ? "INDEX:NALO" : "INDEX:LOWN"
 
 // Conditions
 int posTrendLookback = input.int(defval = 50, title = "Positive Trend Lookback (Days)",
@@ -99,39 +100,6 @@ color backgroundColor = input.color(defval = color.new(color = NORD11, transp = 
      tooltip = "Background highlight color shown while the signal window is active.", group = GROUP_DISPLAY)
 
 // 🧮 DATA & CALCULATIONS
-// Resolve symbols based on market selection
-string indexSymbol = IDX_SPX
-string advSymbol = ADV_SPX
-string decSymbol = DEC_SPX
-string uncSymbol = UNC_SPX
-string newHighSymbol = NH_SPX
-string newLowSymbol = NL_SPX
-
-if marketIndex == MARKET_IXIC
-    // NASDAQ breadth and index
-    indexSymbol := IDX_IXIC
-    advSymbol := ADV_IXIC
-    decSymbol := DEC_IXIC
-    uncSymbol := UNC_IXIC
-    newHighSymbol := NH_IXIC
-    newLowSymbol := NL_IXIC
-else if marketIndex == MARKET_DJI
-    // Dow Jones uses NYSE breadth
-    indexSymbol := IDX_DJI
-    advSymbol := ADV_DJI
-    decSymbol := DEC_DJI
-    uncSymbol := UNC_DJI
-    newHighSymbol := NH_DJI
-    newLowSymbol := NL_DJI
-else if marketIndex == MARKET_RUT
-    // Russell 2000 uses NYSE breadth
-    indexSymbol := IDX_RUT
-    advSymbol := ADV_RUT
-    decSymbol := DEC_RUT
-    uncSymbol := UNC_RUT
-    newHighSymbol := NH_RUT
-    newLowSymbol := NL_RUT
-
 // Get breadth and index data (daily)
 float advIssues = request.security(symbol = advSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)

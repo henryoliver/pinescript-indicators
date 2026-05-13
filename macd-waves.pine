@@ -42,6 +42,11 @@ const string TREND_NONE = "none"
 
 const float RADIANS_TO_DEGREES = 180 / math.pi
 
+// 🧩 TYPE DEFINITIONS
+enum MAType
+    SMA = "SMA"
+    EMA = "EMA"
+
 // 🎛️ USER INPUT SETTINGS
 
 // Source
@@ -53,8 +58,8 @@ slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = G
 signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = GROUP_MACD)
 
 // MA Types
-oscillatorMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["SMA", "EMA"], group = GROUP_MACD)
-signalMAType = input.string(defval = "EMA", title = "Signal Line MA Type", options = ["SMA", "EMA"], group = GROUP_MACD)
+oscillatorMAType = input.enum(defval = MAType.EMA, title = "Oscillator MA Type", group = GROUP_MACD)
+signalMAType = input.enum(defval = MAType.EMA, title = "Signal Line MA Type", group = GROUP_MACD)
 
 // Visual Settings
 showHistogram = input.bool(defval = false, title = "Show Histogram", group = GROUP_DISPLAY)
@@ -94,14 +99,14 @@ waveLabelSizeConst = waveLabelSize
 
 // 🧮 CALCULATIONS
 // Calculate fast and slow moving averages
-fastMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = fastLength) : ta.ema(source = src, length = fastLength)
-slowMA = oscillatorMAType == "SMA" ? ta.sma(source = src, length = slowLength) : ta.ema(source = src, length = slowLength)
+fastMA = oscillatorMAType == MAType.SMA ? ta.sma(source = src, length = fastLength) : ta.ema(source = src, length = fastLength)
+slowMA = oscillatorMAType == MAType.SMA ? ta.sma(source = src, length = slowLength) : ta.ema(source = src, length = slowLength)
 
 // Calculate MACD line
 macd = fastMA - slowMA
 
 // Calculate signal line (DAD)
-signal = signalMAType == "SMA" ? ta.sma(source = macd, length = signalLength) : ta.ema(source = macd, length = signalLength)
+signal = signalMAType == MAType.SMA ? ta.sma(source = macd, length = signalLength) : ta.ema(source = macd, length = signalLength)
 
 // Calculate histogram
 hist = macd - signal

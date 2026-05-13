@@ -35,6 +35,51 @@ const color NORD15 = #B48EAD
 // 🧩 TYPE DEFINITIONS
 // Custom Pine types used by the render engine and cross-section level exports.
 // ═════════════════════════════════════════════════════════════════════════════
+enum PivotResolution
+    HOURS_4   = "4 Hours"
+    HOURS_3   = "3 Hours"
+    HOURS_2   = "2 Hours"
+    HOUR_1    = "1 Hour"
+    DAY_1     = "1 Day"
+    DAYS_3    = "3 Days"
+    DAYS_9    = "9 Days"
+    WEEK_1    = "1 Week"
+    MONTH_1   = "1 Month"
+    MONTHS_3  = "3 Months"
+    MONTHS_6  = "6 Months"
+    MONTHS_12 = "12 Months"
+
+enum MurreySessionMode
+    FULL    = "Full Session"
+    REGULAR = "Regular Session"
+
+enum MurreyCalcTimeframe
+    CHART     = "Chart"
+    MIN_5     = "5 Minutes"
+    MIN_15    = "15 Minutes"
+    MIN_30    = "30 Minutes"
+    HOUR_1    = "1 Hour"
+    HOURS_4   = "4 Hours"
+    DAY_1     = "1 Day"
+
+enum MurreyClusterDetail
+    KEY  = "Key"
+    CORE = "Core"
+    FULL = "Full"
+
+enum SwingSourceMode
+    BODIES = "Bodies"
+    WICKS  = "Wicks"
+
+enum DistanceMode
+    TICKS   = "Ticks"
+    ATR     = "ATR"
+    PERCENT = "Percent"
+
+enum ToleranceMode
+    PERCENT = "Percent"
+    ATR     = "ATR"
+
 type Level
     float price
     int weight
@@ -134,10 +179,10 @@ type RenderCache
     bool showWeeklyHL
     bool showMonthlyHL
     bool clusterUseApproachPenalty
-    string murreySessionMode
+    MurreySessionMode murreySessionMode
     bool murreyLockToSession
-    string murreySourceTimeframeInput
-    string murreyClusterDetail
+    MurreyCalcTimeframe murreySourceTimeframeInput
+    MurreyClusterDetail murreyClusterDetail
     bool showPivotMidLevels
     bool showPreviousDayHighLevel
     bool showPreviousDayLowLevel
@@ -205,13 +250,20 @@ bool sessionLevelsIsActive = showSessionLevels or showCluster
 bool smcIsActive = showSmc or showCluster
 bool anyInnerIndicatorIsActive = fibonacciIsActive or pivotsIsActive or previousDayIsActive or roundNumbersIsActive or swingsIsActive or murreyIsActive or valueAreaIsActive or vwapIsActive or sessionLevelsIsActive or smcIsActive
 bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
+bool confirmedBar = barstate.isconfirmed
+bool confirmedNewSession = confirmedBar and isNewSession
 bool sharedInRegularSession = anyInnerIndicatorIsActive ? not na(time(timeframe = timeframe.period, session = session.regular)) : false
 bool sharedRegularSessionJustStarted = anyInnerIndicatorIsActive ? sharedInRegularSession and not sharedInRegularSession[1] : false
 string sharedRegularSymbol = ticker.modify(syminfo.tickerid, session = session.regular)
 string sharedSessionFullSymbol = syminfo.tickerid
-float sharedAtrValue = anyInnerIndicatorIsActive ? ta.atr(length = sharedAtrLength) : na
+float sharedAtrSeries = anyInnerIndicatorIsActive ? ta.atr(length = sharedAtrLength) : na
+var float sharedAtrValue = na
+if anyInnerIndicatorIsActive and confirmedBar
+    sharedAtrValue := sharedAtrSeries
+else if not anyInnerIndicatorIsActive
+    sharedAtrValue := na
 var int currentSessionStartBar = bar_index
-if isNewSession
+if confirmedNewSession
     currentSessionStartBar := bar_index
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -311,23 +363,23 @@ int fibAnchorBar = fibHasAnchors ? math.max(fibPreviousPivotBar, fibLastPivotBar
 const string GROUP_PIVOTS = "2. 📍 Floor Pivots"
 
 bool showPivotLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows pivot labels when the global labels toggle is also enabled.", group = GROUP_PIVOTS)
-string pivotResolutionInput = input.string(defval = "1 Day", title = "Resolution", options = ["4 Hours", "3 Hours", "2 Hours", "1 Hour", "1 Day", "3 Days", "9 Days", "1 Week", "1 Month", "3 Months", "6 Months", "12 Months"], tooltip = "Higher timeframe used to calculate the floor pivot set.", group = GROUP_PIVOTS)
+PivotResolution pivotResolutionInput = input.enum(defval = PivotResolution.DAY_1, title = "Resolution", tooltip = "Higher timeframe used to calculate the floor pivot set.", group = GROUP_PIVOTS)
 bool showPivotMidLevels = input.bool(defval = true, title = "Show Mid-Pivots", tooltip = "Adds midpoint pivot levels between PP/R1, R1/R2, PP/S1, and S1/S2. These are secondary references and work best as low-weight cluster contributors.", group = GROUP_PIVOTS)
 bool showCamarilla = input.bool(defval = false, title = "Show Camarilla Pivots", tooltip = "Adds Camarilla H3/H4/L3/L4 levels (Slade formula). Popular intraday alternative to floor pivots, especially as breakout/reversal levels.", group = GROUP_PIVOTS)
 
 string pivotResolution = switch pivotResolutionInput
-    "4 Hours" => "240"
-    "3 Hours" => "180"
-    "2 Hours" => "120"
-    "1 Hour" => "60"
-    "1 Day" => "D"
-    "3 Days" => "3D"
-    "9 Days" => "9D"
-    "1 Week" => "W"
-    "1 Month" => "M"
-    "3 Months" => "3M"
-    "6 Months" => "6M"
-    "12 Months" => "12M"
+    PivotResolution.HOURS_4   => "240"
+    PivotResolution.HOURS_3   => "180"
+    PivotResolution.HOURS_2   => "120"
+    PivotResolution.HOUR_1    => "60"
+    PivotResolution.DAY_1     => "D"
+    PivotResolution.DAYS_3    => "3D"
+    PivotResolution.DAYS_9    => "9D"
+    PivotResolution.WEEK_1    => "W"
+    PivotResolution.MONTH_1   => "M"
+    PivotResolution.MONTHS_3  => "3M"
+    PivotResolution.MONTHS_6  => "6M"
+    PivotResolution.MONTHS_12 => "12M"
     => "D"
 float prevDayHigh = na
 float prevDayLow = na
@@ -421,10 +473,19 @@ f_roundAutoStep(float priceRange) =>
     math.max(nz(source = autoStep, replacement = syminfo.mintick * 100), syminfo.mintick * 100)
 
 float roundVisibleRange = roundNumbersIsActive ? ta.highest(source = high, length = ROUND_RANGE_LOOKBACK) - ta.lowest(source = low, length = ROUND_RANGE_LOOKBACK) : na
-float roundMajorSpacing = roundNumbersIsActive ? f_roundAutoStep(priceRange = roundVisibleRange) : na
-float roundMinorSpacing = roundNumbersIsActive ? roundMajorSpacing / 2.0 : na
-float roundQuarterSpacing = roundNumbersIsActive ? roundMajorSpacing / 4.0 : na
-float nearestMajorBase = roundNumbersIsActive and not na(roundMajorSpacing) ? math.floor(number = close / roundMajorSpacing) * roundMajorSpacing : na
+float roundMajorSpacingLive = roundNumbersIsActive ? f_roundAutoStep(priceRange = roundVisibleRange) : na
+float roundMinorSpacingLive = roundNumbersIsActive ? roundMajorSpacingLive / 2.0 : na
+float roundQuarterSpacingLive = roundNumbersIsActive ? roundMajorSpacingLive / 4.0 : na
+float nearestMajorBaseLive = roundNumbersIsActive and not na(roundMajorSpacingLive) ? math.floor(number = close / roundMajorSpacingLive) * roundMajorSpacingLive : na
+var float roundMajorSpacing = na
+var float roundMinorSpacing = na
+var float roundQuarterSpacing = na
+var float nearestMajorBase = na
+if confirmedBar
+    roundMajorSpacing := roundMajorSpacingLive
+    roundMinorSpacing := roundMinorSpacingLive
+    roundQuarterSpacing := roundQuarterSpacingLive
+    nearestMajorBase := nearestMajorBaseLive
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 MAJOR SWINGS
@@ -433,11 +494,11 @@ float nearestMajorBase = roundNumbersIsActive and not na(roundMajorSpacing) ? ma
 const string GROUP_SWINGS = "5. 🌊 Major Swings"
 
 bool showSwingLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows swing labels when the global labels toggle is also enabled.", group = GROUP_SWINGS)
-int swingStrength = input.int(defval = 5, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low.", group = GROUP_SWINGS)
-string swingSourceMode = input.string(defval = "Bodies", title = "Swing Source", options = ["Bodies", "Wicks"], tooltip = "Bodies uses candle bodies for cleaner shelves. Wicks uses full highs and lows for more reactive liquidity levels.", group = GROUP_SWINGS)
-int swingLevelsPerSide = input.int(defval = 5, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing highs and swing lows to keep visible after merging. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
+int swingStrength = input.int(defval = 11, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low.", group = GROUP_SWINGS)
+SwingSourceMode swingSourceMode = input.enum(defval = SwingSourceMode.BODIES, title = "Swing Source", tooltip = "Bodies uses candle bodies for cleaner shelves. Wicks uses full highs and lows for more reactive liquidity levels.", group = GROUP_SWINGS)
+int swingLevelsPerSide = input.int(defval = 2, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing highs and swing lows to keep visible after merging. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
 bool swingPrioritizeUnbroken = input.bool(defval = true, title = "Prioritize Unbroken Levels", tooltip = "When on, untouched swing levels are kept ahead of already-broken levels when the per-side limit is reached.", group = GROUP_SWINGS)
-string swingMergeMode = input.string(defval = "ATR", title = "Merge Distance Mode", options = ["Ticks", "ATR", "Percent"], tooltip = "How nearby same-side swings are merged before plotting.", group = GROUP_SWINGS)
+DistanceMode swingMergeMode = input.enum(defval = DistanceMode.ATR, title = "Merge Distance Mode", tooltip = "How nearby same-side swings are merged before plotting.", group = GROUP_SWINGS)
 int swingMergeTicks = input.int(defval = 250, title = "Swing Merge Distance (Ticks)", minval = 10, maxval = 500, tooltip = "Merges nearby same-side swing levels at render time to reduce duplicate shelves when Merge Distance Mode is Ticks.", group = GROUP_SWINGS)
 float swingMergeAtrMult = input.float(defval = 0.35, title = "Merge Distance ATR Multiplier", minval = 0.05, maxval = 5.0, step = 0.05, tooltip = "Merges nearby same-side swing levels using an ATR-based distance when Merge Distance Mode is ATR.", group = GROUP_SWINGS)
 float swingMergePercent = input.float(defval = 0.20, title = "Merge Distance Percent", minval = 0.01, maxval = 5.0, step = 0.01, tooltip = "Merges nearby same-side swing levels using a percent-of-price distance when Merge Distance Mode is Percent.", group = GROUP_SWINGS)
@@ -453,9 +514,9 @@ float swingVolumeAverage = ta.sma(source = volume, length = 20)
 float currentBodyHigh = math.max(open, close)
 float currentBodyLow = math.min(open, close)
 
-float swingExportBodyZoneFactor = swingSourceMode == "Bodies" ? 0.04 : 0.06
-float swingHighSource = swingsIsActive ? swingSourceMode == "Wicks" ? high : currentBodyHigh : na
-float swingLowSource = swingsIsActive ? swingSourceMode == "Wicks" ? low : currentBodyLow : na
+float swingExportBodyZoneFactor = swingSourceMode == SwingSourceMode.BODIES ? 0.04 : 0.06
+float swingHighSource = swingsIsActive ? swingSourceMode == SwingSourceMode.WICKS ? high : currentBodyHigh : na
+float swingLowSource = swingsIsActive ? swingSourceMode == SwingSourceMode.WICKS ? low : currentBodyLow : na
 float confirmedSwingHigh = swingsIsActive ? ta.pivothigh(source = swingHighSource, leftbars = swingStrength, rightbars = swingStrength) : na
 float confirmedSwingLow = swingsIsActive ? ta.pivotlow(source = swingLowSource, leftbars = swingStrength, rightbars = swingStrength) : na
 
@@ -541,92 +602,113 @@ float murreyFrameMultiplier = input.float(defval = 2.0, title = "Frame Multiplie
 bool murreyIgnoreWicks = input.bool(defval = true, title = "Ignore Wicks", tooltip = "Uses open and close extremes instead of raw highs and lows to reduce wick noise in the Murrey frame.", group = GROUP_MURREY)
 int murreyVolatilityLookback = input.int(defval = 100, title = "Volatility Baseline Lookback", minval = 20, maxval = 500, tooltip = "Lookback used to compare current ATR regime against its baseline for adaptive Murrey sizing.", group = GROUP_MURREY)
 float murreyAdaptiveStrength = input.float(defval = 2.0, title = "ATR Adaptivity", minval = 0.0, maxval = 4.0, step = 0.1, tooltip = "Controls how strongly Murrey frame size expands or contracts with volatility.", group = GROUP_MURREY)
-string murreySessionMode = input.string(defval = "Full Session", title = "Session Source", options = ["Full Session", "Regular Session"], tooltip = "Full Session uses the instrument's complete TradingView session. Regular Session uses the exchange regular session only. For index futures intraday, Full Session often works better; for equities, Regular Session can produce cleaner day-session Murrey levels.", group = GROUP_MURREY)
-string murreySourceTimeframeInput = input.string(defval = "Chart", title = "Calculation Timeframe", options = ["Chart", "5 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "4 Hours", "1 Day"], tooltip = "Chart uses the current timeframe. For intraday execution charts, a slightly higher Murrey source timeframe usually produces more stable and tradable levels.", group = GROUP_MURREY)
+MurreySessionMode murreySessionMode = input.enum(defval = MurreySessionMode.FULL, title = "Session Source", tooltip = "Full Session uses the instrument's complete TradingView session. Regular Session uses the exchange regular session only. For index futures intraday, Full Session often works better; for equities, Regular Session can produce cleaner day-session Murrey levels.", group = GROUP_MURREY)
+MurreyCalcTimeframe murreySourceTimeframeInput = input.enum(defval = MurreyCalcTimeframe.CHART, title = "Calculation Timeframe", tooltip = "Chart uses the current timeframe. For intraday execution charts, a slightly higher Murrey source timeframe usually produces more stable and tradable levels.", group = GROUP_MURREY)
 bool murreyLockToSession = input.bool(defval = true, title = "Lock Levels For Session", tooltip = "Freezes the Murrey octave after the first bar of each trading day. This is usually better for daytrading because the support and resistance map stays stable during the session.", group = GROUP_MURREY)
-string murreyClusterDetail = input.string(defval = "Core", title = "Cluster Detail", options = ["Key", "Core", "Full"], tooltip = "Key uses only 0/8, 4/8, and 8/8 in clusters. Core adds 2/8 and 6/8. Full includes all Murrey levels. Core is usually the best intraday default.", group = GROUP_MURREY)
-string murreySecuritySymbol = murreySessionMode == "Regular Session" ? sharedRegularSymbol : sharedSessionFullSymbol
+MurreyClusterDetail murreyClusterDetail = input.enum(defval = MurreyClusterDetail.CORE, title = "Cluster Detail", tooltip = "Key uses only 0/8, 4/8, and 8/8 in clusters. Core adds 2/8 and 6/8. Full includes all Murrey levels. Core is usually the best intraday default.", group = GROUP_MURREY)
+string murreySecuritySymbol = murreySessionMode == MurreySessionMode.REGULAR ? sharedRegularSymbol : sharedSessionFullSymbol
 
 string murreySourceTimeframe = switch murreySourceTimeframeInput
-    "5 Minutes" => "5"
-    "15 Minutes" => "15"
-    "30 Minutes" => "30"
-    "1 Hour" => "60"
-    "4 Hours" => "240"
-    "1 Day" => "D"
+    MurreyCalcTimeframe.MIN_5   => "5"
+    MurreyCalcTimeframe.MIN_15  => "15"
+    MurreyCalcTimeframe.MIN_30  => "30"
+    MurreyCalcTimeframe.HOUR_1  => "60"
+    MurreyCalcTimeframe.HOURS_4 => "240"
+    MurreyCalcTimeframe.DAY_1   => "D"
     => ""
 
-float murreyCalcClose = close
-float murreyCalcAtrValue = sharedAtrValue
-float murreyAtrBaseline = murreyIsActive ? ta.sma(source = sharedAtrValue / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback) : na
-if murreyIsActive and str.length(string = murreySourceTimeframe) > 0
-    [requestedMurreyClose, requestedMurreyAtrValue, requestedMurreyAtrBaseline] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [close, ta.atr(length = sharedAtrLength), ta.sma(source = ta.atr(length = sharedAtrLength) / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
-    murreyCalcClose := requestedMurreyClose
-    murreyCalcAtrValue := requestedMurreyAtrValue
-    murreyAtrBaseline := requestedMurreyAtrBaseline
-float murreyAtrPercent = murreyIsActive and math.abs(number = murreyCalcClose) > 0 ? murreyCalcAtrValue / math.abs(number = murreyCalcClose) : 0.0
-float murreyAdaptiveRatioRaw = murreyIsActive and murreyAtrBaseline > 0 ? murreyAtrPercent / murreyAtrBaseline : 1.0
-float murreyAdaptiveRatio = murreyIsActive ? math.max(0.75, math.min(1.75, 1.0 + (murreyAdaptiveRatioRaw - 1.0) * murreyAdaptiveStrength)) : na
-int murreyLookbackRaw = murreyIsActive ? int(math.round(number = murreyBaseFrame * murreyFrameMultiplier * murreyAdaptiveRatio)) : na
-int murreyLookback = murreyIsActive ? math.max(8, math.min(256, int(math.round(number = murreyLookbackRaw / 8.0) * 8))) : na
-
-float murreyUpperSource = murreyIsActive ? murreyIgnoreWicks ? math.max(open, close) : high : na
-float murreyLowerSource = murreyIsActive ? murreyIgnoreWicks ? math.min(open, close) : low : na
-float murreyWindowHigh = murreyIsActive ? ta.highest(source = murreyUpperSource, length = murreyLookback) : na
-float murreyWindowLow = murreyIsActive ? ta.lowest(source = murreyLowerSource, length = murreyLookback) : na
-if murreyIsActive and str.length(string = murreySourceTimeframe) > 0
-    [requestedMurreyWindowHigh, requestedMurreyWindowLow] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [ta.highest(source = murreyIgnoreWicks ? math.max(open, close) : high, length = murreyLookback), ta.lowest(source = murreyIgnoreWicks ? math.min(open, close) : low, length = murreyLookback)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
-    murreyWindowHigh := requestedMurreyWindowHigh
-    murreyWindowLow := requestedMurreyWindowLow
-float murreyDistance = murreyIsActive ? murreyWindowHigh - murreyWindowLow : na
-float murreyTempHigh = murreyIsActive ? murreyWindowLow < 0 ? 0 - murreyWindowLow : murreyWindowHigh : na
-float murreyTempLow = murreyIsActive ? murreyWindowLow < 0 ? 0 - murreyWindowLow - murreyDistance : murreyWindowLow : na
 var float murreyLogTen = math.log(number = 10.0)
 var float murreyLogEight = math.log(number = 8.0)
 var float murreyLogTwo = math.log(number = 2.0)
-float murreySfVar = murreyIsActive and murreyTempHigh > 0 ? math.log(number = 0.4 * murreyTempHigh) / murreyLogTen - math.floor(number = math.log(number = 0.4 * murreyTempHigh) / murreyLogTen) : 0.0
-float murreySr = murreyIsActive ? murreyTempHigh > 25 ? murreySfVar > 0 ? math.exp(number = murreyLogTen * (math.floor(number = math.log(number = 0.4 * murreyTempHigh) / murreyLogTen) + 1.0)) : math.exp(number = murreyLogTen * math.floor(number = math.log(number = 0.4 * murreyTempHigh) / murreyLogTen)) : 100.0 * math.exp(number = murreyLogEight * math.floor(number = math.log(number = 0.005 * math.max(murreyTempHigh, syminfo.mintick)) / murreyLogEight)) : na
-float murreyRangeSafe = murreyIsActive ? math.max(murreyTempHigh - murreyTempLow, syminfo.mintick) : na
-float murreyNVar1 = murreyIsActive ? math.log(number = murreySr / murreyRangeSafe) / murreyLogEight : na
-float murreyNVar2 = murreyIsActive ? murreyNVar1 - math.floor(number = murreyNVar1) : na
-float murreyN = murreyIsActive ? murreyNVar1 <= 0 ? 0 : murreyNVar2 == 0 ? math.floor(number = murreyNVar1) : math.floor(number = murreyNVar1) + 1 : na
-float murreySi = murreyIsActive ? murreySr * math.exp(number = -murreyN * murreyLogEight) : na
-float murreyM = murreyIsActive ? math.floor(number = 1.0 / murreyLogTwo * math.log(number = murreyRangeSafe / murreySi) + 0.0000001) : na
-float murreyI = murreyIsActive ? math.round(number = (murreyTempHigh + murreyTempLow) * 0.5 / (murreySi * math.exp(number = (murreyM - 1.0) * murreyLogTwo))) : na
-float murreyBot = murreyIsActive ? (murreyI - 1.0) * murreySi * math.exp(number = (murreyM - 1.0) * murreyLogTwo) : na
-float murreyTop = murreyIsActive ? (murreyI + 1.0) * murreySi * math.exp(number = (murreyM - 1.0) * murreyLogTwo) : na
-bool murreyDoShift = murreyIsActive and (murreyTempHigh - murreyTop > 0.25 * (murreyTop - murreyBot) or murreyBot - murreyTempLow > 0.25 * (murreyTop - murreyBot))
-float murreyEr = murreyIsActive ? murreyDoShift ? 1.0 : 0.0 : na
-float murreyMm = murreyIsActive ? murreyEr == 0 ? murreyM : murreyEr == 1 and murreyM < 2 ? murreyM + 1.0 : 0.0 : na
-float murreyNn = murreyIsActive ? murreyEr == 0 ? murreyN : murreyEr == 1 and murreyM < 2 ? murreyN : murreyN - 1.0 : na
-float murreyFinalSi = murreyIsActive ? murreyEr == 1 ? murreySr * math.exp(number = -murreyNn * murreyLogEight) : murreySi : na
-float murreyFinalI = murreyIsActive ? murreyEr == 1 ? math.round(number = (murreyTempHigh + murreyTempLow) * 0.5 / (murreyFinalSi * math.exp(number = (murreyMm - 1.0) * murreyLogTwo))) : murreyI : na
-float murreyFinalBot = murreyIsActive ? murreyEr == 1 ? (murreyFinalI - 1.0) * murreyFinalSi * math.exp(number = (murreyMm - 1.0) * murreyLogTwo) : murreyBot : na
-float murreyFinalTop = murreyIsActive ? murreyEr == 1 ? (murreyFinalI + 1.0) * murreyFinalSi * math.exp(number = (murreyMm - 1.0) * murreyLogTwo) : murreyTop : na
-float murreyRollingStep = murreyIsActive ? (murreyFinalTop - murreyFinalBot) / 8.0 : na
-float murreyRollingLower = murreyIsActive ? murreyFinalBot : na
-float murreyRollingUpper = murreyIsActive ? murreyFinalTop : na
 var float murreySessionStep = na
 var float murreySessionLower = na
 var float murreySessionUpper = na
-if murreyIsActive and not na(murreyRollingStep) and (na(murreySessionStep) or isNewSession)
-    murreySessionStep := murreyRollingStep
-    murreySessionLower := murreyRollingLower
-    murreySessionUpper := murreyRollingUpper
-float murreyStep = na
-float murreyLower = na
-float murreyUpper = na
-if murreyIsActive
-    murreyStep := murreyLockToSession and not na(murreySessionStep) ? murreySessionStep : murreyRollingStep
-    murreyLower := murreyLockToSession and not na(murreySessionLower) ? murreySessionLower : murreyRollingLower
-    murreyUpper := murreyLockToSession and not na(murreySessionUpper) ? murreySessionUpper : murreyRollingUpper
-float murreyExportOctaveRange = murreyIsActive ? murreyUpper - murreyLower : na
-float murreyMinus38 = murreyIsActive ? murreyLower - 3.0 * murreyStep : na
-float murreyMinus28 = murreyIsActive ? murreyLower - 2.0 * murreyStep : na
-float murreyMinus18 = murreyIsActive ? murreyLower - 1.0 * murreyStep : na
-float murreyPlus18 = murreyIsActive ? murreyUpper + 1.0 * murreyStep : na
-float murreyPlus28 = murreyIsActive ? murreyUpper + 2.0 * murreyStep : na
-float murreyPlus38 = murreyIsActive ? murreyUpper + 3.0 * murreyStep : na
+float murreyCalcCloseLive = close
+float murreyCalcAtrValueLive = sharedAtrValue
+float murreyAtrBaselineLive = murreyIsActive ? ta.sma(source = sharedAtrValue / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback) : na
+if murreyIsActive and str.length(string = murreySourceTimeframe) > 0
+    [requestedMurreyClose, requestedMurreyAtrValue, requestedMurreyAtrBaseline] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [close, ta.atr(length = sharedAtrLength), ta.sma(source = ta.atr(length = sharedAtrLength) / math.max(math.abs(number = close), syminfo.mintick), length = murreyVolatilityLookback)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    murreyCalcCloseLive := requestedMurreyClose
+    murreyCalcAtrValueLive := requestedMurreyAtrValue
+    murreyAtrBaselineLive := requestedMurreyAtrBaseline
+float murreyAtrPercentLive = murreyIsActive and math.abs(number = murreyCalcCloseLive) > 0 ? murreyCalcAtrValueLive / math.abs(number = murreyCalcCloseLive) : 0.0
+float murreyAdaptiveRatioRawLive = murreyIsActive and murreyAtrBaselineLive > 0 ? murreyAtrPercentLive / murreyAtrBaselineLive : 1.0
+float murreyAdaptiveRatioLive = murreyIsActive ? math.max(0.75, math.min(1.75, 1.0 + (murreyAdaptiveRatioRawLive - 1.0) * murreyAdaptiveStrength)) : na
+int murreyLookbackRawLive = murreyIsActive ? int(math.round(number = murreyBaseFrame * murreyFrameMultiplier * murreyAdaptiveRatioLive)) : na
+int murreyLookbackLive = murreyIsActive ? math.max(8, math.min(256, int(math.round(number = murreyLookbackRawLive / 8.0) * 8))) : na
+float murreyUpperSourceLive = murreyIsActive ? murreyIgnoreWicks ? math.max(open, close) : high : na
+float murreyLowerSourceLive = murreyIsActive ? murreyIgnoreWicks ? math.min(open, close) : low : na
+float murreyWindowHighLive = murreyIsActive ? ta.highest(source = murreyUpperSourceLive, length = murreyLookbackLive) : na
+float murreyWindowLowLive = murreyIsActive ? ta.lowest(source = murreyLowerSourceLive, length = murreyLookbackLive) : na
+if murreyIsActive and str.length(string = murreySourceTimeframe) > 0
+    [requestedMurreyWindowHigh, requestedMurreyWindowLow] = request.security(symbol = murreySecuritySymbol, timeframe = murreySourceTimeframe, expression = [ta.highest(source = murreyIgnoreWicks ? math.max(open, close) : high, length = murreyLookbackLive), ta.lowest(source = murreyIgnoreWicks ? math.min(open, close) : low, length = murreyLookbackLive)], lookahead = barmerge.lookahead_off, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    murreyWindowHighLive := requestedMurreyWindowHigh
+    murreyWindowLowLive := requestedMurreyWindowLow
+float murreyDistanceLive = murreyIsActive ? murreyWindowHighLive - murreyWindowLowLive : na
+float murreyTempHighLive = murreyIsActive ? murreyWindowLowLive < 0 ? 0 - murreyWindowLowLive : murreyWindowHighLive : na
+float murreyTempLowLive = murreyIsActive ? murreyWindowLowLive < 0 ? 0 - murreyWindowLowLive - murreyDistanceLive : murreyWindowLowLive : na
+float murreySfVarLive = murreyIsActive and murreyTempHighLive > 0 ? math.log(number = 0.4 * murreyTempHighLive) / murreyLogTen - math.floor(number = math.log(number = 0.4 * murreyTempHighLive) / murreyLogTen) : 0.0
+float murreySrLive = murreyIsActive ? murreyTempHighLive > 25 ? murreySfVarLive > 0 ? math.exp(number = murreyLogTen * (math.floor(number = math.log(number = 0.4 * murreyTempHighLive) / murreyLogTen) + 1.0)) : math.exp(number = murreyLogTen * math.floor(number = math.log(number = 0.4 * murreyTempHighLive) / murreyLogTen)) : 100.0 * math.exp(number = murreyLogEight * math.floor(number = math.log(number = 0.005 * math.max(murreyTempHighLive, syminfo.mintick)) / murreyLogEight)) : na
+float murreyRangeSafeLive = murreyIsActive ? math.max(murreyTempHighLive - murreyTempLowLive, syminfo.mintick) : na
+float murreyNVar1Live = murreyIsActive ? math.log(number = murreySrLive / murreyRangeSafeLive) / murreyLogEight : na
+float murreyNVar2Live = murreyIsActive ? murreyNVar1Live - math.floor(number = murreyNVar1Live) : na
+float murreyNLive = murreyIsActive ? murreyNVar1Live <= 0 ? 0 : murreyNVar2Live == 0 ? math.floor(number = murreyNVar1Live) : math.floor(number = murreyNVar1Live) + 1 : na
+float murreySiLive = murreyIsActive ? murreySrLive * math.exp(number = -murreyNLive * murreyLogEight) : na
+float murreyMLive = murreyIsActive ? math.floor(number = 1.0 / murreyLogTwo * math.log(number = murreyRangeSafeLive / murreySiLive) + 0.0000001) : na
+float murreyILive = murreyIsActive ? math.round(number = (murreyTempHighLive + murreyTempLowLive) * 0.5 / (murreySiLive * math.exp(number = (murreyMLive - 1.0) * murreyLogTwo))) : na
+float murreyBotLive = murreyIsActive ? (murreyILive - 1.0) * murreySiLive * math.exp(number = (murreyMLive - 1.0) * murreyLogTwo) : na
+float murreyTopLive = murreyIsActive ? (murreyILive + 1.0) * murreySiLive * math.exp(number = (murreyMLive - 1.0) * murreyLogTwo) : na
+bool murreyDoShiftLive = murreyIsActive and (murreyTempHighLive - murreyTopLive > 0.25 * (murreyTopLive - murreyBotLive) or murreyBotLive - murreyTempLowLive > 0.25 * (murreyTopLive - murreyBotLive))
+float murreyErLive = murreyIsActive ? murreyDoShiftLive ? 1.0 : 0.0 : na
+float murreyMmLive = murreyIsActive ? murreyErLive == 0 ? murreyMLive : murreyErLive == 1 and murreyMLive < 2 ? murreyMLive + 1.0 : 0.0 : na
+float murreyNnLive = murreyIsActive ? murreyErLive == 0 ? murreyNLive : murreyErLive == 1 and murreyMLive < 2 ? murreyNLive : murreyNLive - 1.0 : na
+float murreyFinalSiLive = murreyIsActive ? murreyErLive == 1 ? murreySrLive * math.exp(number = -murreyNnLive * murreyLogEight) : murreySiLive : na
+float murreyFinalILive = murreyIsActive ? murreyErLive == 1 ? math.round(number = (murreyTempHighLive + murreyTempLowLive) * 0.5 / (murreyFinalSiLive * math.exp(number = (murreyMmLive - 1.0) * murreyLogTwo))) : murreyILive : na
+float murreyFinalBotLive = murreyIsActive ? murreyErLive == 1 ? (murreyFinalILive - 1.0) * murreyFinalSiLive * math.exp(number = (murreyMmLive - 1.0) * murreyLogTwo) : murreyBotLive : na
+float murreyFinalTopLive = murreyIsActive ? murreyErLive == 1 ? (murreyFinalILive + 1.0) * murreyFinalSiLive * math.exp(number = (murreyMmLive - 1.0) * murreyLogTwo) : murreyTopLive : na
+float murreyRollingStepLive = murreyIsActive ? (murreyFinalTopLive - murreyFinalBotLive) / 8.0 : na
+float murreyRollingLowerLive = murreyIsActive ? murreyFinalBotLive : na
+float murreyRollingUpperLive = murreyIsActive ? murreyFinalTopLive : na
+float murreyStepLive = murreyLockToSession and not na(murreySessionStep) ? murreySessionStep : murreyRollingStepLive
+float murreyLowerLive = murreyLockToSession and not na(murreySessionLower) ? murreySessionLower : murreyRollingLowerLive
+float murreyUpperLive = murreyLockToSession and not na(murreySessionUpper) ? murreySessionUpper : murreyRollingUpperLive
+float murreyExportOctaveRangeLive = murreyIsActive ? murreyUpperLive - murreyLowerLive : na
+float murreyMinus38Live = murreyIsActive ? murreyLowerLive - 3.0 * murreyStepLive : na
+float murreyMinus28Live = murreyIsActive ? murreyLowerLive - 2.0 * murreyStepLive : na
+float murreyMinus18Live = murreyIsActive ? murreyLowerLive - 1.0 * murreyStepLive : na
+float murreyPlus18Live = murreyIsActive ? murreyUpperLive + 1.0 * murreyStepLive : na
+float murreyPlus28Live = murreyIsActive ? murreyUpperLive + 2.0 * murreyStepLive : na
+float murreyPlus38Live = murreyIsActive ? murreyUpperLive + 3.0 * murreyStepLive : na
+// Murrey source series stay well-formed on every bar; only the exported map is latched on confirmed bars.
+var float murreyStep = na
+var float murreyLower = na
+var float murreyUpper = na
+var float murreyExportOctaveRange = na
+var float murreyMinus38 = na
+var float murreyMinus28 = na
+var float murreyMinus18 = na
+var float murreyPlus18 = na
+var float murreyPlus28 = na
+var float murreyPlus38 = na
+if confirmedBar
+    if murreyIsActive and not na(murreyRollingStepLive) and (na(murreySessionStep) or confirmedNewSession)
+        murreySessionStep := murreyRollingStepLive
+        murreySessionLower := murreyRollingLowerLive
+        murreySessionUpper := murreyRollingUpperLive
+    if not murreyIsActive
+        murreySessionStep := na
+        murreySessionLower := na
+        murreySessionUpper := na
+    murreyStep := murreyStepLive
+    murreyLower := murreyLowerLive
+    murreyUpper := murreyUpperLive
+    murreyExportOctaveRange := murreyExportOctaveRangeLive
+    murreyMinus38 := murreyMinus38Live
+    murreyMinus28 := murreyMinus28Live
+    murreyMinus18 := murreyMinus18Live
+    murreyPlus18 := murreyPlus18Live
+    murreyPlus28 := murreyPlus28Live
+    murreyPlus38 := murreyPlus38Live
 bool murreyPlotVisible = showMurrey
 
 f_murreyLevelWeight(int murreyLevelIndex) =>
@@ -638,8 +720,8 @@ f_murreyLevelStyleName(int murreyLevelWeight) =>
     murreyLevelWeight >= 4 ? "Solid" : murreyLevelWeight == 3 ? "Solid" : murreyLevelWeight == 2 ? "Dashed" : "Dotted"
 
 f_murreyIncludeInCluster(int murreyLevelIndex) =>
-    murreyClusterDetail == "Full" ? true :
-     murreyClusterDetail == "Core" ? murreyLevelIndex == 0 or murreyLevelIndex == 2 or murreyLevelIndex == 4 or murreyLevelIndex == 6 or murreyLevelIndex == 8 :
+    murreyClusterDetail == MurreyClusterDetail.FULL ? true :
+     murreyClusterDetail == MurreyClusterDetail.CORE ? murreyLevelIndex == 0 or murreyLevelIndex == 2 or murreyLevelIndex == 4 or murreyLevelIndex == 6 or murreyLevelIndex == 8 :
      murreyLevelIndex == 0 or murreyLevelIndex == 4 or murreyLevelIndex == 8
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -724,7 +806,8 @@ f_sessionFootprintProfile(array<float> rowPrices, array<float> rowVolumes, float
         vahPrice := array.get(id = rowPrices, index = upperIndex) + rowHeight
     [pocPrice, vahPrice, valPrice]
 
-footprint currentFootprint = valueAreaIsActive ? request.footprint(ticks_per_row = valueAreaFootprintTicksPerRow, va_percent = valueAreaPercent) : na
+footprint currentFootprintSource = valueAreaIsActive ? request.footprint(ticks_per_row = valueAreaFootprintTicksPerRow, va_percent = valueAreaPercent) : na
+var footprint currentFootprint = na
 float valueAreaRowHeight = valueAreaIsActive ? valueAreaFootprintTicksPerRow * syminfo.mintick : na
 var array<float> sessionCommittedRowPrices = array.new<float>()
 var array<float> sessionCommittedRowVolumes = array.new<float>()
@@ -738,13 +821,13 @@ var float devSessionVah = na
 var float devSessionVal = na
 bool developingValueAreaIsActive = valueAreaIsActive and showValueArea and showDevelopingValueArea
 
-if valueAreaIsActive and barstate.isnew and not isNewSession and array.size(id = sessionCurrentBarRowPrices) > 0
+if valueAreaIsActive and confirmedBar and not confirmedNewSession and array.size(id = sessionCurrentBarRowPrices) > 0
     f_mergeSortedProfileRows(targetPrices = sessionCommittedRowPrices, targetVolumes = sessionCommittedRowVolumes, sourcePrices = sessionCurrentBarRowPrices, sourceVolumes = sessionCurrentBarRowVolumes)
     array.clear(id = sessionCurrentBarRowPrices)
     array.clear(id = sessionCurrentBarRowVolumes)
 
 var array<HistoricalPoc> historicalPocs = array.new<HistoricalPoc>()
-if valueAreaIsActive and isNewSession
+if valueAreaIsActive and confirmedNewSession
     array<float> previousSessionRowPrices = array.copy(id = sessionCommittedRowPrices)
     array<float> previousSessionRowVolumes = array.copy(id = sessionCommittedRowVolumes)
     if array.size(id = sessionCurrentBarRowPrices) > 0
@@ -773,18 +856,25 @@ if valueAreaIsActive and barstate.isconfirmed and array.size(id = historicalPocs
         if nakedScan.isNaked and bodyHigh >= nakedScan.price and bodyLow <= nakedScan.price
             nakedScan.isNaked := false
 
-if valueAreaIsActive and not na(currentFootprint)
-    array.clear(id = sessionCurrentBarRowPrices)
-    array.clear(id = sessionCurrentBarRowVolumes)
-    array<volume_row> footprintRows = currentFootprint.rows()
-    for currentRow in footprintRows
-        array.push(id = sessionCurrentBarRowPrices, value = volume_row.down_price(id = currentRow))
-        array.push(id = sessionCurrentBarRowVolumes, value = volume_row.total_volume(id = currentRow))
-
-devSessionPoc := na
-devSessionVah := na
-devSessionVal := na
-if developingValueAreaIsActive and barstate.islast
+if confirmedBar
+    currentFootprint := currentFootprintSource
+    if valueAreaIsActive and not na(currentFootprint)
+        array.clear(id = sessionCurrentBarRowPrices)
+        array.clear(id = sessionCurrentBarRowVolumes)
+        array<volume_row> footprintRows = currentFootprint.rows()
+        for currentRow in footprintRows
+            array.push(id = sessionCurrentBarRowPrices, value = volume_row.down_price(id = currentRow))
+            array.push(id = sessionCurrentBarRowVolumes, value = volume_row.total_volume(id = currentRow))
+    else if not valueAreaIsActive
+        currentFootprint := na
+        array.clear(id = sessionCurrentBarRowPrices)
+        array.clear(id = sessionCurrentBarRowVolumes)
+    if valueAreaIsActive and confirmedNewSession
+        devSessionPoc := na
+        devSessionVah := na
+        devSessionVal := na
+// Developing VA copies and re-profiles arrays — refresh only at bar close.
+if developingValueAreaIsActive and barstate.islast and confirmedBar
     array<float> devRowPrices = array.copy(id = sessionCommittedRowPrices)
     array<float> devRowVolumes = array.copy(id = sessionCommittedRowVolumes)
     if array.size(id = sessionCurrentBarRowPrices) > 0
@@ -824,21 +914,36 @@ bool vwapWeeklyAnchor = vwapIsActive and sharedInRegularSession and (vwapCalenda
 if vwapWeeklyAnchor
     vwapAwaitingWeeklyAnchor := false
 
-float sessionVwap = na
-float sessionVwapUpper1 = na
-float sessionVwapLower1 = na
-float sessionVwapUpper2 = na
-float sessionVwapLower2 = na
-float weeklyVwap = na
+float sessionVwapLive = na
+float sessionVwapUpper1Live = na
+float sessionVwapLower1Live = na
+float sessionVwapUpper2Live = na
+float sessionVwapLower2Live = na
+float weeklyVwapLive = na
 if vwapIsActive
     [vwapValue1, vwapUpperBand1, vwapLowerBand1] = ta.vwap(source = vwapSourcePrice, anchor = vwapSessionAnchor, stdev_mult = 1.0)
-    sessionVwap := vwapValue1
-    sessionVwapUpper1 := vwapUpperBand1
-    sessionVwapLower1 := vwapLowerBand1
     [vwapValue2, vwapUpperBand2, vwapLowerBand2] = ta.vwap(source = vwapSourcePrice, anchor = vwapSessionAnchor, stdev_mult = 2.0)
-    sessionVwapUpper2 := vwapUpperBand2
-    sessionVwapLower2 := vwapLowerBand2
-    weeklyVwap := ta.vwap(source = vwapSourcePrice, anchor = vwapWeeklyAnchor)
+    sessionVwapLive := vwapValue1
+    sessionVwapUpper1Live := vwapUpperBand1
+    sessionVwapLower1Live := vwapLowerBand1
+    sessionVwapUpper2Live := vwapUpperBand2
+    sessionVwapLower2Live := vwapLowerBand2
+    weeklyVwapLive := ta.vwap(source = vwapSourcePrice, anchor = vwapWeeklyAnchor)
+
+// Freeze VWAP outputs at bar close so the levels do not redraw on every realtime tick.
+var float sessionVwap = na
+var float sessionVwapUpper1 = na
+var float sessionVwapLower1 = na
+var float sessionVwapUpper2 = na
+var float sessionVwapLower2 = na
+var float weeklyVwap = na
+if confirmedBar
+    sessionVwap := sessionVwapLive
+    sessionVwapUpper1 := sessionVwapUpper1Live
+    sessionVwapLower1 := sessionVwapLower1Live
+    sessionVwapUpper2 := sessionVwapUpper2Live
+    sessionVwapLower2 := sessionVwapLower2Live
+    weeklyVwap := weeklyVwapLive
 
 bool vwapPlotVisible = showVwap
 
@@ -864,11 +969,12 @@ var int sessionMinutesPerBar = math.max(1, int(timeframe.in_seconds(timeframe = 
 var int sessionRthFirstBar = na
 var float initialBalanceHigh = na
 var float initialBalanceLow = na
-if sessionLevelsIsActive and sessionRthJustStarted
+// IB high/low track the bar's running high/low — defer to bar close so the levels do not extend intrabar.
+if sessionLevelsIsActive and confirmedBar and sessionRthJustStarted
     sessionRthFirstBar := bar_index
     initialBalanceHigh := high
     initialBalanceLow := low
-else if sessionLevelsIsActive and sessionInRTH and not na(sessionRthFirstBar)
+else if sessionLevelsIsActive and confirmedBar and sessionInRTH and not na(sessionRthFirstBar)
     int sessionBarsForIB = math.max(1, initialBalanceMinutes / sessionMinutesPerBar)
     if bar_index - sessionRthFirstBar < sessionBarsForIB
         initialBalanceHigh := math.max(nz(source = initialBalanceHigh, replacement = high), high)
@@ -878,10 +984,10 @@ var float overnightHighRunning = na
 var float overnightLowRunning = na
 var float overnightHighFrozen = na
 var float overnightLowFrozen = na
-if sessionLevelsIsActive and not sessionInRTH
+if sessionLevelsIsActive and confirmedBar and not sessionInRTH
     overnightHighRunning := na(overnightHighRunning) ? high : math.max(overnightHighRunning, high)
     overnightLowRunning := na(overnightLowRunning) ? low : math.min(overnightLowRunning, low)
-if sessionLevelsIsActive and sessionRthJustStarted
+if sessionLevelsIsActive and confirmedBar and sessionRthJustStarted
     overnightHighFrozen := overnightHighRunning
     overnightLowFrozen := overnightLowRunning
     overnightHighRunning := na
@@ -953,7 +1059,7 @@ bool showClusterLabels = input.bool(defval = true, title = "Show Labels", toolti
 bool showIndicatorCount = input.bool(defval = true, title = "Show Indicator Count In Cluster Label", tooltip = "Adds the number of unique indicator families contributing to each cluster label.", group = GROUP_CLUSTER)
 bool showClusterSources = input.bool(defval = true, title = "Show Cluster Sources", tooltip = "Adds short source-family names to each cluster label so you can see which components formed the confluence.", group = GROUP_CLUSTER)
 color clusterZoneColor = input.color(defval = color.new(color = NORD3, transp = 60), title = "Cluster Zone Color", tooltip = "Fill color used for cluster boxes when nearby levels merge into a zone.", group = GROUP_CLUSTER)
-string toleranceMode = input.string(defval = "ATR", title = "Cluster Tolerance Mode", options = ["Percent", "ATR"], tooltip = "Chooses whether cluster merging uses a percent-of-price threshold or an ATR-based threshold. ATR is the better default for intraday charts because it adapts as volatility expands or contracts.", group = GROUP_CLUSTER)
+ToleranceMode toleranceMode = input.enum(defval = ToleranceMode.ATR, title = "Cluster Tolerance Mode", tooltip = "Chooses whether cluster merging uses a percent-of-price threshold or an ATR-based threshold. ATR is the better default for intraday charts because it adapts as volatility expands or contracts.", group = GROUP_CLUSTER)
 float tolerancePercent = input.float(defval = 0.08, title = "Cluster Tolerance Percent", minval = 0.01, maxval = 5.0, step = 0.01, tooltip = "Maximum distance between nearby levels, as a percent of price, before they merge into one cluster. Use this when you want a fixed relative threshold instead of a volatility-adaptive one.", group = GROUP_CLUSTER)
 float toleranceAtrMult = input.float(defval = 0.20, title = "Cluster Tolerance ATR Multiplier", minval = 0.05, maxval = 5.0, step = 0.05, tooltip = "Maximum distance between nearby levels, expressed as an ATR multiple, before they merge into one cluster. Slightly higher values produce a few more intraday confluence zones.", group = GROUP_CLUSTER)
 int clusterMinScore = input.int(defval = 7, title = "Minimum Cluster Score", minval = 2, maxval = 30, tooltip = "Only draws clusters whose combined level score reaches this threshold. Lower values show a few more confluence zones; higher values keep only the strongest ones.", group = GROUP_CLUSTER)
@@ -1326,7 +1432,7 @@ var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 var array<box> renderedBoxes = array.new<box>()
 var bool renderInitialized = false
-var RenderCache renderCache = RenderCache.new(nearestMajorBase = na, murreyLower = na, murreyUpper = na, fibLevelZero = na, fibLevelHundred = na, roundMajorSpacing = na, prevDayHigh = na, prevDayLow = na, prevDayClose = na, prevSessionPoc = na, prevSessionVah = na, prevSessionVal = na, devSessionPoc = na, devSessionVah = na, devSessionVal = na, sessionVwap = na, sessionVwapUpper1 = na, sessionVwapLower1 = na, sessionVwapUpper2 = na, sessionVwapLower2 = na, weeklyVwap = na, showFibonacci = false, showPivots = false, showPreviousDay = false, showRoundNumbers = false, showSwings = false, showMurrey = false, showValueArea = false, showVwap = false, showSessionLevels = false, showSmc = false, showCluster = false, showLevelLabels = false, showMurreyLabels = false, showFibonacciLabels = false, showPivotLabels = false, showPreviousDayLabels = false, showSwingLabels = false, showRoundNumberLabels = false, showValueAreaLabels = false, showVwapLabels = false, showSessionLabels = false, showSmcLabels = false, showClusterLabels = false, showCamarilla = false, showNakedPocs = false, showVwapBands = false, showWeeklyVwap = false, showInitialBalance = false, showOvernightHL = false, showWeeklyHL = false, showMonthlyHL = false, clusterUseApproachPenalty = false, murreySessionMode = "", murreyLockToSession = false, murreySourceTimeframeInput = "", murreyClusterDetail = "", showPivotMidLevels = false, showPreviousDayHighLevel = false, showPreviousDayLowLevel = false, showPreviousDayCloseLevel = false, showRoundMidLevels = false, showRoundQuarterLevels = false, showDevelopingValueArea = false, showValueAreaZoneFill = false, showIndicatorCount = false, showClusterSources = false, clusterEnsureSideCoverage = false, leftToRightExtendBars = na, leftToRightRightBars = na, rightToLeftExtendBars = na, rightToLeftRightBars = na, clusterMinScore = na, clusterMinIndicators = na, clusterCoverageMinScore = na, clusterCoverageMinIndicators = na, clusterProximityAtrWeight = na)
+var RenderCache renderCache = RenderCache.new(nearestMajorBase = na, murreyLower = na, murreyUpper = na, fibLevelZero = na, fibLevelHundred = na, roundMajorSpacing = na, prevDayHigh = na, prevDayLow = na, prevDayClose = na, prevSessionPoc = na, prevSessionVah = na, prevSessionVal = na, devSessionPoc = na, devSessionVah = na, devSessionVal = na, sessionVwap = na, sessionVwapUpper1 = na, sessionVwapLower1 = na, sessionVwapUpper2 = na, sessionVwapLower2 = na, weeklyVwap = na, showFibonacci = false, showPivots = false, showPreviousDay = false, showRoundNumbers = false, showSwings = false, showMurrey = false, showValueArea = false, showVwap = false, showSessionLevels = false, showSmc = false, showCluster = false, showLevelLabels = false, showMurreyLabels = false, showFibonacciLabels = false, showPivotLabels = false, showPreviousDayLabels = false, showSwingLabels = false, showRoundNumberLabels = false, showValueAreaLabels = false, showVwapLabels = false, showSessionLabels = false, showSmcLabels = false, showClusterLabels = false, showCamarilla = false, showNakedPocs = false, showVwapBands = false, showWeeklyVwap = false, showInitialBalance = false, showOvernightHL = false, showWeeklyHL = false, showMonthlyHL = false, clusterUseApproachPenalty = false, murreySessionMode = na, murreyLockToSession = false, murreySourceTimeframeInput = na, murreyClusterDetail = na, showPivotMidLevels = false, showPreviousDayHighLevel = false, showPreviousDayLowLevel = false, showPreviousDayCloseLevel = false, showRoundMidLevels = false, showRoundQuarterLevels = false, showDevelopingValueArea = false, showValueAreaZoneFill = false, showIndicatorCount = false, showClusterSources = false, clusterEnsureSideCoverage = false, leftToRightExtendBars = na, leftToRightRightBars = na, rightToLeftExtendBars = na, rightToLeftRightBars = na, clusterMinScore = na, clusterMinIndicators = na, clusterCoverageMinScore = na, clusterCoverageMinIndicators = na, clusterProximityAtrWeight = na)
 
 bool renderDataChanged = f_floatChanged(currentValue = nearestMajorBase, cachedValue = renderCache.nearestMajorBase) or f_floatChanged(currentValue = murreyLower, cachedValue = renderCache.murreyLower) or f_floatChanged(currentValue = murreyUpper, cachedValue = renderCache.murreyUpper) or f_floatChanged(currentValue = fibLevelZero, cachedValue = renderCache.fibLevelZero) or f_floatChanged(currentValue = fibLevelHundred, cachedValue = renderCache.fibLevelHundred) or f_floatChanged(currentValue = roundMajorSpacing, cachedValue = renderCache.roundMajorSpacing) or f_floatChanged(currentValue = prevDayHigh, cachedValue = renderCache.prevDayHigh) or f_floatChanged(currentValue = prevDayLow, cachedValue = renderCache.prevDayLow) or f_floatChanged(currentValue = prevDayClose, cachedValue = renderCache.prevDayClose) or f_floatChanged(currentValue = prevSessionPoc, cachedValue = renderCache.prevSessionPoc) or f_floatChanged(currentValue = prevSessionVah, cachedValue = renderCache.prevSessionVah) or f_floatChanged(currentValue = prevSessionVal, cachedValue = renderCache.prevSessionVal) or f_floatChanged(currentValue = devSessionPoc, cachedValue = renderCache.devSessionPoc) or f_floatChanged(currentValue = devSessionVah, cachedValue = renderCache.devSessionVah) or f_floatChanged(currentValue = devSessionVal, cachedValue = renderCache.devSessionVal) or f_floatChanged(currentValue = sessionVwap, cachedValue = renderCache.sessionVwap) or f_floatChanged(currentValue = sessionVwapUpper1, cachedValue = renderCache.sessionVwapUpper1) or f_floatChanged(currentValue = sessionVwapLower1, cachedValue = renderCache.sessionVwapLower1) or f_floatChanged(currentValue = sessionVwapUpper2, cachedValue = renderCache.sessionVwapUpper2) or f_floatChanged(currentValue = sessionVwapLower2, cachedValue = renderCache.sessionVwapLower2) or f_floatChanged(currentValue = weeklyVwap, cachedValue = renderCache.weeklyVwap)
 bool renderVisibilityChanged = showFibonacci != renderCache.showFibonacci or showPivots != renderCache.showPivots or showPreviousDay != renderCache.showPreviousDay or showRoundNumbers != renderCache.showRoundNumbers or showSwings != renderCache.showSwings or showMurrey != renderCache.showMurrey or showValueArea != renderCache.showValueArea or showVwap != renderCache.showVwap or showSessionLevels != renderCache.showSessionLevels or showSmc != renderCache.showSmc or showCluster != renderCache.showCluster or showLevelLabels != renderCache.showLevelLabels or showMurreyLabels != renderCache.showMurreyLabels or showFibonacciLabels != renderCache.showFibonacciLabels or showPivotLabels != renderCache.showPivotLabels or showPreviousDayLabels != renderCache.showPreviousDayLabels or showSwingLabels != renderCache.showSwingLabels or showRoundNumberLabels != renderCache.showRoundNumberLabels or showValueAreaLabels != renderCache.showValueAreaLabels or showVwapLabels != renderCache.showVwapLabels or showSessionLabels != renderCache.showSessionLabels or showSmcLabels != renderCache.showSmcLabels or showClusterLabels != renderCache.showClusterLabels
@@ -1336,7 +1442,7 @@ bool renderClusterInputChanged = showCluster and (showIndicatorCount != renderCa
 bool renderKeyChanged = not renderInitialized or renderDataChanged or renderVisibilityChanged or renderSectionInputChanged or renderLayoutChanged or renderClusterInputChanged
 // Rendering is object-heavy, so avoid rebuilding the scene on every realtime tick,
 // but still refresh immediately when inputs or computed render anchors change.
-bool shouldRefreshRender = barstate.islast and (renderKeyChanged or barstate.isnew or barstate.isconfirmed or barstate.islastconfirmedhistory)
+bool shouldRefreshRender = barstate.islast and (renderKeyChanged or confirmedBar or barstate.islastconfirmedhistory)
 
 if shouldRefreshRender
     f_clearLines(lines = renderedLines)
@@ -1344,7 +1450,7 @@ if shouldRefreshRender
     f_clearBoxes(boxes = renderedBoxes)
 
     array<Level> levels = array.new<Level>()
-    float clusterToleranceValue = showCluster ? toleranceMode == "ATR" ? sharedAtrValue * toleranceAtrMult : close * tolerancePercent * 0.01 : na
+    float clusterToleranceValue = showCluster ? toleranceMode == ToleranceMode.ATR ? sharedAtrValue * toleranceAtrMult : close * tolerancePercent * 0.01 : na
     float clusterAtrWindow = showCluster ? math.max(nz(source = sharedAtrValue) * 8.0, syminfo.mintick * 200.0) : na
     float clusterMurreyWindow = showCluster ? nz(source = murreyExportOctaveRange) * 3.0 : na
     // Keep a balanced window above and below price so cluster coverage is useful by default.
@@ -1436,7 +1542,7 @@ if shouldRefreshRender
     if useSwingsInCluster
         array<float> renderedHighSwingPrices = array.new<float>()
         array<float> renderedLowSwingPrices = array.new<float>()
-        float swingMergeDistance = swingMergeMode == "ATR" ? sharedAtrValue * swingMergeAtrMult : swingMergeMode == "Percent" ? close * swingMergePercent * 0.01 : syminfo.mintick * swingMergeTicks
+        float swingMergeDistance = swingMergeMode == DistanceMode.ATR ? sharedAtrValue * swingMergeAtrMult : swingMergeMode == DistanceMode.PERCENT ? close * swingMergePercent * 0.01 : syminfo.mintick * swingMergeTicks
         int renderedHighCount = 0
         int renderedLowCount = 0
         if structuralSwingCount > 0
@@ -1501,7 +1607,7 @@ if shouldRefreshRender
                             f_pushLevel(levels = levels, levelPrice = roundQ3, levelWeight = 1, indicatorId = 6, levelName = str.tostring(value = roundQ3, format = format.mintick), levelColor = overallLevelColor, lineStyle = "Dotted")
 
     if useMurreyInCluster
-        if murreyClusterDetail == "Full"
+        if murreyClusterDetail == MurreyClusterDetail.FULL
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyMinus38, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = murreyMinus38, levelWeight = 1, indicatorId = 1, levelName = "-3/8", levelColor = overallLevelColor, lineStyle = "Dotted")
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyMinus28, proximityDistance = clusterLevelProximityDistance)
@@ -1516,7 +1622,7 @@ if shouldRefreshRender
                 string murreyStyle = f_murreyLevelStyleName(murreyLevelWeight = murreyWeight)
                 if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyLevelPrice, proximityDistance = clusterLevelProximityDistance)
                     f_pushLevel(levels = levels, levelPrice = murreyLevelPrice, levelWeight = murreyWeight, indicatorId = 1, levelName = str.tostring(value = murreyIndex) + "/8", levelColor = overallLevelColor, lineStyle = murreyStyle)
-        if murreyClusterDetail == "Full"
+        if murreyClusterDetail == MurreyClusterDetail.FULL
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyPlus18, proximityDistance = clusterLevelProximityDistance)
                 f_pushLevel(levels = levels, levelPrice = murreyPlus18, levelWeight = 1, indicatorId = 1, levelName = "+1/8", levelColor = overallLevelColor, lineStyle = "Dotted")
             if not clusterUseProximityFilter or f_isLevelNearPrice(levelPrice = murreyPlus28, proximityDistance = clusterLevelProximityDistance)

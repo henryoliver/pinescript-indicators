@@ -69,6 +69,7 @@ string ticker = syminfo.ticker
 string description = syminfo.description
 string sector = syminfo.sector
 string industry = syminfo.industry
+string isinStr = na(syminfo.isin) ? "N/A" : syminfo.isin
 
 // Market data
 float tso = request.financial(symbol = syminfo.tickerid, financial_id = "TOTAL_SHARES_OUTSTANDING", period = "FQ", ignore_invalid_symbol = true)
@@ -293,10 +294,12 @@ var table fundTable = table.new(position = tablePosition, columns = 9, rows = 28
 
 // Create table
 if barstate.islastconfirmedhistory
-    // Row 0: Ticker
+    // Row 0: Ticker + ISIN
     f_labelCell(fundTable, 0, 0, "Ticker")
     f_valueCell(fundTable, 1, 0, ticker)
-    for columnIndex = 2 to 8
+    f_labelCell(fundTable, 2, 0, "ISIN")
+    f_valueCell(fundTable, 3, 0, isinStr)
+    for columnIndex = 4 to 8
         f_emptyCell(fundTable, columnIndex, 0)
     
     // Row 1: Description

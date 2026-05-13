@@ -42,6 +42,21 @@ const string GROUP_LAYOUT = "📐 Layout"
 // 🧩 TYPE DEFINITIONS
 // Custom Pine types used by the tape engine and block-trade tracker.
 // ═════════════════════════════════════════════════════════════════════════════
+enum FeatureMode
+    TAPE_AND_BLOCKS = "Tape + Block Trades"
+    TAPE_ONLY       = "Tape Only"
+    BLOCKS_ONLY     = "Block Trades Only"
+
+enum TablePosition
+    TOP_LEFT      = "Top Left"
+    TOP_CENTER    = "Top Center"
+    TOP_RIGHT     = "Top Right"
+    MIDDLE_LEFT   = "Middle Left"
+    MIDDLE_CENTER = "Middle Center"
+    MIDDLE_RIGHT  = "Middle Right"
+    BOTTOM_LEFT   = "Bottom Left"
+    BOTTOM_CENTER = "Bottom Center"
+    BOTTOM_RIGHT  = "Bottom Right"
 
 // Custom type to store complete tick data as a structured record
 type TickData
@@ -81,7 +96,7 @@ type RealtimeBarState
 // ═════════════════════════════════════════════════════════════════════════════
 
 // General Settings
-featureMode = input.string(defval = "Tape + Block Trades", title = "Feature Mode", options = ["Tape + Block Trades", "Tape Only", "Block Trades Only"], tooltip = "Choose whether to run the full tape, only the tape table, or only the block trade markers. Block-trades-only mode skips tape calculations to reduce runtime work.", group = GROUP_GENERAL)
+FeatureMode featureMode = input.enum(defval = FeatureMode.TAPE_AND_BLOCKS, title = "Feature Mode", tooltip = "Choose whether to run the full tape, only the tape table, or only the block trade markers. Block-trades-only mode skips tape calculations to reduce runtime work.", group = GROUP_GENERAL)
 showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
 
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
@@ -105,14 +120,14 @@ belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp 
 belowBidBold = input.bool(defval = true, title = "Bold", inline = "below_bid", group = GROUP_GENERAL)
 
 // Table Settings
-tablePosition = input.string(defval = "Top Right", title = "Table Position", options = ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], tooltip = "Where the ticker tape table is anchored on the chart.", group = GROUP_TABLE)
+TablePosition tablePosition = input.enum(defval = TablePosition.TOP_RIGHT, title = "Table Position", tooltip = "Where the ticker tape table is anchored on the chart.", group = GROUP_TABLE)
 textSize = input.int(defval = 12, title = "Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Font size used for the table.", group = GROUP_TABLE)
 fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], tooltip = "Font family used for all table text.", group = GROUP_TABLE)
-headerTextAlign = input.string(defval = "center", title = "Header Text Alignment", options = ["left", "center", "right"], tooltip = "Text alignment for header row", group = GROUP_TABLE)
-timeColumnAlign = input.string(defval = "center", title = "Time Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
-priceColumnAlign = input.string(defval = "center", title = "Price Column Alignment", options = ["left", "center", "right"], inline = "col_align1", group = GROUP_TABLE)
-sizeColumnAlign = input.string(defval = "center", title = "Size Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
-condColumnAlign = input.string(defval = "center", title = "Cond Column Alignment", options = ["left", "center", "right"], inline = "col_align2", group = GROUP_TABLE)
+headerTextAlign = input.string(defval = text.align_center, title = "Header Text Alignment", options = [text.align_left, text.align_center, text.align_right], tooltip = "Text alignment for header row", group = GROUP_TABLE)
+timeColumnAlign = input.string(defval = text.align_center, title = "Time Column Alignment", options = [text.align_left, text.align_center, text.align_right], inline = "col_align1", group = GROUP_TABLE)
+priceColumnAlign = input.string(defval = text.align_center, title = "Price Column Alignment", options = [text.align_left, text.align_center, text.align_right], inline = "col_align1", group = GROUP_TABLE)
+sizeColumnAlign = input.string(defval = text.align_center, title = "Size Column Alignment", options = [text.align_left, text.align_center, text.align_right], inline = "col_align2", group = GROUP_TABLE)
+condColumnAlign = input.string(defval = text.align_center, title = "Cond Column Alignment", options = [text.align_left, text.align_center, text.align_right], inline = "col_align2", group = GROUP_TABLE)
 
 // Layout Settings
 headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows.", group = GROUP_LAYOUT)
@@ -152,8 +167,8 @@ blockTradeColor = input.color(defval = NORD4, title = "Block Marker Color", tool
 // 🧮 DATA & CALCULATIONS
 // Shared execution-path gating, lower-timeframe requests, and persistent state.
 // ═════════════════════════════════════════════════════════════════════════════
-bool tapeEnabled = featureMode != "Block Trades Only"
-bool blockTradesEnabled = featureMode != "Tape Only"
+bool tapeEnabled = featureMode != FeatureMode.BLOCKS_ONLY
+bool blockTradesEnabled = featureMode != FeatureMode.TAPE_ONLY
 bool blockTradesActive = blockTradesEnabled and showBlockTradeMarkers
 int retailRowsActive = tapeEnabled and showRetail ? retailRows : 0
 int instRowsActive = tapeEnabled and showInstitutional ? institutionalRows : 0
@@ -206,32 +221,6 @@ varip BlockTradeState blockState = BlockTradeState.new()
 var bool tableLayoutInitialized = false
 
 // PRECOMPUTED VALUES & HELPERS
-// Convert text alignment strings to constants
-headerAlignValue = switch headerTextAlign
-    "left" => text.align_left
-    "center" => text.align_center
-    => text.align_right
-
-timeAlignValue = switch timeColumnAlign
-    "left" => text.align_left
-    "center" => text.align_center
-    => text.align_right
-
-priceAlignValue = switch priceColumnAlign
-    "left" => text.align_left
-    "center" => text.align_center
-    => text.align_right
-
-sizeAlignValue = switch sizeColumnAlign
-    "left" => text.align_left
-    "center" => text.align_center
-    => text.align_right
-
-condAlignValue = switch condColumnAlign
-    "left" => text.align_left
-    "center" => text.align_center
-    => text.align_right
-
 // Build price format string
 priceFormat = switch priceDecimals
     0 => "#,###"
@@ -240,17 +229,17 @@ priceFormat = switch priceDecimals
     3 => "#,###.000"
     => "#,###.0000"
 
-// Convert table position string to position constant
+// Convert table position enum to Pine position constant
 tablePos = switch tablePosition
-    "Top Left"       => position.top_left
-    "Top Center"     => position.top_center
-    "Top Right"      => position.top_right
-    "Middle Left"    => position.middle_left
-    "Middle Center"  => position.middle_center
-    "Middle Right"   => position.middle_right
-    "Bottom Left"    => position.bottom_left
-    "Bottom Center"  => position.bottom_center
-    "Bottom Right"   => position.bottom_right
+    TablePosition.TOP_LEFT       => position.top_left
+    TablePosition.TOP_CENTER     => position.top_center
+    TablePosition.TOP_RIGHT      => position.top_right
+    TablePosition.MIDDLE_LEFT    => position.middle_left
+    TablePosition.MIDDLE_CENTER  => position.middle_center
+    TablePosition.MIDDLE_RIGHT   => position.middle_right
+    TablePosition.BOTTOM_LEFT    => position.bottom_left
+    TablePosition.BOTTOM_CENTER  => position.bottom_center
+    TablePosition.BOTTOM_RIGHT   => position.bottom_right
     => position.top_right
 
 // Create table (var = initialized once, persists across bars)
@@ -399,16 +388,16 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
     string volumeText = str.tostring(value = currentTick.volume)
     rowFormatting = useBold ? text.format_bold : text.format_none
 
-    f_tapeCell(column = 0, row = tableRow, cellText = timeText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = timeAlignValue, cellBg = tickBgColor, textFormatting = rowFormatting)
-    f_tapeCell(column = 1, row = tableRow, cellText = priceText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = priceAlignValue, cellBg = tickBgColor, textFormatting = rowFormatting)
-    f_tapeCell(column = 2, row = tableRow, cellText = volumeText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = sizeAlignValue, cellBg = tickBgColor, textFormatting = rowFormatting)
-    f_tapeCell(column = 3, row = tableRow, cellText = conditionText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = condAlignValue, cellBg = tickBgColor, textFormatting = rowFormatting)
+    f_tapeCell(column = 0, row = tableRow, cellText = timeText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = timeColumnAlign, cellBg = tickBgColor, textFormatting = rowFormatting)
+    f_tapeCell(column = 1, row = tableRow, cellText = priceText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = priceColumnAlign, cellBg = tickBgColor, textFormatting = rowFormatting)
+    f_tapeCell(column = 2, row = tableRow, cellText = volumeText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = sizeColumnAlign, cellBg = tickBgColor, textFormatting = rowFormatting)
+    f_tapeCell(column = 3, row = tableRow, cellText = conditionText, cellHeight = dataRowHeight, textColor = tickTextColor, textAlign = condColumnAlign, cellBg = tickBgColor, textFormatting = rowFormatting)
 
 f_clearTickRow(int tableRow) =>
-    f_tapeCell(column = 0, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = timeAlignValue, cellBg = backgroundColor, textFormatting = text.format_none)
-    f_tapeCell(column = 1, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = priceAlignValue, cellBg = backgroundColor, textFormatting = text.format_none)
-    f_tapeCell(column = 2, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = sizeAlignValue, cellBg = backgroundColor, textFormatting = text.format_none)
-    f_tapeCell(column = 3, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = condAlignValue, cellBg = backgroundColor, textFormatting = text.format_none)
+    f_tapeCell(column = 0, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = timeColumnAlign, cellBg = backgroundColor, textFormatting = text.format_none)
+    f_tapeCell(column = 1, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = priceColumnAlign, cellBg = backgroundColor, textFormatting = text.format_none)
+    f_tapeCell(column = 2, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = sizeColumnAlign, cellBg = backgroundColor, textFormatting = text.format_none)
+    f_tapeCell(column = 3, row = tableRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = condColumnAlign, cellBg = backgroundColor, textFormatting = text.format_none)
 
 f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int startRow) =>
     if rowsActive > 0
@@ -423,10 +412,10 @@ f_renderTickSection(array<TickData> ticks, int tickCount, int rowsActive, int st
                 f_clearTickRow(startRow + clearIndex)
 
 f_renderHeader(int row, color headerBg) =>
-    f_tapeCell(column = 0, row = row, cellText = "TIME", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = headerBg, textFormatting = text.format_none)
-    f_tapeCell(column = 1, row = row, cellText = "PRICE", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = headerBg, textFormatting = text.format_none)
-    f_tapeCell(column = 2, row = row, cellText = "SIZE", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = headerBg, textFormatting = text.format_none)
-    f_tapeCell(column = 3, row = row, cellText = "COND", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = headerBg, textFormatting = text.format_none)
+    f_tapeCell(column = 0, row = row, cellText = "TIME", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
+    f_tapeCell(column = 1, row = row, cellText = "PRICE", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
+    f_tapeCell(column = 2, row = row, cellText = "SIZE", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
+    f_tapeCell(column = 3, row = row, cellText = "COND", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
 
 f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk) =>
     int tickDirection = f_classifyDirection(tickPrice, tickBid, tickAsk, tapeState.tapePrice)
@@ -570,14 +559,14 @@ if barstate.islast and tapeEnabled
         tableLayoutInitialized := true
 
     if showInstitutional
-        f_tapeCell(column = 0, row = instLabelRow, cellText = "INSTITUTIONAL / PRO", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = institutionalHeaderBg, textFormatting = text.format_none)
+        f_tapeCell(column = 0, row = instLabelRow, cellText = "INSTITUTIONAL / PRO", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = institutionalHeaderBg, textFormatting = text.format_none)
         f_renderHeader(instHeaderRow, backgroundColor)
 
     if showGap
-        f_tapeCell(column = 0, row = gapRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = backgroundColor, textFormatting = text.format_none)
+        f_tapeCell(column = 0, row = gapRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = backgroundColor, textFormatting = text.format_none)
 
     if showRetail
-        f_tapeCell(column = 0, row = retailLabelRow, cellText = "RETAIL / AMATEUR", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerAlignValue, cellBg = retailHeaderBg, textFormatting = text.format_none)
+        f_tapeCell(column = 0, row = retailLabelRow, cellText = "RETAIL / AMATEUR", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = retailHeaderBg, textFormatting = text.format_none)
         f_renderHeader(retailHeaderRow, backgroundColor)
 
     if showInstitutional and instRowsActive > 0

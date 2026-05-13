@@ -6,7 +6,7 @@ indicator(title = "Composite Breadth Indicator", shorttitle = "📊 CBI", format
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-// Nord palette plus shared composite-scale and strip-layout values.
+// Nord palette plus shared composite-scale and strip-geometry values.
 // ═════════════════════════════════════════════════════════════════════════════
 // Polar Night
 const color NORD0  = #2E3440
@@ -29,117 +29,84 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Composite scale and reference levels (bounded by translator clipping)
-const float SCALE_MAX  = 100.0
-const float REF_STRONG = 75.0
-const float REF_SOLID  = 50.0
-const float REF_MILD   = 25.0
+// Composite scale (bounded by translator clipping)
+const float SCALE_MAX = 100.0
 
-// Component strip layout, anchored below the composite zone
-const float STRIP_VOLD_TOP  = -105.0
-const float STRIP_VOLD_BASE = -109.0
-const float STRIP_ADD_TOP   = -111.0
-const float STRIP_ADD_BASE  = -115.0
-const float STRIP_TICK_TOP  = -117.0
-const float STRIP_TICK_BASE = -121.0
+// Strip row geometry — three equal-height rows stacked downward from the
+// user-configured top position, with a small gap between rows.
+const float STRIP_ROW_HEIGHT = 4.0
+const float STRIP_ROW_GAP    = 1.0
 
 // Internal tuning
-const float TICK_FIXED_SCALE              = 500.0
-const float DIVERGENCE_DEADBAND           = 0.10
-const int   REGIME_WARMUP_BARS            = 5
-const float REGIME_CHOP_MAX_ABS           = 15.0
-const float REGIME_TREND_MIN_ABS          = 30.0
-const float REGIME_TREND_MIN_PCT          = 0.70
-const int   RESOLUTION_MIN_BARS           = 3
-const int   RESOLUTION_HOLD_BARS          = 8
-const int   RESOLUTION_TIMEOUT            = 18
-const float RESOLUTION_REVERSAL_THRESHOLD = 500.0
-const float RESOLUTION_CONTINUATION_BAND  = 200.0
+const float TICK_FIXED_SCALE     = 500.0
+const int   SIGNAL_WARMUP_BARS   = 3
+const float OPACITY_ANCHOR       = 50.0
+const float STRIP_OPACITY_ANCHOR = 0.5
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🏛️ MARKET SELECTION
-// Market selection inputs and symbol resolution.
+// Manual dropdown over the four major US equity indices. TradingView publishes
+// USI breadth feeds with these suffixes only: .NY (NYSE), .NQ (Nasdaq exchange),
+// .DJ (Dow 30 — index-specific), .US (combined US). No .SP or .RL suffix
+// exists, so S&P 500 routes to NYSE breadth and Russell 2000 routes to the
+// US-wide composite as closest proxies.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_MARKET = "🏛️ Market Selection"
-const string GROUP_CUSTOM = "🔧 Custom Symbols"
 
-const string MARKET_AUTO        = "Auto"
-const string MARKET_NDX         = "Nasdaq 100"
-const string MARKET_NDX_QQQ     = "Nasdaq 100 / QQQ"
-const string MARKET_NDX_FUTURES = "Nasdaq 100 / NQ"
-const string MARKET_IXIC        = "Nasdaq Composite"
-const string MARKET_SPX         = "S&P 500"
-const string MARKET_SPX_SPY     = "S&P 500 / SPY"
-const string MARKET_SPX_FUTURES = "S&P 500 / ES"
-const string MARKET_DJI         = "Dow Jones"
-const string MARKET_DJI_DIA     = "Dow Jones / DIA"
-const string MARKET_DJI_FUTURES = "Dow Jones / YM"
-const string MARKET_RUT         = "Russell 2000"
-const string MARKET_RUT_IWM     = "Russell 2000 / IWM"
-const string MARKET_RUT_FUTURES = "Russell 2000 / RTY"
-const string MARKET_CUSTOM      = "Custom"
+string market = input.string(
+     defval = "S&P 500",
+     title = "Market (Index)",
+     options = ["S&P 500", "NASDAQ 100", "Dow Jones", "Russell 2000"],
+     tooltip = "S&P 500 → NYSE breadth (.NY) — closest proxy. NASDAQ 100 → Nasdaq exchange-wide (.NQ). Dow Jones → exact Dow 30 breadth (.DJ). Russell 2000 → US-wide composite (.US) — TradingView has no Russell-specific feed.",
+     group = GROUP_MARKET
+ )
 
-const string TICK_NY = "USI:TICK"
-const string ADD_NY  = "USI:ADD"
-const string VOLD_NY = "USI:VOLD"
+string advSymbol = switch market
+    "S&P 500"      => "USI:ADVN.NY"
+    "NASDAQ 100"   => "USI:ADVN.NQ"
+    "Dow Jones"    => "USI:ADVN.DJ"
+    "Russell 2000" => "USI:ADVN.US"
+    => "USI:ADVN.NY"
 
-const string TICK_NQ = "USI:TICKQ"
-const string ADD_NQ  = "USI:ADDQ"
-const string VOLD_NQ = "USI:VOLDQ"
+string declSymbol = switch market
+    "S&P 500"      => "USI:DECL.NY"
+    "NASDAQ 100"   => "USI:DECL.NQ"
+    "Dow Jones"    => "USI:DECL.DJ"
+    "Russell 2000" => "USI:DECL.US"
+    => "USI:DECL.NY"
 
-f_isNasdaqChart() =>
-    bool isNasdaqChart = str.contains(source = str.upper(source = syminfo.prefix), str = "NASDAQ")
-    isNasdaqChart := isNasdaqChart or syminfo.ticker == "QQQ"
-    isNasdaqChart := isNasdaqChart or syminfo.ticker == "TQQQ"
-    isNasdaqChart := isNasdaqChart or syminfo.ticker == "SQQQ"
-    isNasdaqChart := isNasdaqChart or syminfo.ticker == "NDX"
-    isNasdaqChart := isNasdaqChart or syminfo.ticker == "IXIC"
-    isNasdaqChart := isNasdaqChart or str.startswith(source = syminfo.ticker, str = "NQ")
-    isNasdaqChart
+string upVolSymbol = switch market
+    "S&P 500"      => "USI:UPVOL.NY"
+    "NASDAQ 100"   => "USI:UPVOL.NQ"
+    "Dow Jones"    => "USI:UPVOL.DJ"
+    "Russell 2000" => "USI:UPVOL.US"
+    => "USI:UPVOL.NY"
 
-string marketSelection = input.string(defval = MARKET_AUTO, title = "Market",
-     options = [MARKET_AUTO, MARKET_NDX, MARKET_NDX_QQQ, MARKET_NDX_FUTURES, MARKET_IXIC, MARKET_SPX, MARKET_SPX_SPY, MARKET_SPX_FUTURES, MARKET_DJI, MARKET_DJI_DIA, MARKET_DJI_FUTURES, MARKET_RUT, MARKET_RUT_IWM, MARKET_RUT_FUTURES, MARKET_CUSTOM],
-     tooltip = "Select the market for breadth data. Auto detects based on the current chart symbol.",
-     group = GROUP_MARKET)
+string downVolSymbol = switch market
+    "S&P 500"      => "USI:DNVOL.NY"
+    "NASDAQ 100"   => "USI:DNVOL.NQ"
+    "Dow Jones"    => "USI:DNVOL.DJ"
+    "Russell 2000" => "USI:DNVOL.US"
+    => "USI:DNVOL.NY"
 
-string customTickSymbol = input.symbol(defval = "USI:TICKQ", title = "TICK Symbol",
-     tooltip = "Custom TICK index symbol.", group = GROUP_CUSTOM)
-string customAddSymbol = input.symbol(defval = "USI:ADDQ", title = "ADD Symbol",
-     tooltip = "Custom Advance-Decline symbol.", group = GROUP_CUSTOM)
-string customVoldSymbol = input.symbol(defval = "USI:VOLDQ", title = "VOLD Symbol",
-     tooltip = "Custom Up/Down Volume symbol.", group = GROUP_CUSTOM)
-
-bool marketIsNasdaq = f_isNasdaqChart()
-
-string marketTickSymbol = TICK_NY
-string marketAddSymbol = ADD_NY
-string marketVoldSymbol = VOLD_NY
-
-if marketSelection == MARKET_AUTO
-    if marketIsNasdaq
-        marketTickSymbol := TICK_NQ
-        marketAddSymbol := ADD_NQ
-        marketVoldSymbol := VOLD_NQ
-else if marketSelection == MARKET_NDX or marketSelection == MARKET_NDX_QQQ or marketSelection == MARKET_NDX_FUTURES or marketSelection == MARKET_IXIC
-    marketTickSymbol := TICK_NQ
-    marketAddSymbol := ADD_NQ
-    marketVoldSymbol := VOLD_NQ
-else if marketSelection == MARKET_CUSTOM
-    marketTickSymbol := customTickSymbol
-    marketAddSymbol := customAddSymbol
-    marketVoldSymbol := customVoldSymbol
+string tickSymbol = switch market
+    "S&P 500"      => "USI:TICK.NY"
+    "NASDAQ 100"   => "USI:TICK.NQ"
+    "Dow Jones"    => "USI:TICK.NY"
+    "Russell 2000" => "USI:TICK.US"
+    => "USI:TICK.NY"
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚖️ COMPONENT WEIGHTS
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_WEIGHTS = "⚖️ Component Weights"
 
-float weightVold = input.float(defval = 40, title = "VOLD Weight", minval = 0, maxval = 100, step = 5,
+float weightVold = input.float(defval = 45, title = "VOLD Weight", minval = 0, maxval = 100, step = 5,
      tooltip = "Volume trend — regime filter. The slow, dominant-energy reading.", group = GROUP_WEIGHTS)
-float weightAdd = input.float(defval = 35, title = "ADD Weight", minval = 0, maxval = 100, step = 5,
+float weightAdd = input.float(defval = 45, title = "ADD Weight", minval = 0, maxval = 100, step = 5,
      tooltip = "Advance-Decline — leading sentiment. Turns before VOLD does.", group = GROUP_WEIGHTS)
-float weightTick = input.float(defval = 25, title = "TICK Weight", minval = 0, maxval = 100, step = 5,
-     tooltip = "TICK — sustained momentum (smoothed). Instant ±985 extremes are tracked separately as exhaustion alerts.", group = GROUP_WEIGHTS)
+float weightTick = input.float(defval = 10, title = "TICK Weight", minval = 0, maxval = 100, step = 5,
+     tooltip = "TICK — sustained momentum (smoothed). Lower default weight: across observed sessions raw TICK oscillates regardless of regime and mostly drags the composite toward neutral.", group = GROUP_WEIGHTS)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧮 CALCULATION
@@ -147,15 +114,9 @@ float weightTick = input.float(defval = 25, title = "TICK Weight", minval = 0, m
 const string GROUP_CALC = "🧮 Calculation"
 
 int signalLength = input.int(defval = 13, title = "Signal EMA Length", minval = 1, maxval = 100, step = 1,
-     tooltip = "EMA period for the signal line (primary visual).", group = GROUP_CALC)
+     tooltip = "EMA period for the signal line (primary visual). Resets at every session open so today's smoothing is always intraday-only. 13 is the Fibonacci sweet spot for 5-minute charts.", group = GROUP_CALC)
 int tickSmoothLength = input.int(defval = 5, title = "TICK Smoothing", minval = 1, maxval = 20, step = 1,
-     tooltip = "EMA smoothing for sustained TICK direction. Raw TICK still feeds instant-extreme detection.", group = GROUP_CALC)
-int historySessions = input.int(defval = 20, title = "History Sessions", minval = 5, maxval = 60, step = 1,
-     tooltip = "Prior-session count used to normalize anchored VOLD and ADD against their typical daily extremes.", group = GROUP_CALC)
-int tickExtremeLevel = input.int(defval = 985, title = "TICK Extreme Threshold", minval = 500, maxval = 1200, step = 5,
-     tooltip = "Raw |TICK| level that fires an exhaustion alert.", group = GROUP_CALC)
-int divergenceBars = input.int(defval = 5, title = "Divergence Bars", minval = 2, maxval = 20, step = 1,
-     tooltip = "Consecutive bars VOLD and ADD must disagree to fire a divergence flag.", group = GROUP_CALC)
+     tooltip = "EMA smoothing applied to raw TICK before it feeds the composite. The smoothed line resets at session open.", group = GROUP_CALC)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📋 DISPLAY TOGGLES
@@ -163,93 +124,60 @@ int divergenceBars = input.int(defval = 5, title = "Divergence Bars", minval = 2
 const string GROUP_DISPLAY = "📋 Display"
 
 bool showSignalLine = input.bool(defval = true, title = "Signal Line",
-     tooltip = "Primary visual. NORD8 cyan above zero, NORD11 red below.", group = GROUP_DISPLAY)
+     tooltip = "Primary trading signal: EMA of the composite breadth score. Above zero means VOLD, ADD, and TICK are net bullish on a weighted basis; below zero means net bearish. Slope tells you whether breadth is accelerating or fading. NORD8 (cyan) above zero, NORD11 (red) below.", group = GROUP_DISPLAY)
 bool showHistogram = input.bool(defval = true, title = "Histogram Underlay",
-     tooltip = "Quiet bars behind the signal line. Bar physically shrinks when components disagree.", group = GROUP_DISPLAY)
-bool showRegimeBg = input.bool(defval = true, title = "Regime Background",
-     tooltip = "Live session-level tint: Trend ↑ / Trend ↓ / Chop / Exhaustion / Mixed.", group = GROUP_DISPLAY)
+     tooltip = "Raw composite bars behind the signal line. Bar height = directional weighted average × component agreement. When the three components disagree, the bar physically shrinks toward zero even if direction is still clear — read the gap between histogram and signal line as a conviction gauge.", group = GROUP_DISPLAY)
 bool showStrip = input.bool(defval = true, title = "Component Strip",
-     tooltip = "Three thin colored rows below the composite — one per component.", group = GROUP_DISPLAY)
-bool showExhaustionMarkers = input.bool(defval = true, title = "TICK Exhaustion Markers",
-     tooltip = "Yellow dots when raw |TICK| breaches the extreme threshold; triangles classify each event as continuation or reversal.", group = GROUP_DISPLAY)
-bool showDivergenceFlag = input.bool(defval = true, title = "VOLD/ADD Divergence",
-     tooltip = "Flag bars where ADD and VOLD have disagreed in direction for N consecutive bars.", group = GROUP_DISPLAY)
-bool showReferenceLines = input.bool(defval = true, title = "Reference Lines",
-     tooltip = "Zero line plus ±25 / ±50 / ±75 alignment-strength bands.", group = GROUP_DISPLAY)
+     tooltip = "Three thin colored rows showing each component's directional confidence: VOLD (top row), ADD (middle), TICK (bottom). Color intensity scales with each component's magnitude — fully vivid at |confidence| ≥ 0.5 (the typical practical max for these ratios), faded near zero. Read alignment (all three same color = breadth speaking with one voice) and identify which component is leading or dragging.", group = GROUP_DISPLAY)
+float stripTopY = input.float(defval = -50, title = "Strip Position (Y)", minval = -120, maxval = -10, step = 5,
+     tooltip = "Y-coordinate where the strip's top edge sits. Three rows extend downward from here (total span ≈ 14 units). Default −50 keeps the strip just below the signal line's practical ±40 working zone. More negative pushes the strip lower (more separation); less negative brings it closer to the signal.", group = GROUP_DISPLAY)
+bool showZeroLine = input.bool(defval = true, title = "Zero Line",
+     tooltip = "Solid neutral guide at zero — the only fixed reference. Above zero = net bullish breadth, below = net bearish. Magnitude away from zero is conveyed by signal/histogram opacity.", group = GROUP_DISPLAY)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📡 DATA REQUESTS
+// Pull the four breadth series plus the exchange-level TICK. Every series
+// rebases naturally at session open so the indicator is strictly intraday.
 // ═════════════════════════════════════════════════════════════════════════════
-float tickValue = request.security(symbol = marketTickSymbol, timeframe = timeframe.period, expression = close,
+float advValue = request.security(symbol = advSymbol, timeframe = timeframe.period, expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float addValue = request.security(symbol = marketAddSymbol, timeframe = timeframe.period, expression = close,
+float declValue = request.security(symbol = declSymbol, timeframe = timeframe.period, expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float voldValue = request.security(symbol = marketVoldSymbol, timeframe = timeframe.period, expression = close,
+float upVolValue = request.security(symbol = upVolSymbol, timeframe = timeframe.period, expression = close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float downVolValue = request.security(symbol = downVolSymbol, timeframe = timeframe.period, expression = close,
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+float tickValue = request.security(symbol = tickSymbol, timeframe = timeframe.period, expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
 bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔀 COMPONENT TRANSLATORS
-// Each native series → directional confidence in [-1, +1] using a method that
-// respects its behavior:
-//   VOLD → anchored cumulative from session open, scaled by N-session typical daily max
-//   ADD  → anchored relative to session open, scaled by N-session typical daily max
-//   TICK → smoothed EMA divided by 500 (the fixed regime boundary, never normalized)
-// Raw TICK extremes are intentionally NOT in the composite — they feed a
-// separate overlay so a single ±1000 spike cannot flood the score.
+// Each component → directional confidence in [-1, +1] via a ratio that's
+// naturally bounded and free of cross-session memory:
+//   VOLD  → (UPVOL − DNVOL) / (UPVOL + DNVOL)   cumulative session volume tilt
+//   ADD   → (ADVN  − DECL ) / (ADVN  + DECL )   instantaneous breadth tilt
+//   TICK  → EMA(TICK, smoothLen) / 500          smoothed exchange-level momentum
 // ═════════════════════════════════════════════════════════════════════════════
-float emaAlpha = 2.0 / (historySessions + 1.0)
+float voldDelta = not na(upVolValue) and not na(downVolValue) ? upVolValue - downVolValue : na
+float voldTotal = not na(upVolValue) and not na(downVolValue) ? upVolValue + downVolValue : na
+float voldConfidence = not na(voldDelta) and not na(voldTotal) and voldTotal > 0.0 ? math.max(-1.0, math.min(1.0, voldDelta / voldTotal)) : na
 
-// --- VOLD: anchor to session open (handles feeds that don't reset cum to zero)
-var float sessionOpenVold = na
+float addDelta = not na(advValue) and not na(declValue) ? advValue - declValue : na
+float addTotal = not na(advValue) and not na(declValue) ? advValue + declValue : na
+float addConfidence = not na(addDelta) and not na(addTotal) and addTotal > 0.0 ? math.max(-1.0, math.min(1.0, addDelta / addTotal)) : na
+
+// TICK: smoothed EMA, fixed scale by 500. Manual session-reset implementation
+// so yesterday's smoothing never carries into today's open.
+var float tickSmoothed = na
 if isNewSession
-    sessionOpenVold := na
-if na(sessionOpenVold) and not na(voldValue)
-    sessionOpenVold := voldValue
-float anchoredVold = not na(voldValue) and not na(sessionOpenVold) ? voldValue - sessionOpenVold : na
+    tickSmoothed := na
+if not na(tickValue)
+    float tickAlpha = 2.0 / (tickSmoothLength + 1.0)
+    tickSmoothed := na(tickSmoothed) ? tickValue : tickAlpha * tickValue + (1.0 - tickAlpha) * tickSmoothed
 
-// --- VOLD: track session max of |anchoredVold|, EMA across sessions
-var float sessionMaxVold = 0.0
-var float typicalVoldMax = na
-if isNewSession
-    if sessionMaxVold > 0.0
-        typicalVoldMax := na(typicalVoldMax) ? sessionMaxVold : emaAlpha * sessionMaxVold + (1.0 - emaAlpha) * typicalVoldMax
-    sessionMaxVold := 0.0
-if not na(anchoredVold)
-    sessionMaxVold := math.max(sessionMaxVold, math.abs(anchoredVold))
-
-float voldConfidence = na
-if not na(anchoredVold) and not na(typicalVoldMax) and typicalVoldMax > 0.0
-    voldConfidence := math.max(-1.0, math.min(1.0, anchoredVold / typicalVoldMax))
-
-// --- ADD: anchor to session open
-var float sessionOpenAdd = na
-if isNewSession
-    sessionOpenAdd := na
-if na(sessionOpenAdd) and not na(addValue)
-    sessionOpenAdd := addValue
-float anchoredAdd = not na(addValue) and not na(sessionOpenAdd) ? addValue - sessionOpenAdd : na
-
-// --- ADD: track session max, EMA across sessions
-var float sessionMaxAdd = 0.0
-var float typicalAddMax = na
-if isNewSession
-    if sessionMaxAdd > 0.0
-        typicalAddMax := na(typicalAddMax) ? sessionMaxAdd : emaAlpha * sessionMaxAdd + (1.0 - emaAlpha) * typicalAddMax
-    sessionMaxAdd := 0.0
-if not na(anchoredAdd)
-    sessionMaxAdd := math.max(sessionMaxAdd, math.abs(anchoredAdd))
-
-float addConfidence = na
-if not na(anchoredAdd) and not na(typicalAddMax) and typicalAddMax > 0.0
-    addConfidence := math.max(-1.0, math.min(1.0, anchoredAdd / typicalAddMax))
-
-// --- TICK: smoothed EMA, fixed scale by 500
-float tickSmoothed = ta.ema(source = tickValue, length = tickSmoothLength)
-float tickConfidence = na
-if not na(tickSmoothed)
-    tickConfidence := math.max(-1.0, math.min(1.0, tickSmoothed / TICK_FIXED_SCALE))
+float tickConfidence = not na(tickSmoothed) ? math.max(-1.0, math.min(1.0, tickSmoothed / TICK_FIXED_SCALE)) : na
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎯 COMPOSITE
@@ -282,190 +210,69 @@ float maxStdev = activeCount >= 3 ? 0.9428 : 1.0
 float consensus = activeCount <= 1 ? 1.0 : math.max(0.0, 1.0 - stdevConf / maxStdev)
 
 float composite = na(directional) ? na : directional * consensus * SCALE_MAX
-float signalLine = ta.ema(source = composite, length = signalLength)
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 🚨 TICK EXHAUSTION STATE MACHINE
-// On a raw |TICK| extreme print, enter pending state. Watch smoothed TICK for:
-//   reversal     → crosses to opposite side beyond ±500
-//   continuation → returns to and holds within neutral band
-// Times out after RESOLUTION_TIMEOUT bars.
-// ═════════════════════════════════════════════════════════════════════════════
-bool tickExtremeUp = not na(tickValue) and tickValue >= tickExtremeLevel
-bool tickExtremeDown = not na(tickValue) and tickValue <= -tickExtremeLevel
-
-var int exhaustionState = 0
-var int barsInState = 0
-
-bool markContinuationUp = false
-bool markReversalUp = false
-bool markContinuationDown = false
-bool markReversalDown = false
-
-if exhaustionState == 0
-    if tickExtremeUp
-        exhaustionState := 1
-        barsInState := 0
-    else if tickExtremeDown
-        exhaustionState := -1
-        barsInState := 0
-else
-    barsInState += 1
-    if exhaustionState == 1
-        if barsInState >= RESOLUTION_MIN_BARS and not na(tickSmoothed) and tickSmoothed <= -RESOLUTION_REVERSAL_THRESHOLD
-            markReversalUp := true
-            exhaustionState := 0
-        else if barsInState >= RESOLUTION_HOLD_BARS and not na(tickSmoothed) and tickSmoothed >= -RESOLUTION_CONTINUATION_BAND and tickSmoothed <= RESOLUTION_REVERSAL_THRESHOLD
-            markContinuationUp := true
-            exhaustionState := 0
-        else if barsInState >= RESOLUTION_TIMEOUT
-            exhaustionState := 0
-    else if exhaustionState == -1
-        if barsInState >= RESOLUTION_MIN_BARS and not na(tickSmoothed) and tickSmoothed >= RESOLUTION_REVERSAL_THRESHOLD
-            markReversalDown := true
-            exhaustionState := 0
-        else if barsInState >= RESOLUTION_HOLD_BARS and not na(tickSmoothed) and tickSmoothed <= RESOLUTION_CONTINUATION_BAND and tickSmoothed >= -RESOLUTION_REVERSAL_THRESHOLD
-            markContinuationDown := true
-            exhaustionState := 0
-        else if barsInState >= RESOLUTION_TIMEOUT
-            exhaustionState := 0
-
-bool exhaustionActive = exhaustionState != 0
-
-// ═════════════════════════════════════════════════════════════════════════════
-// ↔️ VOLD–ADD DIVERGENCE
-// Streak counter on bars where ADD and VOLD point opposite directions
-// (outside a deadband). Triggers once when the streak crosses the threshold.
-// ═════════════════════════════════════════════════════════════════════════════
-bool voldBull = not na(voldConfidence) and voldConfidence > DIVERGENCE_DEADBAND
-bool voldBear = not na(voldConfidence) and voldConfidence < -DIVERGENCE_DEADBAND
-bool addBull = not na(addConfidence) and addConfidence > DIVERGENCE_DEADBAND
-bool addBear = not na(addConfidence) and addConfidence < -DIVERGENCE_DEADBAND
-bool currentlyDiverging = (voldBull and addBear) or (voldBear and addBull)
-
-var int divergeStreak = 0
-if currentlyDiverging
-    divergeStreak += 1
-else
-    divergeStreak := 0
-
-bool divergenceTriggered = divergeStreak == divergenceBars
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🌅 SESSION REGIME CLASSIFIER
-// Live tallies since session open: bars-above-zero, bars-below-zero,
-// average |composite|. Yields one of TREND ↑ / TREND ↓ / CHOP / EXHAUSTION / MIXED.
-// ═════════════════════════════════════════════════════════════════════════════
-var int barsSinceOpen = 0
-var int barsAboveZero = 0
-var int barsBelowZero = 0
-var float sumAbsComposite = 0.0
-
+// Session-reset signal-line EMA — never carries yesterday's smoothing into today.
+// First SIGNAL_WARMUP_BARS bars are held at na so the first composite prints (which
+// can be noisy: TICK smoothing has no history, single-bar ratios are jittery) don't
+// produce a visible open-bar jump on the signal line.
+var float signalLine = na
+var int sessionBarCount = 0
 if isNewSession
-    barsSinceOpen := 0
-    barsAboveZero := 0
-    barsBelowZero := 0
-    sumAbsComposite := 0.0
-
+    signalLine := na
+    sessionBarCount := 0
 if not na(composite)
-    barsSinceOpen += 1
-    if composite > 0.0
-        barsAboveZero += 1
-    else if composite < 0.0
-        barsBelowZero += 1
-    sumAbsComposite += math.abs(composite)
-
-float pctAbove = barsSinceOpen > 0 ? barsAboveZero / barsSinceOpen : 0.0
-float pctBelow = barsSinceOpen > 0 ? barsBelowZero / barsSinceOpen : 0.0
-float avgAbs = barsSinceOpen > 0 ? sumAbsComposite / barsSinceOpen : 0.0
-
-int regimeCode = 0
-if barsSinceOpen >= REGIME_WARMUP_BARS
-    if exhaustionActive
-        regimeCode := 3
-    else if avgAbs < REGIME_CHOP_MAX_ABS
-        regimeCode := 2
-    else if pctAbove > REGIME_TREND_MIN_PCT and avgAbs > REGIME_TREND_MIN_ABS
-        regimeCode := 1
-    else if pctBelow > REGIME_TREND_MIN_PCT and avgAbs > REGIME_TREND_MIN_ABS
-        regimeCode := -1
+    sessionBarCount += 1
+    if sessionBarCount > SIGNAL_WARMUP_BARS
+        float signalAlpha = 2.0 / (signalLength + 1.0)
+        signalLine := na(signalLine) ? composite : signalAlpha * composite + (1.0 - signalAlpha) * signalLine
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLOR DERIVATION
-// Signal line and exhaustion dots are loudest; everything else recedes via
-// opacity. NORD8 bull, NORD11 bear, NORD13 exhaustion, NORD3 grid.
+// UP = NORD8, DOWN = NORD11. Opacity progresses with magnitude — fully faded
+// (transp=90) at zero, fully vivid (transp=20) when |value| reaches the scale
+// anchor. Signal & histogram anchor at OPACITY_ANCHOR (±50, the practical-max
+// reading observed across sessions). Strips anchor at STRIP_OPACITY_ANCHOR
+// (0.5, the practical max of component ratios — VOLD/ADD/TICK rarely exceed
+// this in real sessions) so component readings actually reach saturated color.
+// NORD3 = zero line.
 // ═════════════════════════════════════════════════════════════════════════════
-color signalColor = na
-if not na(signalLine)
-    signalColor := signalLine >= 0.0 ? NORD8 : NORD11
-
-color histogramColor = na
-if not na(composite)
-    histogramColor := composite >= 0.0 ? color.new(color = NORD8, transp = 60) : color.new(color = NORD11, transp = 60)
-
-f_stripColor(float confidence) =>
+f_progressiveColor(float value, float scale) =>
     color result = na
-    if not na(confidence)
-        float magnitude = math.abs(confidence)
+    if not na(value)
+        float magnitude = math.min(1.0, math.abs(value) / scale)
         int transparency = int(90.0 - 70.0 * magnitude)
-        color baseColor = confidence >= 0.0 ? NORD8 : NORD11
+        color baseColor = value >= 0.0 ? NORD8 : NORD11
         result := color.new(color = baseColor, transp = transparency)
     result
 
-color voldStripColor = f_stripColor(confidence = voldConfidence)
-color addStripColor = f_stripColor(confidence = addConfidence)
-color tickStripColor = f_stripColor(confidence = tickConfidence)
+color signalColor    = f_progressiveColor(value = signalLine,     scale = OPACITY_ANCHOR)
+color histogramColor = f_progressiveColor(value = composite,      scale = OPACITY_ANCHOR)
+color voldStripColor = f_progressiveColor(value = voldConfidence, scale = STRIP_OPACITY_ANCHOR)
+color addStripColor  = f_progressiveColor(value = addConfidence,  scale = STRIP_OPACITY_ANCHOR)
+color tickStripColor = f_progressiveColor(value = tickConfidence, scale = STRIP_OPACITY_ANCHOR)
 
-color regimeBgColor = na
-if regimeCode == 1
-    regimeBgColor := color.new(color = NORD8, transp = 92)
-else if regimeCode == -1
-    regimeBgColor := color.new(color = NORD11, transp = 92)
-else if regimeCode == 2
-    regimeBgColor := color.new(color = NORD3, transp = 94)
-else if regimeCode == 3
-    regimeBgColor := color.new(color = NORD13, transp = 90)
+// ═════════════════════════════════════════════════════════════════════════════
+// 📐 STRIP LAYOUT
+// Three equal-height rows stacked downward from the user-configured top Y,
+// separated by STRIP_ROW_GAP. With defaults this puts the strip just below the
+// signal's practical working range without eating excess vertical space.
+// ═════════════════════════════════════════════════════════════════════════════
+float voldRowTop  = stripTopY
+float voldRowBase = stripTopY - STRIP_ROW_HEIGHT
+float addRowTop   = stripTopY - STRIP_ROW_HEIGHT - STRIP_ROW_GAP
+float addRowBase  = stripTopY - 2.0 * STRIP_ROW_HEIGHT - STRIP_ROW_GAP
+float tickRowTop  = stripTopY - 2.0 * STRIP_ROW_HEIGHT - 2.0 * STRIP_ROW_GAP
+float tickRowBase = stripTopY - 3.0 * STRIP_ROW_HEIGHT - 2.0 * STRIP_ROW_GAP
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 PLOTS
-// Render order: background → reference grid → strips → histogram → signal → markers.
+// Render order: zero line → strips → histogram → signal.
 // ═════════════════════════════════════════════════════════════════════════════
-bgcolor(color = showRegimeBg ? regimeBgColor : na, title = "Regime Tint")
+hline(price = 0, title = "Zero", color = showZeroLine ? NORD3 : na, linestyle = hline.style_solid, linewidth = 1)
 
-hline(price = 0,            title = "Zero", color = showReferenceLines ? color.new(color = NORD3, transp = 30) : na, linestyle = hline.style_solid,  linewidth = 1)
-hline(price = REF_MILD,     title = "+25",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-hline(price = -REF_MILD,    title = "-25",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-hline(price = REF_SOLID,    title = "+50",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-hline(price = -REF_SOLID,   title = "-50",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-hline(price = REF_STRONG,   title = "+75",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-hline(price = -REF_STRONG,  title = "-75",  color = showReferenceLines ? color.new(color = NORD3, transp = 60) : na, linestyle = hline.style_dashed, linewidth = 1)
-
-plot(series = showStrip ? STRIP_VOLD_TOP : na, title = "VOLD Strip", color = voldStripColor, style = plot.style_columns, histbase = STRIP_VOLD_BASE)
-plot(series = showStrip ? STRIP_ADD_TOP  : na, title = "ADD Strip",  color = addStripColor,  style = plot.style_columns, histbase = STRIP_ADD_BASE)
-plot(series = showStrip ? STRIP_TICK_TOP : na, title = "TICK Strip", color = tickStripColor, style = plot.style_columns, histbase = STRIP_TICK_BASE)
+plot(series = showStrip ? voldRowTop  : na, title = "VOLD Strip", color = voldStripColor, style = plot.style_columns, histbase = voldRowBase)
+plot(series = showStrip ? addRowTop   : na, title = "ADD Strip",  color = addStripColor,  style = plot.style_columns, histbase = addRowBase)
+plot(series = showStrip ? tickRowTop  : na, title = "TICK Strip", color = tickStripColor, style = plot.style_columns, histbase = tickRowBase)
 
 plot(series = showHistogram  ? composite  : na, title = "Composite", style = plot.style_histogram, color = histogramColor, linewidth = 2)
-plot(series = showSignalLine ? signalLine : na, title = "Signal",    color = signalColor, linewidth = 3)
-
-plotshape(series = showExhaustionMarkers and tickExtremeUp ? REF_STRONG + 10.0 : na,
-     title = "TICK Up Exhaustion", style = shape.circle, location = location.absolute,
-     color = color.new(color = NORD13, transp = 10), size = size.tiny)
-plotshape(series = showExhaustionMarkers and tickExtremeDown ? -REF_STRONG - 10.0 : na,
-     title = "TICK Down Exhaustion", style = shape.circle, location = location.absolute,
-     color = color.new(color = NORD13, transp = 10), size = size.tiny)
-plotshape(series = showExhaustionMarkers and markContinuationUp ? REF_STRONG + 5.0 : na,
-     title = "Up Continuation", style = shape.triangleup, location = location.absolute,
-     color = color.new(color = NORD8, transp = 25), size = size.tiny)
-plotshape(series = showExhaustionMarkers and markReversalUp ? REF_STRONG + 5.0 : na,
-     title = "Up Reversal", style = shape.triangledown, location = location.absolute,
-     color = color.new(color = NORD11, transp = 25), size = size.tiny)
-plotshape(series = showExhaustionMarkers and markContinuationDown ? -REF_STRONG - 5.0 : na,
-     title = "Down Continuation", style = shape.triangledown, location = location.absolute,
-     color = color.new(color = NORD11, transp = 25), size = size.tiny)
-plotshape(series = showExhaustionMarkers and markReversalDown ? -REF_STRONG - 5.0 : na,
-     title = "Down Reversal", style = shape.triangleup, location = location.absolute,
-     color = color.new(color = NORD8, transp = 25), size = size.tiny)
-
-plotshape(series = showDivergenceFlag and divergenceTriggered ? 0.0 : na,
-     title = "VOLD/ADD Divergence", style = shape.diamond, location = location.absolute,
-     color = color.new(color = NORD15, transp = 40), size = size.tiny)
+plot(series = showSignalLine ? signalLine : na, title = "Signal",    color = signalColor, linewidth = 3, trackprice = true)

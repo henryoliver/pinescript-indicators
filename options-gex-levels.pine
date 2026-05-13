@@ -742,14 +742,24 @@ if shouldRebuild
     lastRenderDate := todayInt
 
     if showDebug
-        string dbg = str.format("GEX DEBUG\nChart: {0}\nTicker: {1}\nToday: {2}\nLines: {3}\nMatched: {4}\nZones: {5}\nMetrics: {6}\nFlips: {7}\nDarkPool: {8}", syminfo.tickerid, syminfo.ticker, str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips), str.tostring(parsedDarkPool))
+        string dbg = str.format("""GEX DEBUG
+Chart: {0}
+Ticker: {1}
+Today: {2}
+Lines: {3}
+Matched: {4}
+Zones: {5}
+Metrics: {6}
+Flips: {7}
+DarkPool: {8}""", syminfo.tickerid, syminfo.ticker, str.tostring(todayInt), str.tostring(totalLines), str.tostring(matchedLines), str.tostring(parsedZones), str.tostring(parsedMetrics), str.tostring(parsedFlips), str.tostring(parsedDarkPool))
         if showParseDetails
-            dbg += "\nLastType: " + lastRecordType
-            dbg += "\nLastLine: " + (lastMatchedLine == "" ? "<none>" : lastMatchedLine)
-            dbg += "\nHVL: " + str.tostring(zoneHvl)
-            dbg += "\nCR/PS: " + str.tostring(zonePosGamma) + " / " + str.tostring(zoneNegGamma)
-            dbg += "\nFlip: " + str.tostring(flipLow) + "," + str.tostring(flipMid) + "," + str.tostring(flipHigh)
-            dbg += "\nDTE: " + str.tostring(g_dteVal)
+            dbg += str.format("""
+LastType: {0}
+LastLine: {1}
+HVL: {2}
+CR/PS: {3} / {4}
+Flip: {5},{6},{7}
+DTE: {8}""", lastRecordType, lastMatchedLine == "" ? "<none>" : lastMatchedLine, str.tostring(zoneHvl), str.tostring(zonePosGamma), str.tostring(zoneNegGamma), str.tostring(flipLow), str.tostring(flipMid), str.tostring(flipHigh), str.tostring(g_dteVal))
         log.info(dbg)
 
 // Expiry line at specified expiry time (if provided)
