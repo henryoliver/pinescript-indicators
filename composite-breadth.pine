@@ -6,8 +6,9 @@ indicator(title = "Composite Breadth Indicator", shorttitle = "📊 CBI", format
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-// Nord palette plus shared composite-scale and strip-geometry values.
+// Shared immutable values used by the indicator, including the Nord palette.
 // ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
 // Polar Night
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -29,250 +30,361 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Composite scale (bounded by translator clipping)
-const float SCALE_MAX = 100.0
-
-// Strip row geometry — three equal-height rows stacked downward from the
-// user-configured top position, with a small gap between rows.
-const float STRIP_ROW_HEIGHT = 4.0
-const float STRIP_ROW_GAP    = 1.0
-
-// Internal tuning
-const float TICK_FIXED_SCALE     = 500.0
-const int   SIGNAL_WARMUP_BARS   = 3
-const float OPACITY_ANCHOR       = 50.0
-const float STRIP_OPACITY_ANCHOR = 0.5
-
 // ═════════════════════════════════════════════════════════════════════════════
-// 🏛️ MARKET SELECTION
-// Manual dropdown over the four major US equity indices. TradingView publishes
-// USI breadth feeds with these suffixes only: .NY (NYSE), .NQ (Nasdaq exchange),
-// .DJ (Dow 30 — index-specific), .US (combined US). No .SP or .RL suffix
-// exists, so S&P 500 routes to NYSE breadth and Russell 2000 routes to the
-// US-wide composite as closest proxies.
+// 📊 COMPOSITE BREADTH
+// Market breadth composite built from VOLD, ADD, and TICK. This section owns
+// its inputs, data requests, calculations, color prep, and plot-ready outputs.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_MARKET = "🏛️ Market Selection"
+const string GROUP_COMPOSITE_BREADTH_MARKET  = "🏛️ Market"
+const string GROUP_COMPOSITE_BREADTH_WEIGHTS = "⚖️ Weights"
+const string GROUP_COMPOSITE_BREADTH_SIGNAL  = "🧮 Signal"
+const string GROUP_COMPOSITE_BREADTH_DISPLAY = "📋 Display"
 
-string market = input.string(
-     defval = "S&P 500",
+const float CBI_SCALE_MAX             = 100.0
+const float CBI_TICK_FIXED_SCALE      = 500.0
+const int   CBI_SIGNAL_WARMUP_BARS    = 3
+const int   CBI_DISPLAY_SMOOTH_LENGTH = 3        // light EMA on composite for the plot only — reduces visual noise without affecting calc
+const float CBI_OPACITY_ANCHOR        = 35.0
+const float CBI_STRIP_OPACITY_ANCHOR  = 0.5
+const int   CBI_SIGNAL_MIN_TRANSP     = 40
+const int   CBI_STRIP_MIN_TRANSP      = 65
+const float CBI_THREE_WAY_MAX_STDEV   = 0.9428
+
+string compositeBreadthMarket = input.string(
+     defval = "NASDAQ 100",
      title = "Market (Index)",
      options = ["S&P 500", "NASDAQ 100", "Dow Jones", "Russell 2000"],
      tooltip = "S&P 500 → NYSE breadth (.NY) — closest proxy. NASDAQ 100 → Nasdaq exchange-wide (.NQ). Dow Jones → exact Dow 30 breadth (.DJ). Russell 2000 → US-wide composite (.US) — TradingView has no Russell-specific feed.",
-     group = GROUP_MARKET
+     group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-string advSymbol = switch market
+float compositeBreadthVoldWeight = input.float(
+     defval = 45,
+     title = "VOLD Weight",
+     minval = 0,
+     maxval = 100,
+     step = 5,
+     tooltip = "Volume trend — regime filter. The slow, dominant-energy reading.",
+     group = GROUP_COMPOSITE_BREADTH_WEIGHTS
+ )
+
+float compositeBreadthAddWeight = input.float(
+     defval = 45,
+     title = "ADD Weight",
+     minval = 0,
+     maxval = 100,
+     step = 5,
+     tooltip = "Advance-Decline — leading sentiment. Turns before VOLD does.",
+     group = GROUP_COMPOSITE_BREADTH_WEIGHTS
+ )
+
+float compositeBreadthTickWeight = input.float(
+     defval = 10,
+     title = "TICK Weight",
+     minval = 0,
+     maxval = 100,
+     step = 5,
+     tooltip = "TICK — sustained momentum (smoothed). Lower default weight: across observed sessions raw TICK oscillates regardless of regime and mostly drags the composite toward neutral.",
+     group = GROUP_COMPOSITE_BREADTH_WEIGHTS
+ )
+
+int compositeBreadthSignalLength = input.int(
+     defval = 15,
+     title = "Signal EMA Length",
+     minval = 1,
+     maxval = 100,
+     step = 1,
+     tooltip = "EMA period for the signal line (smoothed reference). Continuous across sessions — yesterday's closing smoothing flows into today's pre-market and open. Recommended 13–15 for 2m intraday: 13 is faster with more lead, 15 (default) gives cleaner HH/HL pivot structure. Below 8 flickers, above 21 lags.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+int compositeBreadthTickSmoothLength = input.int(
+     defval = 5,
+     title = "TICK Smoothing",
+     minval = 1,
+     maxval = 20,
+     step = 1,
+     tooltip = "EMA smoothing applied to raw TICK before it feeds the composite. The smoothed line resets at session open.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+bool compositeBreadthShowSignalLine = input.bool(
+     defval = true,
+     title = "Signal Line",
+     tooltip = "Smoothed reference line — EMA of the composite. Plotted as a thin neutral-grey (NORD3) line so it acts like a moving average over the composite. Composite above signal = upward momentum building; composite below signal = downward momentum. Use the relationship between the two for trend confirmation.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+bool compositeBreadthShowLine = input.bool(
+     defval = true,
+     title = "Composite Line",
+     tooltip = "Primary directional indicator: the raw composite breadth score. Plotted as a thick line that gets vividly colored (NORD8 cyan up, NORD11 red down) as it moves away from zero, and dulls toward grey near zero. Slope and color saturation read the direction and strength of breadth at a glance.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+bool compositeBreadthShowStrip = input.bool(
+     defval = true,
+     title = "Component Strip",
+     tooltip = "Three thin colored rows showing each component's directional confidence: VOLD (top row), ADD (middle), TICK (bottom). Color intensity scales with each component's magnitude — fully vivid at |confidence| ≥ 0.5 (the typical practical max for these ratios), faded near zero. Read alignment (all three same color = breadth speaking with one voice) and identify which component is leading or dragging.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+float compositeBreadthStripTopY = input.float(
+     defval = -30,
+     title = "Strip Position (Y)",
+     minval = -120,
+     maxval = -10,
+     step = 5,
+     tooltip = "Y-coordinate where the strip's top edge sits. Three rows extend downward from here (rows touching, no gap). Default −30 sits the strip just below the composite/signal working zone for a compact layout. More negative pushes the strip lower (more separation); less negative brings it closer to the signal.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+float compositeBreadthStripRowHeight = input.float(
+     defval = 3.0,
+     title = "Strip Row Height",
+     minval = 1.0,
+     maxval = 10.0,
+     step = 0.5,
+     tooltip = "Height in y-axis units of each individual strip row. Three rows stack downward from the strip position, so total strip span = 3 × this value. Default 3.0 gives a compact 9-unit strip. Increase for thicker, more visible rows; decrease for tighter layout.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+bool compositeBreadthShowZeroLine = input.bool(
+     defval = true,
+     title = "Zero Line",
+     tooltip = "Solid neutral guide at zero — the only fixed reference. Above zero = net bullish breadth, below = net bearish. Magnitude away from zero is conveyed by signal/histogram opacity.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
+string compositeBreadthAdvSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:ADVN.NY"
     "NASDAQ 100"   => "USI:ADVN.NQ"
     "Dow Jones"    => "USI:ADVN.DJ"
     "Russell 2000" => "USI:ADVN.US"
     => "USI:ADVN.NY"
 
-string declSymbol = switch market
+string compositeBreadthDeclSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:DECL.NY"
     "NASDAQ 100"   => "USI:DECL.NQ"
     "Dow Jones"    => "USI:DECL.DJ"
     "Russell 2000" => "USI:DECL.US"
     => "USI:DECL.NY"
 
-string upVolSymbol = switch market
+string compositeBreadthUpVolSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:UPVOL.NY"
     "NASDAQ 100"   => "USI:UPVOL.NQ"
     "Dow Jones"    => "USI:UPVOL.DJ"
     "Russell 2000" => "USI:UPVOL.US"
     => "USI:UPVOL.NY"
 
-string downVolSymbol = switch market
+string compositeBreadthDownVolSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:DNVOL.NY"
     "NASDAQ 100"   => "USI:DNVOL.NQ"
     "Dow Jones"    => "USI:DNVOL.DJ"
     "Russell 2000" => "USI:DNVOL.US"
     => "USI:DNVOL.NY"
 
-string tickSymbol = switch market
+string compositeBreadthTickSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:TICK.NY"
     "NASDAQ 100"   => "USI:TICK.NQ"
     "Dow Jones"    => "USI:TICK.NY"
     "Russell 2000" => "USI:TICK.US"
     => "USI:TICK.NY"
 
-// ═════════════════════════════════════════════════════════════════════════════
-// ⚖️ COMPONENT WEIGHTS
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_WEIGHTS = "⚖️ Component Weights"
+float compositeBreadthAdvValue = request.security(
+     symbol = compositeBreadthAdvSymbol,
+     timeframe = timeframe.period,
+     expression = close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true
+ )
 
-float weightVold = input.float(defval = 45, title = "VOLD Weight", minval = 0, maxval = 100, step = 5,
-     tooltip = "Volume trend — regime filter. The slow, dominant-energy reading.", group = GROUP_WEIGHTS)
-float weightAdd = input.float(defval = 45, title = "ADD Weight", minval = 0, maxval = 100, step = 5,
-     tooltip = "Advance-Decline — leading sentiment. Turns before VOLD does.", group = GROUP_WEIGHTS)
-float weightTick = input.float(defval = 10, title = "TICK Weight", minval = 0, maxval = 100, step = 5,
-     tooltip = "TICK — sustained momentum (smoothed). Lower default weight: across observed sessions raw TICK oscillates regardless of regime and mostly drags the composite toward neutral.", group = GROUP_WEIGHTS)
+float compositeBreadthDeclValue = request.security(
+     symbol = compositeBreadthDeclSymbol,
+     timeframe = timeframe.period,
+     expression = close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true
+ )
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 🧮 CALCULATION
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_CALC = "🧮 Calculation"
+float compositeBreadthUpVolValue = request.security(
+     symbol = compositeBreadthUpVolSymbol,
+     timeframe = timeframe.period,
+     expression = close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true
+ )
 
-int signalLength = input.int(defval = 13, title = "Signal EMA Length", minval = 1, maxval = 100, step = 1,
-     tooltip = "EMA period for the signal line (primary visual). Resets at every session open so today's smoothing is always intraday-only. 13 is the Fibonacci sweet spot for 5-minute charts.", group = GROUP_CALC)
-int tickSmoothLength = input.int(defval = 5, title = "TICK Smoothing", minval = 1, maxval = 20, step = 1,
-     tooltip = "EMA smoothing applied to raw TICK before it feeds the composite. The smoothed line resets at session open.", group = GROUP_CALC)
+float compositeBreadthDownVolValue = request.security(
+     symbol = compositeBreadthDownVolSymbol,
+     timeframe = timeframe.period,
+     expression = close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true
+ )
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 📋 DISPLAY TOGGLES
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_DISPLAY = "📋 Display"
+float compositeBreadthTickValue = request.security(
+     symbol = compositeBreadthTickSymbol,
+     timeframe = timeframe.period,
+     expression = close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true
+ )
 
-bool showSignalLine = input.bool(defval = true, title = "Signal Line",
-     tooltip = "Primary trading signal: EMA of the composite breadth score. Above zero means VOLD, ADD, and TICK are net bullish on a weighted basis; below zero means net bearish. Slope tells you whether breadth is accelerating or fading. NORD8 (cyan) above zero, NORD11 (red) below.", group = GROUP_DISPLAY)
-bool showHistogram = input.bool(defval = true, title = "Histogram Underlay",
-     tooltip = "Raw composite bars behind the signal line. Bar height = directional weighted average × component agreement. When the three components disagree, the bar physically shrinks toward zero even if direction is still clear — read the gap between histogram and signal line as a conviction gauge.", group = GROUP_DISPLAY)
-bool showStrip = input.bool(defval = true, title = "Component Strip",
-     tooltip = "Three thin colored rows showing each component's directional confidence: VOLD (top row), ADD (middle), TICK (bottom). Color intensity scales with each component's magnitude — fully vivid at |confidence| ≥ 0.5 (the typical practical max for these ratios), faded near zero. Read alignment (all three same color = breadth speaking with one voice) and identify which component is leading or dragging.", group = GROUP_DISPLAY)
-float stripTopY = input.float(defval = -50, title = "Strip Position (Y)", minval = -120, maxval = -10, step = 5,
-     tooltip = "Y-coordinate where the strip's top edge sits. Three rows extend downward from here (total span ≈ 14 units). Default −50 keeps the strip just below the signal line's practical ±40 working zone. More negative pushes the strip lower (more separation); less negative brings it closer to the signal.", group = GROUP_DISPLAY)
-bool showZeroLine = input.bool(defval = true, title = "Zero Line",
-     tooltip = "Solid neutral guide at zero — the only fixed reference. Above zero = net bullish breadth, below = net bearish. Magnitude away from zero is conveyed by signal/histogram opacity.", group = GROUP_DISPLAY)
+f_compositeBreadthClampedRatio(float numerator, float denominator) =>
+    float compositeBreadthRatio = na
+    if not na(numerator) and not na(denominator) and denominator > 0.0
+        compositeBreadthRatio := math.max(-1.0, math.min(1.0, numerator / denominator))
+    compositeBreadthRatio
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 📡 DATA REQUESTS
-// Pull the four breadth series plus the exchange-level TICK. Every series
-// rebases naturally at session open so the indicator is strictly intraday.
-// ═════════════════════════════════════════════════════════════════════════════
-float advValue = request.security(symbol = advSymbol, timeframe = timeframe.period, expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float declValue = request.security(symbol = declSymbol, timeframe = timeframe.period, expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float upVolValue = request.security(symbol = upVolSymbol, timeframe = timeframe.period, expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float downVolValue = request.security(symbol = downVolSymbol, timeframe = timeframe.period, expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float tickValue = request.security(symbol = tickSymbol, timeframe = timeframe.period, expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-
-bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🔀 COMPONENT TRANSLATORS
-// Each component → directional confidence in [-1, +1] via a ratio that's
-// naturally bounded and free of cross-session memory:
-//   VOLD  → (UPVOL − DNVOL) / (UPVOL + DNVOL)   cumulative session volume tilt
-//   ADD   → (ADVN  − DECL ) / (ADVN  + DECL )   instantaneous breadth tilt
-//   TICK  → EMA(TICK, smoothLen) / 500          smoothed exchange-level momentum
-// ═════════════════════════════════════════════════════════════════════════════
-float voldDelta = not na(upVolValue) and not na(downVolValue) ? upVolValue - downVolValue : na
-float voldTotal = not na(upVolValue) and not na(downVolValue) ? upVolValue + downVolValue : na
-float voldConfidence = not na(voldDelta) and not na(voldTotal) and voldTotal > 0.0 ? math.max(-1.0, math.min(1.0, voldDelta / voldTotal)) : na
-
-float addDelta = not na(advValue) and not na(declValue) ? advValue - declValue : na
-float addTotal = not na(advValue) and not na(declValue) ? advValue + declValue : na
-float addConfidence = not na(addDelta) and not na(addTotal) and addTotal > 0.0 ? math.max(-1.0, math.min(1.0, addDelta / addTotal)) : na
-
-// TICK: smoothed EMA, fixed scale by 500. Manual session-reset implementation
-// so yesterday's smoothing never carries into today's open.
-var float tickSmoothed = na
-if isNewSession
-    tickSmoothed := na
-if not na(tickValue)
-    float tickAlpha = 2.0 / (tickSmoothLength + 1.0)
-    tickSmoothed := na(tickSmoothed) ? tickValue : tickAlpha * tickValue + (1.0 - tickAlpha) * tickSmoothed
-
-float tickConfidence = not na(tickSmoothed) ? math.max(-1.0, math.min(1.0, tickSmoothed / TICK_FIXED_SCALE)) : na
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎯 COMPOSITE
-// directional = weighted average of active confidences   ∈ [-1, +1]
-// consensus   = 1 − (stdev of active confidences) / max-possible-stdev  ∈ [0, 1]
-// composite   = directional × consensus × 100   ∈ [-100, +100]
-// When components disagree the bar physically shrinks toward zero.
-// ═════════════════════════════════════════════════════════════════════════════
-int activeCount = (na(voldConfidence) ? 0 : 1) + (na(addConfidence) ? 0 : 1) + (na(tickConfidence) ? 0 : 1)
-
-float weightedSum = 0.0
-float weightTotal = 0.0
-if not na(voldConfidence)
-    weightedSum += weightVold * voldConfidence
-    weightTotal += weightVold
-if not na(addConfidence)
-    weightedSum += weightAdd * addConfidence
-    weightTotal += weightAdd
-if not na(tickConfidence)
-    weightedSum += weightTick * tickConfidence
-    weightTotal += weightTick
-
-float directional = weightTotal > 0.0 ? weightedSum / weightTotal : na
-
-float sumConf = (na(voldConfidence) ? 0.0 : voldConfidence) + (na(addConfidence) ? 0.0 : addConfidence) + (na(tickConfidence) ? 0.0 : tickConfidence)
-float meanConf = activeCount > 0 ? sumConf / activeCount : 0.0
-float devSumSquared = (na(voldConfidence) ? 0.0 : math.pow(voldConfidence - meanConf, 2)) + (na(addConfidence) ? 0.0 : math.pow(addConfidence - meanConf, 2)) + (na(tickConfidence) ? 0.0 : math.pow(tickConfidence - meanConf, 2))
-float stdevConf = activeCount > 0 ? math.sqrt(devSumSquared / activeCount) : 0.0
-float maxStdev = activeCount >= 3 ? 0.9428 : 1.0
-float consensus = activeCount <= 1 ? 1.0 : math.max(0.0, 1.0 - stdevConf / maxStdev)
-
-float composite = na(directional) ? na : directional * consensus * SCALE_MAX
-
-// Session-reset signal-line EMA — never carries yesterday's smoothing into today.
-// First SIGNAL_WARMUP_BARS bars are held at na so the first composite prints (which
-// can be noisy: TICK smoothing has no history, single-bar ratios are jittery) don't
-// produce a visible open-bar jump on the signal line.
-var float signalLine = na
-var int sessionBarCount = 0
-if isNewSession
-    signalLine := na
-    sessionBarCount := 0
-if not na(composite)
-    sessionBarCount += 1
-    if sessionBarCount > SIGNAL_WARMUP_BARS
-        float signalAlpha = 2.0 / (signalLength + 1.0)
-        signalLine := na(signalLine) ? composite : signalAlpha * composite + (1.0 - signalAlpha) * signalLine
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎨 COLOR DERIVATION
-// UP = NORD8, DOWN = NORD11. Opacity progresses with magnitude — fully faded
-// (transp=90) at zero, fully vivid (transp=20) when |value| reaches the scale
-// anchor. Signal & histogram anchor at OPACITY_ANCHOR (±50, the practical-max
-// reading observed across sessions). Strips anchor at STRIP_OPACITY_ANCHOR
-// (0.5, the practical max of component ratios — VOLD/ADD/TICK rarely exceed
-// this in real sessions) so component readings actually reach saturated color.
-// NORD3 = zero line.
-// ═════════════════════════════════════════════════════════════════════════════
-f_progressiveColor(float value, float scale) =>
-    color result = na
+f_compositeBreadthProgressiveColor(float value, float scale, int minTransp) =>
+    color compositeBreadthResultColor = na
     if not na(value)
-        float magnitude = math.min(1.0, math.abs(value) / scale)
-        int transparency = int(90.0 - 70.0 * magnitude)
-        color baseColor = value >= 0.0 ? NORD8 : NORD11
-        result := color.new(color = baseColor, transp = transparency)
-    result
+        // Two-stage gradient — NORD11 → NORD3 (neutral grey at zero) → NORD8 — produces
+        // a continuous hue walk through neutral instead of the abrupt cyan↔red flip at
+        // zero that previously left visible bright bars at color transitions.
+        color compositeBreadthBaseColor = value >= 0.0 ?
+             color.from_gradient(value = value, bottom_value = 0.0,    top_value = scale, bottom_color = NORD3,  top_color = NORD8) :
+             color.from_gradient(value = value, bottom_value = -scale, top_value = 0.0,   bottom_color = NORD11, top_color = NORD3)
+        // Magnitude-based transparency: faded near zero, vivid at |value| ≥ scale.
+        float compositeBreadthMagnitude = math.min(1.0, math.abs(value) / scale)
+        int compositeBreadthTransparency = int(minTransp - minTransp * compositeBreadthMagnitude)
+        compositeBreadthResultColor := color.new(color = compositeBreadthBaseColor, transp = compositeBreadthTransparency)
+    compositeBreadthResultColor
 
-color signalColor    = f_progressiveColor(value = signalLine,     scale = OPACITY_ANCHOR)
-color histogramColor = f_progressiveColor(value = composite,      scale = OPACITY_ANCHOR)
-color voldStripColor = f_progressiveColor(value = voldConfidence, scale = STRIP_OPACITY_ANCHOR)
-color addStripColor  = f_progressiveColor(value = addConfidence,  scale = STRIP_OPACITY_ANCHOR)
-color tickStripColor = f_progressiveColor(value = tickConfidence, scale = STRIP_OPACITY_ANCHOR)
+float compositeBreadthVoldDelta = not na(compositeBreadthUpVolValue) and not na(compositeBreadthDownVolValue) ?
+     compositeBreadthUpVolValue - compositeBreadthDownVolValue : na
+float compositeBreadthVoldTotal = not na(compositeBreadthUpVolValue) and not na(compositeBreadthDownVolValue) ?
+     compositeBreadthUpVolValue + compositeBreadthDownVolValue : na
+float compositeBreadthVoldConfidence = f_compositeBreadthClampedRatio(
+     numerator = compositeBreadthVoldDelta,
+     denominator = compositeBreadthVoldTotal
+ )
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 📐 STRIP LAYOUT
-// Three equal-height rows stacked downward from the user-configured top Y,
-// separated by STRIP_ROW_GAP. With defaults this puts the strip just below the
-// signal's practical working range without eating excess vertical space.
-// ═════════════════════════════════════════════════════════════════════════════
-float voldRowTop  = stripTopY
-float voldRowBase = stripTopY - STRIP_ROW_HEIGHT
-float addRowTop   = stripTopY - STRIP_ROW_HEIGHT - STRIP_ROW_GAP
-float addRowBase  = stripTopY - 2.0 * STRIP_ROW_HEIGHT - STRIP_ROW_GAP
-float tickRowTop  = stripTopY - 2.0 * STRIP_ROW_HEIGHT - 2.0 * STRIP_ROW_GAP
-float tickRowBase = stripTopY - 3.0 * STRIP_ROW_HEIGHT - 2.0 * STRIP_ROW_GAP
+float compositeBreadthAddDelta = not na(compositeBreadthAdvValue) and not na(compositeBreadthDeclValue) ?
+     compositeBreadthAdvValue - compositeBreadthDeclValue : na
+float compositeBreadthAddTotal = not na(compositeBreadthAdvValue) and not na(compositeBreadthDeclValue) ?
+     compositeBreadthAdvValue + compositeBreadthDeclValue : na
+float compositeBreadthAddConfidence = f_compositeBreadthClampedRatio(
+     numerator = compositeBreadthAddDelta,
+     denominator = compositeBreadthAddTotal
+ )
+
+var float compositeBreadthTickSmoothed = na
+bool compositeBreadthSessionJustStarted = session.ismarket and not session.ismarket[1]
+if not na(compositeBreadthTickValue)
+    float compositeBreadthTickAlpha = 2.0 / (compositeBreadthTickSmoothLength + 1.0)
+    compositeBreadthTickSmoothed := compositeBreadthSessionJustStarted or na(compositeBreadthTickSmoothed) ? compositeBreadthTickValue :
+         compositeBreadthTickAlpha * compositeBreadthTickValue + (1.0 - compositeBreadthTickAlpha) * compositeBreadthTickSmoothed
+
+float compositeBreadthTickConfidence = not na(compositeBreadthTickSmoothed) ?
+     math.max(-1.0, math.min(1.0, compositeBreadthTickSmoothed / CBI_TICK_FIXED_SCALE)) : na
+
+int compositeBreadthActiveCount = (na(compositeBreadthVoldConfidence) ? 0 : 1) +
+     (na(compositeBreadthAddConfidence) ? 0 : 1) +
+     (na(compositeBreadthTickConfidence) ? 0 : 1)
+
+float compositeBreadthWeightedSum = 0.0
+float compositeBreadthWeightTotal = 0.0
+if not na(compositeBreadthVoldConfidence)
+    compositeBreadthWeightedSum += compositeBreadthVoldWeight * compositeBreadthVoldConfidence
+    compositeBreadthWeightTotal += compositeBreadthVoldWeight
+if not na(compositeBreadthAddConfidence)
+    compositeBreadthWeightedSum += compositeBreadthAddWeight * compositeBreadthAddConfidence
+    compositeBreadthWeightTotal += compositeBreadthAddWeight
+if not na(compositeBreadthTickConfidence)
+    compositeBreadthWeightedSum += compositeBreadthTickWeight * compositeBreadthTickConfidence
+    compositeBreadthWeightTotal += compositeBreadthTickWeight
+
+float compositeBreadthDirectional = compositeBreadthWeightTotal > 0.0 ?
+     compositeBreadthWeightedSum / compositeBreadthWeightTotal : na
+
+float compositeBreadthConfidenceSum = (na(compositeBreadthVoldConfidence) ? 0.0 : compositeBreadthVoldConfidence) +
+     (na(compositeBreadthAddConfidence) ? 0.0 : compositeBreadthAddConfidence) +
+     (na(compositeBreadthTickConfidence) ? 0.0 : compositeBreadthTickConfidence)
+float compositeBreadthMeanConfidence = compositeBreadthActiveCount > 0 ?
+     compositeBreadthConfidenceSum / compositeBreadthActiveCount : 0.0
+float compositeBreadthDeviationSumSquared = (na(compositeBreadthVoldConfidence) ? 0.0 : math.pow(compositeBreadthVoldConfidence - compositeBreadthMeanConfidence, 2)) +
+     (na(compositeBreadthAddConfidence) ? 0.0 : math.pow(compositeBreadthAddConfidence - compositeBreadthMeanConfidence, 2)) +
+     (na(compositeBreadthTickConfidence) ? 0.0 : math.pow(compositeBreadthTickConfidence - compositeBreadthMeanConfidence, 2))
+float compositeBreadthStdevConfidence = compositeBreadthActiveCount > 0 ?
+     math.sqrt(compositeBreadthDeviationSumSquared / compositeBreadthActiveCount) : 0.0
+float compositeBreadthMaxStdev = compositeBreadthActiveCount >= 3 ? CBI_THREE_WAY_MAX_STDEV : 1.0
+float compositeBreadthConsensus = compositeBreadthActiveCount <= 1 ?
+     1.0 : math.max(0.0, 1.0 - compositeBreadthStdevConfidence / compositeBreadthMaxStdev)
+
+float compositeBreadthLineValue = na(compositeBreadthDirectional) ? na :
+     compositeBreadthDirectional * compositeBreadthConsensus * CBI_SCALE_MAX
+
+var float compositeBreadthSignalLineValue = na
+var int compositeBreadthSignalSeedCount = 0
+if not na(compositeBreadthLineValue)
+    compositeBreadthSignalSeedCount += 1
+    if compositeBreadthSignalSeedCount > CBI_SIGNAL_WARMUP_BARS
+        float compositeBreadthSignalAlpha = 2.0 / (compositeBreadthSignalLength + 1.0)
+        compositeBreadthSignalLineValue := na(compositeBreadthSignalLineValue) ? compositeBreadthLineValue :
+             compositeBreadthSignalAlpha * compositeBreadthLineValue + (1.0 - compositeBreadthSignalAlpha) * compositeBreadthSignalLineValue
+
+// Display-only EMA on the composite line. The raw per-bar composite is inherently
+// jagged because the underlying breadth ratios fluctuate tick-by-tick; this short
+// EMA tames that visual noise without altering the signal-line input, the consensus
+// calculation, or the strip's per-component reads. Keeps the visible HH/HL/LH/LL
+// pivots cleaner for structural reading.
+var float compositeBreadthDisplayLine = na
+if not na(compositeBreadthLineValue)
+    float compositeBreadthDisplayAlpha = 2.0 / (CBI_DISPLAY_SMOOTH_LENGTH + 1.0)
+    compositeBreadthDisplayLine := na(compositeBreadthDisplayLine) ? compositeBreadthLineValue :
+         compositeBreadthDisplayAlpha * compositeBreadthLineValue + (1.0 - compositeBreadthDisplayAlpha) * compositeBreadthDisplayLine
+
+color compositeBreadthLineColor = f_compositeBreadthProgressiveColor(
+     value = compositeBreadthDisplayLine,
+     scale = CBI_OPACITY_ANCHOR,
+     minTransp = CBI_SIGNAL_MIN_TRANSP
+ )
+
+color compositeBreadthVoldStripColor = f_compositeBreadthProgressiveColor(
+     value = compositeBreadthVoldConfidence,
+     scale = CBI_STRIP_OPACITY_ANCHOR,
+     minTransp = CBI_STRIP_MIN_TRANSP
+ )
+
+color compositeBreadthAddStripColor = f_compositeBreadthProgressiveColor(
+     value = compositeBreadthAddConfidence,
+     scale = CBI_STRIP_OPACITY_ANCHOR,
+     minTransp = CBI_STRIP_MIN_TRANSP
+ )
+
+color compositeBreadthTickStripColor = f_compositeBreadthProgressiveColor(
+     value = compositeBreadthTickConfidence,
+     scale = CBI_STRIP_OPACITY_ANCHOR,
+     minTransp = CBI_STRIP_MIN_TRANSP
+ )
+
+float compositeBreadthVoldRowTop  = compositeBreadthStripTopY
+float compositeBreadthVoldRowBase = compositeBreadthStripTopY - compositeBreadthStripRowHeight
+float compositeBreadthAddRowTop   = compositeBreadthStripTopY - compositeBreadthStripRowHeight
+float compositeBreadthAddRowBase  = compositeBreadthStripTopY - 2.0 * compositeBreadthStripRowHeight
+float compositeBreadthTickRowTop  = compositeBreadthStripTopY - 2.0 * compositeBreadthStripRowHeight
+float compositeBreadthTickRowBase = compositeBreadthStripTopY - 3.0 * compositeBreadthStripRowHeight
+
+color compositeBreadthZeroLineColor = compositeBreadthShowZeroLine ?
+     NORD3 : color.new(color = NORD3, transp = 100)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 PLOTS
-// Render order: zero line → strips → histogram → signal.
+// Final plot calls stay here due to Pine placement constraints. All series and
+// styling inputs are prepared inside the owning Composite Breadth section.
 // ═════════════════════════════════════════════════════════════════════════════
-hline(price = 0, title = "Zero", color = showZeroLine ? NORD3 : na, linestyle = hline.style_solid, linewidth = 1)
+hline(price = 0, title = "Zero", color = compositeBreadthZeroLineColor, linestyle = hline.style_solid, linewidth = 3)
 
-plot(series = showStrip ? voldRowTop  : na, title = "VOLD Strip", color = voldStripColor, style = plot.style_columns, histbase = voldRowBase)
-plot(series = showStrip ? addRowTop   : na, title = "ADD Strip",  color = addStripColor,  style = plot.style_columns, histbase = addRowBase)
-plot(series = showStrip ? tickRowTop  : na, title = "TICK Strip", color = tickStripColor, style = plot.style_columns, histbase = tickRowBase)
+plot(series = compositeBreadthShowStrip ? compositeBreadthVoldRowTop : na, title = "VOLD Strip", color = compositeBreadthVoldStripColor, style = plot.style_columns, histbase = compositeBreadthVoldRowBase)
+plot(series = compositeBreadthShowStrip ? compositeBreadthAddRowTop : na, title = "ADD Strip", color = compositeBreadthAddStripColor, style = plot.style_columns, histbase = compositeBreadthAddRowBase)
+plot(series = compositeBreadthShowStrip ? compositeBreadthTickRowTop : na, title = "TICK Strip", color = compositeBreadthTickStripColor, style = plot.style_columns, histbase = compositeBreadthTickRowBase)
 
-plot(series = showHistogram  ? composite  : na, title = "Composite", style = plot.style_histogram, color = histogramColor, linewidth = 2)
-plot(series = showSignalLine ? signalLine : na, title = "Signal",    color = signalColor, linewidth = 3, trackprice = true)
+plot(series = compositeBreadthShowLine ? compositeBreadthDisplayLine : na, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
+plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal", color = NORD3, linewidth = 2)
