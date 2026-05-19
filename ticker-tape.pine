@@ -38,6 +38,15 @@ const string GROUP_GENERAL = "⚙️ General"
 const string GROUP_TABLE = "📋 Table"
 const string GROUP_LAYOUT = "📐 Layout"
 
+// Tick condition codes — precomputed at store time so the renderer doesn't need bid/ask.
+const int COND_MID          = 0
+const int COND_AT_ASK       = 1
+const int COND_ABOVE_ASK    = 2
+const int COND_ABOVE_PRICE  = 3
+const int COND_AT_BID       = 4
+const int COND_BELOW_BID    = 5
+const int COND_BELOW_PRICE  = 6
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧩 TYPE DEFINITIONS
 // Custom Pine types used by the tape engine and block-trade tracker.
@@ -60,12 +69,11 @@ enum TablePosition
 
 // Custom type to store complete tick data as a structured record
 type TickData
-    float price    // Execution price
-    float volume   // Order size (shares/contracts)
-    int   time     // Timestamp (milliseconds)
-    float bid      // Bid price at time of execution
-    float ask      // Ask price at time of execution
+    float price     // Execution price
+    float volume    // Order size (shares/contracts)
+    int   time      // Timestamp (milliseconds)
     int   direction // 1 = buy/up, -1 = sell/down, 0 = neutral/unknown
+    int   condition // COND_* code (replaces bid/ask — classification baked in at store time)
 
 type BlockTradeState
     int count = 0
@@ -102,6 +110,7 @@ showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Ord
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all)", group = GROUP_GENERAL)
+intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Lower = faster + less memory. Live tape and recent block markers stay fully responsive; bars older than this window won't render block markers and won't seed historical ticks into the tape.", group = GROUP_GENERAL)
 largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
@@ -190,7 +199,8 @@ if tapeEnabled
          timeframe         = "1T",
          expression        = [close, volume, time, bid, ask],
          ignore_invalid_symbol = true,
-         ignore_invalid_timeframe = true
+         ignore_invalid_timeframe = true,
+         calc_bars_count   = intrabarLookbackBars
     )
     tickPrices := requestedTickPrices
     tickVolumes := requestedTickVolumes
@@ -203,7 +213,8 @@ else if blockTradesActive
          timeframe         = "1T",
          expression        = [volume, time],
          ignore_invalid_symbol = true,
-         ignore_invalid_timeframe = true
+         ignore_invalid_timeframe = true,
+         calc_bars_count   = intrabarLookbackBars
     )
     tickVolumes := requestedTickVolumes
     tickTimes := requestedTickTimes
@@ -261,9 +272,6 @@ f_updateLastRecordedTick(LastRecordedTick state, float recordedPrice, float reco
     state.time := recordedTime
     state.direction := recordedDirection
 
-f_isDuplicateLastRecordedTick(LastRecordedTick state, float candidatePrice, float candidateVolume, int candidateTime, int candidateDirection) =>
-    candidateTime == state.time and candidateDirection == state.direction and candidatePrice == state.price and candidateVolume == state.volume
-
 f_updateTailTracker(TailTracker state, float tailPrice, float tailVolume, int tailTime) =>
     state.price := tailPrice
     state.volume := tailVolume
@@ -285,44 +293,25 @@ f_updateRealtimeBarState(RealtimeBarState state, float barVolume, float barPrice
     state.price := barPrice
     state.updateTime := barUpdateTime
 
-f_inRange(float value, float minValue, float maxValue) =>
-    bool passesMin = value >= minValue
-    bool passesMax = maxValue <= 0 or value <= maxValue
-    passesMin and passesMax
-
-f_hasValidQuotes(float tickBid, float tickAsk) =>
-    not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
-
-f_syntheticDirection(float currentPrice, float previousPrice) =>
-    na(previousPrice) ? 0 : currentPrice > previousPrice ? 1 : currentPrice < previousPrice ? -1 : 0
-
-f_classifyDirection(float currentPrice, float tickBid, float tickAsk, float previousPrice) =>
-    bool hasQuotes = f_hasValidQuotes(tickBid, tickAsk)
-    int quoteDirection = hasQuotes ? currentPrice >= tickAsk ? 1 : currentPrice <= tickBid ? -1 : 0 : 0
-    int syntheticDirection = f_syntheticDirection(currentPrice, previousPrice)
-    quoteDirection != 0 ? quoteDirection : syntheticDirection
-
 f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
-    int insertIndex = 0
-    int tickCount = array.size(id = ticks)
-    while insertIndex < tickCount and array.get(id = ticks, index = insertIndex).time > newTick.time
-        insertIndex += 1
-    array.insert(id = ticks, index = insertIndex, value = newTick)
-    if array.size(id = ticks) > maxRows
-        array.pop(id = ticks)
+    // LTF arrays arrive in chronological order, so the new tick is always newest:
+    // skip the linear scan and just push to the front + trim the tail.
+    ticks.unshift(newTick)
+    if ticks.size() > maxRows
+        ticks.pop()
 
-f_storeTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk, int tickDirection) =>
-    bool inInstitutionalRange = showInstitutional and f_inRange(tickVolume, institutionalMinSize, institutionalMaxSize)
-    bool inRetailRange = showRetail and not inInstitutionalRange and f_inRange(tickVolume, retailMinSize, retailMaxSize)
+f_storeTick(float tickPrice, float tickVolume, int tickTime, int tickDirection, int tickCondition) =>
+    // Inlined f_inRange — saves two function frames per stored tick.
+    bool inInstitutionalRange = showInstitutional and tickVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or tickVolume <= institutionalMaxSize)
+    bool inRetailRange = showRetail and not inInstitutionalRange and tickVolume >= retailMinSize and (retailMaxSize <= 0 or tickVolume <= retailMaxSize)
     bool passesSectionFilter = inInstitutionalRange or inRetailRange
     if passesSectionFilter
         TickData newTick = TickData.new(
             price = tickPrice,
             volume = tickVolume,
             time = tickTime,
-            bid = tickBid,
-            ask = tickAsk,
-            direction = tickDirection
+            direction = tickDirection,
+            condition = tickCondition
         )
         if inInstitutionalRange and instRowsActive > 0
             f_insertSortedTick(ticks = institutionalTicks, newTick = newTick, maxRows = instRowsActive)
@@ -342,40 +331,39 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
     color tickTextColor = defaultTextColor
     color tickBgColor = backgroundColor
     bool useBold = false
-    bool hasValidQuotes = f_hasValidQuotes(currentTick.bid, currentTick.ask)
+    int cond = currentTick.condition
 
-    if currentTick.direction > 0
-        conditionText := "above ask"
-        tickTextColor := aboveAskTextColor
-        tickBgColor := aboveAskBackgroundColor
-        if aboveAskBold
-            useBold := true
-        if hasValidQuotes and currentTick.price == currentTick.ask
-            conditionText := "at ask"
-            tickTextColor := askTextColor
-            tickBgColor := askBackgroundColor
-        else if not hasValidQuotes
-            conditionText := "above price"
-    else if currentTick.direction < 0
-        conditionText := "below bid"
-        tickTextColor := belowBidTextColor
-        tickBgColor := belowBidBackgroundColor
-        if belowBidBold
-            useBold := true
-        if hasValidQuotes and currentTick.price == currentTick.bid
-            conditionText := "at bid"
-            tickTextColor := bidTextColor
-            tickBgColor := bidBackgroundColor
-        else if not hasValidQuotes
-            conditionText := "below price"
-    else if hasValidQuotes and currentTick.price == currentTick.ask
+    if cond == COND_AT_ASK
         conditionText := "at ask"
         tickTextColor := askTextColor
         tickBgColor := askBackgroundColor
-    else if hasValidQuotes and currentTick.price == currentTick.bid
+    else if cond == COND_ABOVE_ASK
+        conditionText := "above ask"
+        tickTextColor := aboveAskTextColor
+        tickBgColor := aboveAskBackgroundColor
+    else if cond == COND_ABOVE_PRICE
+        conditionText := "above price"
+        tickTextColor := aboveAskTextColor
+        tickBgColor := aboveAskBackgroundColor
+    else if cond == COND_AT_BID
         conditionText := "at bid"
         tickTextColor := bidTextColor
         tickBgColor := bidBackgroundColor
+    else if cond == COND_BELOW_BID
+        conditionText := "below bid"
+        tickTextColor := belowBidTextColor
+        tickBgColor := belowBidBackgroundColor
+    else if cond == COND_BELOW_PRICE
+        conditionText := "below price"
+        tickTextColor := belowBidTextColor
+        tickBgColor := belowBidBackgroundColor
+
+    // Direction-based bold matches original behavior: any direction>0 tick honors aboveAskBold,
+    // any direction<0 tick honors belowBidBold (including at-ask/at-bid prints with directional drive).
+    if currentTick.direction > 0 and aboveAskBold
+        useBold := true
+    else if currentTick.direction < 0 and belowBidBold
+        useBold := true
 
     if largeOrderSize > 0 and currentTick.volume >= largeOrderSize
         tickTextColor := largeOrderTextColor
@@ -418,13 +406,29 @@ f_renderHeader(int row, color headerBg) =>
     f_tapeCell(column = 3, row = row, cellText = "COND", cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
 
 f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk) =>
-    int tickDirection = f_classifyDirection(tickPrice, tickBid, tickAsk, tapeState.tapePrice)
-    bool isDuplicatePrint = f_isDuplicateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
+    // Inlined f_hasValidQuotes + f_syntheticDirection + f_classifyDirection — one combined hot-path block.
+    bool hasValidQuotes = not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
+    float previousPrice = tapeState.tapePrice
+    int quoteDirection = hasValidQuotes ? (tickPrice >= tickAsk ? 1 : tickPrice <= tickBid ? -1 : 0) : 0
+    int syntheticDirection = na(previousPrice) ? 0 : (tickPrice > previousPrice ? 1 : tickPrice < previousPrice ? -1 : 0)
+    int tickDirection = quoteDirection != 0 ? quoteDirection : syntheticDirection
+
+    // Inlined f_isDuplicateLastRecordedTick.
+    bool isDuplicatePrint = tickTime == lastRecordedTick.time and tickDirection == lastRecordedTick.direction and tickPrice == lastRecordedTick.price and tickVolume == lastRecordedTick.volume
+
     bool passesAggressiveFilter = not showAggressiveOnly or tickDirection != 0
     if passesAggressiveFilter and not isDuplicatePrint
         if blockTradesActive and tickVolume >= blockSizeThreshold
             f_recordBlockTradeState(blockState)
-        bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickBid, tickAsk, tickDirection)
+        // Bake the render condition in now so the table loop doesn't have to recompute it.
+        int tickCondition = COND_MID
+        if tickDirection > 0
+            tickCondition := hasValidQuotes and tickPrice == tickAsk ? COND_AT_ASK : hasValidQuotes ? COND_ABOVE_ASK : COND_ABOVE_PRICE
+        else if tickDirection < 0
+            tickCondition := hasValidQuotes and tickPrice == tickBid ? COND_AT_BID : hasValidQuotes ? COND_BELOW_BID : COND_BELOW_PRICE
+        else if hasValidQuotes
+            tickCondition := tickPrice == tickAsk ? COND_AT_ASK : (tickPrice == tickBid ? COND_AT_BID : COND_MID)
+        bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickDirection, tickCondition)
         if storedTick
             f_updateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
     tapeState.tapePrice := tickPrice
