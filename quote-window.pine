@@ -42,22 +42,34 @@ const float QW_VIVID_THRESHOLD       = 1.0
 // Regime fractions: ≥75 % sectors agreeing = committed regime, 50–75 % = mild.
 const float QW_COMMITTED_FRACTION    = 0.75
 const float QW_MILD_FRACTION         = 0.50
-// Sector bifurcation: both sides committed AND the minority side is more than
-// 25 % of counted sectors. From the source methodology — "if the market is
-// bullish but more than 25 % of the sectors are red, I'm concerned."
-const float QW_SECTOR_MINORITY_THRESHOLD = 0.25
-// Cell tinting: at 0 % change cell is nearly transparent, at VIVID it's fully tinted.
-const int   QW_CELL_TRANSP_MIN       = 85
-const int   QW_CELL_TRANSP_MAX_TINT  = 25
+// Bifurcation minority gate — applied uniformly to cash, futures, and sectors.
+// Bifurcated requires both sides committed (≥ COMMITMENT_THRESHOLD) AND the
+// minority side crosses this fraction of counted symbols. Methodology source:
+// "if the market is bullish but more than 25 % of sectors are red, I'm
+// concerned." For 4-element groups (cash, futures), > 0.25 means the minority
+// must be ≥ 2 of 4 — a real split, not one outlier.
+const float QW_MINORITY_FRACTION     = 0.25
+// Partial-data gap — if an enabled group returns less than this fraction of
+// its expected symbols, treat as DATA GAP. Catches degraded feeds where the
+// verdict would otherwise quietly run on too few inputs.
+const float QW_PARTIAL_GAP_FRACTION  = 0.5
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧩 TYPE DEFINITIONS
 // Compact records used to keep the three symbol groups (cash / futures /
 // sectors) iterable from a single rendering loop.
 // ═════════════════════════════════════════════════════════════════════════════
+// pctChange uses the user-selected baseline (today's open OR yesterday's
+// close); pctChangeVsClose is always vs prior daily close. The second exists
+// because cash ETFs and CME futures have non-comparable "today's open"
+// values — cash opens at 09:30 ET, CME futures' daily bar opens at globex
+// (~18:00 ET prior day). Any cross-group check (cash↔futures misalignment)
+// must use pctChangeVsClose to stay apples-to-apples; same-group checks use
+// pctChange because every symbol in a group shares the same daily open.
 type QwReading
     string label
     float  pctChange
+    float  pctChangeVsClose
     bool   isCommodity
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -83,10 +95,10 @@ const string GROUP_QW_SECTORS = "🏛️ Sectors"
 const string GROUP_QW_REGIME  = "🧭 Regime"
 
 string qwBaselineMode = input.string(
-     defval = "Yesterday's Close",
+     defval = "Today's Open",
      title = "% Change Baseline",
      options = ["Yesterday's Close", "Today's Open"],
-     tooltip = "From the source methodology: amateurs watch the open, pros watch the close. Default uses prior daily close. Switch to today's open for an intraday-only read.",
+     tooltip = "Default 'Today's Open' is a clean intraday read for cash and sector ETFs (which open at 09:30 ET). CAVEAT for futures: each CME contract's daily bar opens at globex (~18:00 ET prior day), so 'Today's Open' on the FUTURES rows still includes overnight. The internal cash↔futures misalignment check uses prior-close baseline regardless of this setting to keep cross-group comparisons apples-to-apples. Switch to 'Yesterday's Close' to display every group against prior daily close (source methodology: amateurs watch the open, pros watch the close).",
      group = GROUP_QW_GENERAL
  )
 
@@ -195,32 +207,31 @@ bool qwUseTodayOpenBaseline = qwBaselineMode == "Today's Open"
 // visible intraday, which is required for the live use case. The cost is that
 // replay/historical bars receive the eventual daily close — the rotation
 // snapshot is gated separately so that leak can't poison var state.
-f_qwFetchPctChangeFromClose(string symbolTicker) =>
-    [todayClose, prevClose] = request.security(
+// Single request.security per symbol returns {today's close, yesterday's
+// close, today's open}; the helper builds the full QwReading from there.
+// Computes BOTH the user-baseline pct change (display + same-group math) AND
+// the vs-prev-close pct change (cross-group comparison, where the user
+// baseline isn't directly comparable — see the QwReading type comment).
+// The prior layout dispatched between two FromOpen/FromClose helpers via a
+// ternary, but Pine evaluates BOTH branches of a ternary containing a
+// request.security, so every symbol was firing two security calls. A single
+// call returning three fields keeps the request count at one per symbol AND
+// gives us both baselines for free — adding fields to an existing
+// request.security tuple is free (the daily bar is fetched once regardless).
+f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTodayOpenBaseline) =>
+    [todayClose, prevClose, todayOpen] = request.security(
          symbol = symbolTicker,
          timeframe = "D",
-         expression = [close, close[1]],
+         expression = [close, close[1], open],
          lookahead = barmerge.lookahead_on,
          ignore_invalid_symbol = true
      )
-    not na(todayClose) and not na(prevClose) and prevClose != 0.0 ?
+    float baseline   = useTodayOpenBaseline ? todayOpen : prevClose
+    float displayPct = not na(todayClose) and not na(baseline)  and baseline  != 0.0 ?
+         (todayClose - baseline)  / baseline  * 100.0 : na
+    float vsClosePct = not na(todayClose) and not na(prevClose) and prevClose != 0.0 ?
          (todayClose - prevClose) / prevClose * 100.0 : na
-
-f_qwFetchPctChangeFromOpen(string symbolTicker) =>
-    [todayClose, todayOpen] = request.security(
-         symbol = symbolTicker,
-         timeframe = "D",
-         expression = [close, open],
-         lookahead = barmerge.lookahead_on,
-         ignore_invalid_symbol = true
-     )
-    not na(todayClose) and not na(todayOpen) and todayOpen != 0.0 ?
-         (todayClose - todayOpen) / todayOpen * 100.0 : na
-
-f_qwFetchPctChange(string symbolTicker, bool useTodayOpenBaseline) =>
-    useTodayOpenBaseline ?
-         f_qwFetchPctChangeFromOpen(symbolTicker = symbolTicker) :
-         f_qwFetchPctChangeFromClose(symbolTicker = symbolTicker)
+    QwReading.new(label = label, pctChange = displayPct, pctChangeVsClose = vsClosePct, isCommodity = isCommodity)
 
 f_qwCellTextColor(float pctChange) =>
     na(pctChange) ? color.new(color = NORD4, transp = 40) : color.new(color = NORD4, transp = 0)
@@ -239,13 +250,18 @@ f_qwPctTextColor(float pctChange) =>
 f_qwFormatPct(float pctChange) =>
     na(pctChange) ? "—" : str.format("{0,number,+0.00;-0.00}%", pctChange)
 
+// Threshold comparisons are inclusive (>= and <=), matching the methodology
+// boundaries: |%| < 0.2 = noise (strict <), >= 0.2 = drift, >= 0.5 =
+// committed. A value exactly at a boundary belongs to the higher tier — and
+// display coloring uses the same inclusive cutoffs, so counting and coloring
+// always agree.
 f_qwCountAboveThreshold(array<QwReading> readings, float threshold, bool wantPositive, bool excludeCommodity) =>
     int total = 0
     for reading in readings
         if not (excludeCommodity and reading.isCommodity) and not na(reading.pctChange)
-            if wantPositive and reading.pctChange > threshold
+            if wantPositive and reading.pctChange >= threshold
                 total += 1
-            else if not wantPositive and reading.pctChange < -threshold
+            else if not wantPositive and reading.pctChange <= -threshold
                 total += 1
     total
 
@@ -256,16 +272,19 @@ f_qwGroupSize(array<QwReading> readings, bool excludeCommodity) =>
             total += 1
     total
 
-f_qwIsBifurcated(array<QwReading> readings, float threshold, bool excludeCommodity) =>
-    bool hasGreen = false
-    bool hasRed = false
+f_qwIsBifurcated(array<QwReading> readings, float threshold, float minorityFraction, bool excludeCommodity) =>
+    int greenCount = 0
+    int redCount = 0
+    int total = 0
     for reading in readings
         if not (excludeCommodity and reading.isCommodity) and not na(reading.pctChange)
-            if reading.pctChange > threshold
-                hasGreen := true
-            else if reading.pctChange < -threshold
-                hasRed := true
-    hasGreen and hasRed
+            total += 1
+            if reading.pctChange >= threshold
+                greenCount += 1
+            else if reading.pctChange <= -threshold
+                redCount += 1
+    greenCount > 0 and redCount > 0 and total > 0 and
+         math.min(greenCount, redCount) / float(total) > minorityFraction
 
 f_qwNetMean(array<QwReading> readings) =>
     float pctSum = 0.0
@@ -276,31 +295,43 @@ f_qwNetMean(array<QwReading> readings) =>
             total += 1
     total > 0 ? pctSum / total : na
 
+// Same as f_qwNetMean but reads pctChangeVsClose. Used for cross-group
+// comparison (cash↔futures misalignment) where the user baseline isn't
+// comparable across groups — see the QwReading type comment.
+f_qwNetMeanVsClose(array<QwReading> readings) =>
+    float pctSum = 0.0
+    int total = 0
+    for reading in readings
+        if not na(reading.pctChangeVsClose)
+            pctSum += reading.pctChangeVsClose
+            total += 1
+    total > 0 ? pctSum / total : na
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Build readings for each group using fixed-symbol requests so Pine doesn't
 // need dynamic request bookkeeping for the symbol loop on every bar.
 // ─────────────────────────────────────────────────────────────────────────────
-QwReading qwSpyReading  = QwReading.new(label = "SPY",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:SPY",    useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwQqqReading  = QwReading.new(label = "QQQ",  pctChange = f_qwFetchPctChange(symbolTicker = "NASDAQ:QQQ",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwDiaReading  = QwReading.new(label = "DIA",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:DIA",    useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwIwmReading  = QwReading.new(label = "IWM",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:IWM",    useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
+QwReading qwSpyReading  = f_qwMakeReading(label = "SPY",  symbolTicker = "AMEX:SPY",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwQqqReading  = f_qwMakeReading(label = "QQQ",  symbolTicker = "NASDAQ:QQQ",     isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwDiaReading  = f_qwMakeReading(label = "DIA",  symbolTicker = "AMEX:DIA",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwIwmReading  = f_qwMakeReading(label = "IWM",  symbolTicker = "AMEX:IWM",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 
-QwReading qwEsReading   = QwReading.new(label = "ES",   pctChange = f_qwFetchPctChange(symbolTicker = "CME_MINI:ES1!",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwNqReading   = QwReading.new(label = "NQ",   pctChange = f_qwFetchPctChange(symbolTicker = "CME_MINI:NQ1!",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwYmReading   = QwReading.new(label = "YM",   pctChange = f_qwFetchPctChange(symbolTicker = "CBOT_MINI:YM1!", useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwRtyReading  = QwReading.new(label = "RTY",  pctChange = f_qwFetchPctChange(symbolTicker = "CME_MINI:RTY1!", useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
+QwReading qwEsReading   = f_qwMakeReading(label = "ES",   symbolTicker = "CME_MINI:ES1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwNqReading   = f_qwMakeReading(label = "NQ",   symbolTicker = "CME_MINI:NQ1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwYmReading   = f_qwMakeReading(label = "YM",   symbolTicker = "CBOT_MINI:YM1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwRtyReading  = f_qwMakeReading(label = "RTY",  symbolTicker = "CME_MINI:RTY1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 
-QwReading qwXlcReading  = QwReading.new(label = "XLC",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLC",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXlyReading  = QwReading.new(label = "XLY",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLY",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXlpReading  = QwReading.new(label = "XLP",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLP",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXleReading  = QwReading.new(label = "XLE",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLE",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = true)
-QwReading qwXlfReading  = QwReading.new(label = "XLF",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLF",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXlvReading  = QwReading.new(label = "XLV",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLV",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXliReading  = QwReading.new(label = "XLI",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLI",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXlbReading  = QwReading.new(label = "XLB",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLB",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = true)
-QwReading qwXlreReading = QwReading.new(label = "XLRE", pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLRE", useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXlkReading  = QwReading.new(label = "XLK",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLK",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
-QwReading qwXluReading  = QwReading.new(label = "XLU",  pctChange = f_qwFetchPctChange(symbolTicker = "AMEX:XLU",  useTodayOpenBaseline = qwUseTodayOpenBaseline), isCommodity = false)
+QwReading qwXlcReading  = f_qwMakeReading(label = "XLC",  symbolTicker = "AMEX:XLC",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlyReading  = f_qwMakeReading(label = "XLY",  symbolTicker = "AMEX:XLY",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlpReading  = f_qwMakeReading(label = "XLP",  symbolTicker = "AMEX:XLP",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXleReading  = f_qwMakeReading(label = "XLE",  symbolTicker = "AMEX:XLE",       isCommodity = true,  useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlfReading  = f_qwMakeReading(label = "XLF",  symbolTicker = "AMEX:XLF",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlvReading  = f_qwMakeReading(label = "XLV",  symbolTicker = "AMEX:XLV",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXliReading  = f_qwMakeReading(label = "XLI",  symbolTicker = "AMEX:XLI",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlbReading  = f_qwMakeReading(label = "XLB",  symbolTicker = "AMEX:XLB",       isCommodity = true,  useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlreReading = f_qwMakeReading(label = "XLRE", symbolTicker = "AMEX:XLRE",      isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXlkReading  = f_qwMakeReading(label = "XLK",  symbolTicker = "AMEX:XLK",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwXluReading  = f_qwMakeReading(label = "XLU",  symbolTicker = "AMEX:XLU",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 
 array<QwReading> qwCashReadings = array.from(qwSpyReading, qwQqqReading, qwDiaReading, qwIwmReading)
 array<QwReading> qwFuturesReadings = array.from(qwEsReading, qwNqReading, qwYmReading, qwRtyReading)
@@ -311,15 +342,30 @@ array<QwReading> qwSectorReadings = array.from(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Aggregate diagnostics — bifurcation, sector commitment, color rotation.
+// Every regime check (bifurcation, misalignment, dominant fraction, data gap)
+// is gated on the respective show flag, so hiding a group fully excludes it
+// from the verdict. Bifurcation thresholds are uniform across groups —
+// committed (≥ COMMITMENT_THRESHOLD) on both sides AND minority above
+// QW_MINORITY_FRACTION of counted symbols — so cash, futures, and sectors no
+// longer use mismatched sensitivity (previously cash/futures triggered on any
+// noise-level mixed signal while sectors required commitment + minority).
 // ─────────────────────────────────────────────────────────────────────────────
-bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_NOISE_THRESHOLD, excludeCommodity = false)
-bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_NOISE_THRESHOLD, excludeCommodity = false)
+bool qwCashBifurcated    = qwShowCash    and f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
+bool qwFuturesBifurcated = qwShowFutures and f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
 
 float qwCashNet    = f_qwNetMean(readings = qwCashReadings)
 float qwFuturesNet = f_qwNetMean(readings = qwFuturesReadings)
-bool qwCashFuturesMisaligned = not na(qwCashNet) and not na(qwFuturesNet) and
-     math.abs(qwCashNet) > QW_NOISE_THRESHOLD and math.abs(qwFuturesNet) > QW_NOISE_THRESHOLD and
-     ((qwCashNet > 0.0) != (qwFuturesNet > 0.0))
+// Misalignment compares cash vs futures on the SAME baseline (prior daily
+// close), not the user-selected display baseline. Cash ETFs open at 09:30 ET
+// but CME futures' daily bar opens at globex (~18:00 ET prior day), so the
+// user-baseline values aren't directly comparable across these groups —
+// comparing them in "Today's Open" mode would flag a phantom misalignment
+// any time the overnight gap was meaningful.
+float qwCashNetVsClose    = f_qwNetMeanVsClose(readings = qwCashReadings)
+float qwFuturesNetVsClose = f_qwNetMeanVsClose(readings = qwFuturesReadings)
+bool qwCashFuturesMisaligned = qwShowCash and qwShowFutures and not na(qwCashNetVsClose) and not na(qwFuturesNetVsClose) and
+     math.abs(qwCashNetVsClose) >= QW_NOISE_THRESHOLD and math.abs(qwFuturesNetVsClose) >= QW_NOISE_THRESHOLD and
+     ((qwCashNetVsClose > 0.0) != (qwFuturesNetVsClose > 0.0))
 
 int qwSectorTotal       = f_qwGroupSize(readings = qwSectorReadings, excludeCommodity = qwIgnoreCommoditySectors)
 int qwSectorGreensRaw   = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,      wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
@@ -327,38 +373,67 @@ int qwSectorRedsRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, t
 int qwSectorGreensComm  = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
 int qwSectorRedsComm    = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
 
-float qwDominantCommitFraction = qwSectorTotal > 0 ?
+float qwDominantCommitFraction = qwShowSectors and qwSectorTotal > 0 ?
      math.max(qwSectorGreensComm, qwSectorRedsComm) / float(qwSectorTotal) : 0.0
-// Lean direction uses committed counts (methodology cares about commitment,
-// not noisy >0.2 % drift) and strict > so ties don't silently bias green.
+// Lean uses committed counts; strict > means an exact tie (e.g. 0 vs 0
+// committed) resolves false rather than silently biasing green. A tie at any
+// meaningful committed count (≥ 1 each) trips the bifurcation branch first
+// (minority/total ≥ 0.5 > QW_MINORITY_FRACTION), so the arrow direction here
+// is only consulted when one side is genuinely dominant.
 bool qwSectorsLeanGreen = qwSectorGreensComm > qwSectorRedsComm
 
-// Sector bifurcation: both sides have committed sectors AND the minority
-// crosses the 25 % threshold. Catches the 4-up / 4-down committed split that
-// the prior verdict logic labeled MILD.
-bool qwSectorsBifurcated = qwSectorGreensComm > 0 and qwSectorRedsComm > 0 and qwSectorTotal > 0 and
-     math.min(qwSectorGreensComm, qwSectorRedsComm) / float(qwSectorTotal) > QW_SECTOR_MINORITY_THRESHOLD
+bool qwSectorsBifurcated = qwShowSectors and f_qwIsBifurcated(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = qwIgnoreCommoditySectors)
 
-// Data availability — receiving zero readings on an enabled group means the
-// feed is gone (missing futures permissions, off-hours sector data, etc.).
-// A partial picture must not be promoted to a confident verdict.
-int qwCashExpected    = 4
-int qwFuturesExpected = 4
-int qwSectorExpected  = qwIgnoreCommoditySectors ? 9 : 11
-int qwCashReceived    = f_qwGroupSize(readings = qwCashReadings,    excludeCommodity = false)
-int qwFuturesReceived = f_qwGroupSize(readings = qwFuturesReadings, excludeCommodity = false)
-bool qwCashDataGap    = qwShowCash    and qwCashReceived    == 0
-bool qwFuturesDataGap = qwShowFutures and qwFuturesReceived == 0
-bool qwSectorsDataGap = qwShowSectors and qwSectorTotal     == 0
-bool qwDataGap        = qwCashDataGap or qwFuturesDataGap or qwSectorsDataGap
+// Data availability — an enabled group must return at least
+// QW_PARTIAL_GAP_FRACTION of its expected symbols; otherwise the feed is
+// degraded and the verdict can't be trusted. Covers both empty feeds (missing
+// permissions, off-hours) AND partial fetches that would otherwise let 1–2
+// symbols out of 9+ drive the regime call.
+int qwCashExpected       = 4
+int qwFuturesExpected    = 4
+int qwSectorExpected     = qwIgnoreCommoditySectors ? 9 : 11
+int qwCashReceived       = f_qwGroupSize(readings = qwCashReadings,    excludeCommodity = false)
+int qwFuturesReceived    = f_qwGroupSize(readings = qwFuturesReadings, excludeCommodity = false)
+int qwCashMinReceived    = math.ceil(qwCashExpected    * QW_PARTIAL_GAP_FRACTION)
+int qwFuturesMinReceived = math.ceil(qwFuturesExpected * QW_PARTIAL_GAP_FRACTION)
+int qwSectorMinReceived  = math.ceil(qwSectorExpected  * QW_PARTIAL_GAP_FRACTION)
+bool qwCashDataGap       = qwShowCash    and qwCashReceived    < qwCashMinReceived
+bool qwFuturesDataGap    = qwShowFutures and qwFuturesReceived < qwFuturesMinReceived
+bool qwSectorsDataGap    = qwShowSectors and qwSectorTotal     < qwSectorMinReceived
+bool qwDataGap           = qwCashDataGap or qwFuturesDataGap or qwSectorsDataGap
 
 // Color-rotation tracking: snapshot the sector green/red counts at the US
 // cash open and surface the delta so the user can spot sectors flipping
 // mid-day — the earliest tell of a regime change per the source methodology.
 // US-RTH detection is anchored to America/New_York, NOT to the chart symbol's
 // session, so the trigger fires correctly on a futures, FX, or crypto chart.
+//
+// Snapshot only fires on the actual 09:30 ET transition (qwUsRthJustStarted).
+// On a chart loaded mid-session, no snapshot exists yet and the delta is na —
+// the UI then renders "·" instead of an arrow, signalling "no open baseline
+// yet" rather than passing off load-time counts as the open.
+//
+// Timeframe caveat: the 09:30 edge fires cleanly on 1m–30m charts (a bar
+// boundary lands at the open). On wider timeframes where one bar straddles
+// the open (e.g. 1h/4h), the snapshot is taken at the bar's start tick — which
+// may be a few minutes before 09:30. Accepted: this script is intended for
+// intraday work where the chart is typically ≤15m.
 var int qwGreensAtOpen = na
 var int qwRedsAtOpen   = na
+
+// NY trading-day rollover reset — without this, the snapshot from yesterday's
+// 09:30 ET persists overnight, so this morning's premarket bars compute their
+// delta against yesterday's open. Clearing on the date change forces the UI
+// back to "no baseline yet" until today's 09:30 snapshot fires. Detect the
+// rollover via the NY-tz date so charts that have midnight ET bars (futures,
+// FX, crypto) trip the reset at ~midnight, and stock-only charts trip it on
+// the first bar of the new RTH session (which is the 09:30 bar itself — the
+// reset runs before the snapshot assignment below).
+int qwNyDayKey = year(time, "America/New_York") * 10000 + month(time, "America/New_York") * 100 + dayofmonth(time, "America/New_York")
+if qwNyDayKey != qwNyDayKey[1]
+    qwGreensAtOpen := na
+    qwRedsAtOpen   := na
+
 int qwUsRthTime = time(timeframe = timeframe.period, session = "0930-1600:23456", timezone = "America/New_York")
 bool qwUsRthJustStarted = not na(qwUsRthTime) and na(qwUsRthTime[1])
 
@@ -366,12 +441,14 @@ bool qwUsRthJustStarted = not na(qwUsRthTime) and na(qwUsRthTime[1])
 // bars, which would poison this var state. Only snapshot once we've reached
 // live data (or the last confirmed history bar that immediately precedes it).
 bool qwSnapshotAllowed = barstate.isrealtime or barstate.islastconfirmedhistory
-if (qwUsRthJustStarted or na(qwGreensAtOpen)) and qwSnapshotAllowed
+if qwUsRthJustStarted and qwSnapshotAllowed
     qwGreensAtOpen := qwSectorGreensRaw
     qwRedsAtOpen   := qwSectorRedsRaw
 
-int qwGreensDelta = na(qwGreensAtOpen) ? 0 : qwSectorGreensRaw - qwGreensAtOpen
-int qwRedsDelta   = na(qwRedsAtOpen)   ? 0 : qwSectorRedsRaw   - qwRedsAtOpen
+// Delta is na (not 0) when no snapshot exists or the sector feed is currently
+// dead — guards against rendering a phantom "▼9" the moment sectors drop out.
+int qwGreensDelta = na(qwGreensAtOpen) or qwSectorTotal == 0 ? na : qwSectorGreensRaw - qwGreensAtOpen
+int qwRedsDelta   = na(qwRedsAtOpen)   or qwSectorTotal == 0 ? na : qwSectorRedsRaw   - qwRedsAtOpen
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Regime verdict synthesis.
@@ -416,10 +493,11 @@ f_qwHeaderRow(table tableId, int rowIndex, string headerLabel, string headerValu
          text_size = qwTextSize,
          bgcolor = color.new(color = NORD1, transp = 25))
 
-f_qwReadingRow(table tableId, int rowIndex, QwReading reading) =>
+f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed) =>
     color rowBg = color.new(color = NORD0, transp = 100)
-    color rowText = f_qwCellTextColor(pctChange = reading.pctChange)
-    color pctText = f_qwPctTextColor(pctChange = reading.pctChange)
+    color dimColor = color.new(color = NORD3, transp = 0)
+    color rowText = isDimmed ? dimColor : f_qwCellTextColor(pctChange = reading.pctChange)
+    color pctText = isDimmed ? dimColor : f_qwPctTextColor(pctChange = reading.pctChange)
     table.cell(table_id = tableId, column = 0, row = rowIndex, text = reading.label,
          text_color = rowText,
          text_halign = text.align_left,
@@ -459,7 +537,7 @@ string qwRegimeTooltip =
      "This appears when cash is mixed, futures are mixed, sectors are split, or cash and futures point in opposite directions.\n" +
      "\n" +
      "× DATA GAP\n" +
-     "At least one enabled group returned no usable readings.\n" +
+     "At least one enabled group returned too few usable readings — zero, or below half of the expected symbol count.\n" +
      "Do not trust the verdict when part of the intermarket picture is missing.\n" +
      "\n" +
      "📐 COMMITMENT RULES\n" +
@@ -502,7 +580,7 @@ if barstate.islast
         f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "CASH", headerValue = f_qwFormatPct(pctChange = qwCashNet))
         qwRow += 1
         for cashReading in qwCashReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = cashReading)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = cashReading, isDimmed = false)
             qwRow += 1
 
     // Futures block
@@ -510,21 +588,46 @@ if barstate.islast
         f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "FUTURES", headerValue = f_qwFormatPct(pctChange = qwFuturesNet))
         qwRow += 1
         for futuresReading in qwFuturesReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = futuresReading)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = futuresReading, isDimmed = false)
             qwRow += 1
 
     // Sectors block — header line surfaces the live green/red counts and
     // their since-open delta (the "color rotation" early-warning signal).
+    // Uses ● (filled circle, Nord-themed) in place of emoji circles. Delta
+    // arrow is "·" when no open snapshot exists yet (chart loaded mid-session
+    // or sector feed degraded) so the user can distinguish "we don't know
+    // yet" from "no change". Value cell is tinted by the dominant committed
+    // lean — NORD8 (green), NORD11 (red), NORD4 (balanced/none). One color
+    // covers both ● symbols because Pine table cells are single-color; the
+    // numeric counts disambiguate which is greens (first) vs reds (second).
+    // Commodity rows (XLE, XLB) are dimmed when "Discount Commodity Sectors"
+    // is on, so it's visually obvious they don't contribute to the verdict.
     if qwShowSectors
-        string qwGreensArrow = qwGreensDelta > 0 ? "▲" : qwGreensDelta < 0 ? "▼" : "→"
-        string qwRedsArrow   = qwRedsDelta   > 0 ? "▲" : qwRedsDelta   < 0 ? "▼" : "→"
-        string qwSectorHeaderValue = str.format("🟢{0}{1}{2}  🔴{3}{4}{5}",
-             qwSectorGreensRaw, qwGreensArrow, math.abs(qwGreensDelta),
-             qwSectorRedsRaw,   qwRedsArrow,   math.abs(qwRedsDelta))
-        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "SECTORS", headerValue = qwSectorHeaderValue)
+        string qwGreensArrow = na(qwGreensDelta) ? "·" : qwGreensDelta > 0 ? "▲" : qwGreensDelta < 0 ? "▼" : "→"
+        string qwRedsArrow   = na(qwRedsDelta)   ? "·" : qwRedsDelta   > 0 ? "▲" : qwRedsDelta   < 0 ? "▼" : "→"
+        string qwGreensDeltaText = na(qwGreensDelta) ? "" : str.tostring(math.abs(qwGreensDelta))
+        string qwRedsDeltaText   = na(qwRedsDelta)   ? "" : str.tostring(math.abs(qwRedsDelta))
+        string qwSectorHeaderValue = str.format("●{0} {1}{2}  ●{3} {4}{5}",
+             qwSectorGreensRaw, qwGreensArrow, qwGreensDeltaText,
+             qwSectorRedsRaw,   qwRedsArrow,   qwRedsDeltaText)
+        color qwSectorHeaderValueColor = qwSectorGreensComm > qwSectorRedsComm ? color.new(color = NORD8, transp = 0) :
+             qwSectorGreensComm < qwSectorRedsComm ? color.new(color = NORD11, transp = 0) :
+             color.new(color = NORD4, transp = 30)
+        table.cell(table_id = qwTable, column = 0, row = qwRow, text = "SECTORS",
+             text_color = color.new(color = NORD9, transp = 0),
+             text_halign = text.align_left,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = color.new(color = NORD1, transp = 25))
+        table.cell(table_id = qwTable, column = 1, row = qwRow, text = qwSectorHeaderValue,
+             text_color = qwSectorHeaderValueColor,
+             text_halign = text.align_right,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = color.new(color = NORD1, transp = 25))
         qwRow += 1
         for sectorReading in qwSectorReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading, isDimmed = qwIgnoreCommoditySectors and sectorReading.isCommodity)
             qwRow += 1
 
     // Regime verdict — synthesizes the five bifurcation / commitment / data checks.
