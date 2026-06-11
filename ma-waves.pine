@@ -9,6 +9,8 @@ indicator(title = "MAs & Waves", shorttitle = "🌊 MA&W", overlay = true, calc_
 const string GROUP_TREND = "📈 Trend"
 const string GROUP_CYCLE = "🔄 Cycle"
 const string GROUP_WAVES = "🌊 Waves"
+const string GROUP_FAILED_WAVES = "⚠️ Failed Waves"
+const string GROUP_COMPLEX_RETRACES = "🔤 Complex Retraces"
 
 // Nord Theme Color
 // Polar Night
@@ -38,12 +40,6 @@ const color TREND_FLAT_COLOR = NORD2
 
 const float CYCLE_LOW_BOUNDARY = 45.0
 const float CYCLE_HIGH_BOUNDARY = 55.0
-const string DOT_GLYPH = "●"
-const string SIZE_OPTION_TINY = "Tiny"
-const string SIZE_OPTION_SMALL = "Small"
-const string SIZE_OPTION_NORMAL = "Normal"
-const string SIZE_OPTION_LARGE = "Large"
-const string SIZE_OPTION_HUGE = "Huge"
 
 const string ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
@@ -64,7 +60,7 @@ enum CycleZone
 type ExtremeBar
     float price
     int barIndex
-    label dotLabel
+    label waveLabel
 
 type CycleStatus
     CycleZone activeCycleZone
@@ -75,12 +71,6 @@ type CycleSnapshot
     CycleZone activeCycleZone
     ExtremeBar highCycleExtremeBar
     ExtremeBar lowCycleExtremeBar
-
-type Wave
-    int number
-    int letter
-    float lastImpulseHigh
-    float lastImpulseLow
 
 // 🎛️ USER INPUT SETTINGS
 
@@ -95,20 +85,25 @@ trendFlatThreshold = input.float(defval = 0.001, title = "Flat Threshold", minva
 stochLength = input.int(defval = 5, title = "K Length", minval = 1, group = GROUP_CYCLE)
 stochSmooth = input.int(defval = 2, title = "K Smooth", minval = 1, group = GROUP_CYCLE)
 stochDLength = input.int(defval = 3, title = "D Length", minval = 1, group = GROUP_CYCLE)
-cycleHighDotOffsetTicks = input.float(defval = 10.0, title = "High Dot Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_CYCLE)
-cycleLowDotOffsetTicks = input.float(defval = 10.0, title = "Low Dot Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_CYCLE)
 
 // Wave Settings
-waveLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Color", group = GROUP_WAVES)
+waveUpColor = input.color(defval = #A3BE8C, title = "Up Wave Color", group = GROUP_WAVES)
+waveDownColor = input.color(defval = #BF616A, title = "Down Wave Color", group = GROUP_WAVES)
 waveLabelSizeOpt = input.int(defval = 14, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
 waveLabelOffsetTop = input.float(defval = 10.0, title = "Top Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelOffsetBottom = input.float(defval = 10.0, title = "Bottom Label Offset (Ticks)", minval = 0.0, step = 1.0, group = GROUP_WAVES)
 waveLabelSize = waveLabelSizeOpt
 
+// Failed Wave Settings
+failedWaveUpColor = input.color(defval = #A3BE8C, title = "Up Failed Wave Color", group = GROUP_FAILED_WAVES)
+failedWaveDownColor = input.color(defval = #BF616A, title = "Down Failed Wave Color", group = GROUP_FAILED_WAVES)
+failedWaveLabelSizeOpt = input.int(defval = 14, title = "Failed Wave Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_FAILED_WAVES)
+failedWaveLabelSize = failedWaveLabelSizeOpt
+
 // Complex Retrace Settings
-complexRetraceShow = input.bool(defval = false, title = "Show Complex Retrace Letters", group = GROUP_WAVES)
-complexRetraceLabelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Complex Retrace Label Color", group = GROUP_WAVES)
-complexRetraceLabelSizeOpt = input.int(defval = 14, title = "Complex Retrace Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
+complexRetraceUpColor = input.color(defval = #A3BE8C, title = "Up Letter Color", group = GROUP_COMPLEX_RETRACES)
+complexRetraceDownColor = input.color(defval = #BF616A, title = "Down Letter Color", group = GROUP_COMPLEX_RETRACES)
+complexRetraceLabelSizeOpt = input.int(defval = 14, title = "Complex Retrace Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_COMPLEX_RETRACES)
 complexRetraceLabelSize = complexRetraceLabelSizeOpt
 
 // 📈 TREND
@@ -129,35 +124,60 @@ color currTrendColor = switch currTrendDir
     TrendDir.FLAT => TREND_FLAT_COLOR
 trend := Trend.new(currTrendDir, currTrendColor)
 
-// 🔄 CYCLE
+// 🔄 Cycles
 // Helpers
-f_upsertCycleDot(label existingDotLabel, int dotBarIndex, float dotPrice, color dotColor) =>
-    label updatedDotLabel = existingDotLabel
-    if na(updatedDotLabel)
-        updatedDotLabel := label.new(x = dotBarIndex, y = dotPrice, text = DOT_GLYPH, xloc = xloc.bar_index, yloc = yloc.price,
-             color = na, style = label.style_none, textcolor = dotColor, size = size.small)
-    else
-        label.set_xy(id = updatedDotLabel, x = dotBarIndex, y = dotPrice)
-        label.set_color(id = updatedDotLabel, color = na)
-        label.set_style(id = updatedDotLabel, style = label.style_none)
-        label.set_text(id = updatedDotLabel, text = DOT_GLYPH)
-        label.set_textcolor(id = updatedDotLabel, textcolor = dotColor)
-        label.set_size(id = updatedDotLabel, size = size.small)
-        label.set_yloc(id = updatedDotLabel, yloc = yloc.price)
-    updatedDotLabel
+f_emptyExtremeBar() =>
+    ExtremeBar.new(na, na, na)
 
-f_trackExtremeBar(ExtremeBar existingExtremeBar, float candidatePrice, float dotOffsetPrice, color dotColor, bool isHigherExtreme) =>
+f_isTieBrokenByClose(ExtremeBar existingExtremeBar, float candidatePrice, int candidateBarIndex, bool isHigherExtreme) =>
+    int existingOffset = bar_index - existingExtremeBar.barIndex
+    int candidateOffset = bar_index - candidateBarIndex
+    bool offsetsValid = not na(existingExtremeBar.barIndex) and existingOffset >= 0 and candidateOffset >= 0
+    float existingClose = offsetsValid ? close[existingOffset] : na
+    float candidateClose = offsetsValid ? close[candidateOffset] : na
+    bool sameExtremePrice = not na(existingExtremeBar.price) and candidatePrice == existingExtremeBar.price
+    bool closeBreaksTie = isHigherExtreme ? candidateClose > existingClose : candidateClose < existingClose
+    bool closeStillTied = candidateClose == existingClose
+    sameExtremePrice and offsetsValid and (closeBreaksTie or closeStillTied)
+
+f_trackExtremeBar(ExtremeBar existingExtremeBar, float candidatePrice, bool isHigherExtreme) =>
     bool hasNoExtreme = na(existingExtremeBar.price)
-    bool isMoreExtreme = isHigherExtreme ? candidatePrice > existingExtremeBar.price : candidatePrice < existingExtremeBar.price
-    if hasNoExtreme or isMoreExtreme
-        ExtremeBar.new(price = candidatePrice, barIndex = bar_index,
-             dotLabel = f_upsertCycleDot(existingDotLabel = hasNoExtreme ? na : existingExtremeBar.dotLabel, dotBarIndex = bar_index,
-             dotPrice = isHigherExtreme ? candidatePrice + dotOffsetPrice : candidatePrice - dotOffsetPrice, dotColor = dotColor))
+    bool hasBetterPrice = isHigherExtreme ? candidatePrice > existingExtremeBar.price : candidatePrice < existingExtremeBar.price
+    bool winsTie = f_isTieBrokenByClose(existingExtremeBar, candidatePrice, bar_index, isHigherExtreme)
+    if hasNoExtreme or hasBetterPrice or winsTie
+        ExtremeBar.new(price = candidatePrice, barIndex = bar_index, waveLabel = existingExtremeBar.waveLabel)
     else
         existingExtremeBar
 
-f_emptyExtremeBar() =>
-    ExtremeBar.new(na, na, na)
+f_extremeBarFromOffset(float candidatePrice, int offset) =>
+    int candidateBarIndex = bar_index - offset
+    na(candidatePrice) or candidateBarIndex < 0 ? f_emptyExtremeBar() : ExtremeBar.new(candidatePrice, candidateBarIndex, na)
+
+f_trackCandidateExtreme(ExtremeBar existingExtremeBar, float candidatePrice, int candidateBarIndex, bool isHigherExtreme) =>
+    bool hasNoExtreme = na(existingExtremeBar.price)
+    bool hasBetterPrice = isHigherExtreme ? candidatePrice > existingExtremeBar.price : candidatePrice < existingExtremeBar.price
+    bool winsTie = f_isTieBrokenByClose(existingExtremeBar, candidatePrice, candidateBarIndex, isHigherExtreme)
+    if na(candidatePrice) or candidateBarIndex < 0
+        existingExtremeBar
+    else if hasNoExtreme or hasBetterPrice or winsTie
+        ExtremeBar.new(price = candidatePrice, barIndex = candidateBarIndex, waveLabel = existingExtremeBar.waveLabel)
+    else
+        existingExtremeBar
+
+f_preferredWaveAnchorBarIndex(int extremeBarIndex, bool isHighSide) =>
+    int prevBarIndex = bar_index - 1
+    if na(extremeBarIndex) or prevBarIndex < 0
+        extremeBarIndex
+    else
+        int extremeOffset = bar_index - extremeBarIndex
+        float extremePrice = isHighSide ? high[extremeOffset] : low[extremeOffset]
+        float prevPrice = isHighSide ? high[1] : low[1]
+        bool prevIsMoreExtreme = isHighSide ? prevPrice > extremePrice : prevPrice < extremePrice
+        prevIsMoreExtreme ? prevBarIndex : extremeBarIndex
+
+f_priceAtBarIndex(int targetBarIndex, bool isHighSide) =>
+    int offset = bar_index - targetBarIndex
+    na(targetBarIndex) or offset < 0 ? na : (isHighSide ? high[offset] : low[offset])
 
 // Signal inputs
 stochK = ta.stoch(source = close, high = high, low = low, length = stochLength)
@@ -167,8 +187,6 @@ bool crossedAbove45 = ta.crossover(source1 = stochD, source2 = CYCLE_LOW_BOUNDAR
 bool crossedAbove55 = ta.crossover(source1 = stochD, source2 = CYCLE_HIGH_BOUNDARY)
 bool crossedBelow55 = ta.crossunder(source1 = stochD, source2 = CYCLE_HIGH_BOUNDARY)
 bool crossedBelow45 = ta.crossunder(source1 = stochD, source2 = CYCLE_LOW_BOUNDARY)
-float cycleHighDotOffsetPrice = syminfo.mintick * cycleHighDotOffsetTicks
-float cycleLowDotOffsetPrice = syminfo.mintick * cycleLowDotOffsetTicks
 
 // Cycle state
 var CycleSnapshot confirmedCycleSnapshot = CycleSnapshot.new(
@@ -187,29 +205,615 @@ CycleStatus cycleStatus = CycleStatus.new(
 
 if cycleStatus.startedHighCycle
     liveCycleSnapshot.activeCycleZone := CycleZone.HIGH
-    liveCycleSnapshot.highCycleExtremeBar := f_emptyExtremeBar()
-    liveCycleSnapshot.highCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar, candidatePrice = high,
-         dotOffsetPrice = cycleHighDotOffsetPrice, dotColor = NORD8, isHigherExtreme = true)
+    liveCycleSnapshot.highCycleExtremeBar := f_extremeBarFromOffset(high[1], 1)
+    liveCycleSnapshot.highCycleExtremeBar := f_trackCandidateExtreme(
+         existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar,
+         candidatePrice = high,
+         candidateBarIndex = bar_index,
+         isHigherExtreme = true)
 else if cycleStatus.startedLowCycle
     liveCycleSnapshot.activeCycleZone := CycleZone.LOW
-    liveCycleSnapshot.lowCycleExtremeBar := f_emptyExtremeBar()
-    liveCycleSnapshot.lowCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar, candidatePrice = low,
-         dotOffsetPrice = cycleLowDotOffsetPrice, dotColor = NORD11, isHigherExtreme = false)
+    liveCycleSnapshot.lowCycleExtremeBar := f_extremeBarFromOffset(low[1], 1)
+    liveCycleSnapshot.lowCycleExtremeBar := f_trackCandidateExtreme(
+         existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar,
+         candidatePrice = low,
+         candidateBarIndex = bar_index,
+         isHigherExtreme = false)
 else if liveCycleSnapshot.activeCycleZone == CycleZone.HIGH and stochD > CYCLE_LOW_BOUNDARY
-    liveCycleSnapshot.highCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar, candidatePrice = high,
-         dotOffsetPrice = cycleHighDotOffsetPrice, dotColor = NORD8, isHigherExtreme = true)
+    liveCycleSnapshot.highCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.highCycleExtremeBar, candidatePrice = high, isHigherExtreme = true)
 else if liveCycleSnapshot.activeCycleZone == CycleZone.LOW and stochD < CYCLE_HIGH_BOUNDARY
-    liveCycleSnapshot.lowCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar, candidatePrice = low,
-         dotOffsetPrice = cycleLowDotOffsetPrice, dotColor = NORD11, isHigherExtreme = false)
+    liveCycleSnapshot.lowCycleExtremeBar := f_trackExtremeBar(existingExtremeBar = liveCycleSnapshot.lowCycleExtremeBar, candidatePrice = low, isHigherExtreme = false)
 
 if barstate.isconfirmed
     confirmedCycleSnapshot := liveCycleSnapshot
 
 // 🌊 WAVES
-// var Wave wave = Wave.new(0, false, 0, ALPHABET[0])
-// var Price price = Price.new(close = close, isExtreme = false, isHigherHigh = false, isLowerLow = false)
-// float waveLabelOffsetTopPrice = syminfo.mintick * waveLabelOffsetTop
-// float waveLabelOffsetBottomPrice = syminfo.mintick * waveLabelOffsetBottom
+
+// ── Helpers ─────────────────────────────────────────────────────────────────────────────────────
+
+// Look up the Nth letter in the alphabet (idx 0 = 'a'). Wraps modulo 26.
+f_letterAt(int idx) =>
+    int wrapped = idx % 26
+    str.substring(ALPHABET, wrapped, wrapped + 1)
+
+// Compose label text from a cycle's classification components.
+f_letterText(int letterIdx) =>
+    letterIdx >= 0 ? f_letterAt(letterIdx) : ""
+
+f_buildLabelText(int waveNumber, bool qualifies, bool isFailed, int letterIdx) =>
+    string letterText = f_letterText(letterIdx)
+    string result = ""
+    if qualifies and waveNumber > 0 and isFailed
+        // F-wave: F-prefix only, no letter shown
+        result := "F" + str.tostring(waveNumber)
+    else if qualifies and waveNumber > 0 and waveNumber % 2 == 0 and letterText != ""
+        // Retrace wave (even N): number stacked over letter
+        result := str.tostring(waveNumber) + "\n" + letterText
+    else if qualifies and waveNumber > 0
+        // Impulse wave (odd N) or retrace without letter: number only
+        result := str.tostring(waveNumber)
+    else if letterText != ""
+        // Doesn't qualify as a wave but is in a retrace zone: just the letter
+        result := letterText
+    result
+
+// Wick test — does the cycle's extreme bar pierce past the prior same-type wave's extreme
+// in the trend-confirming direction? (UP trend = greater; DOWN trend = lesser.)
+f_wickPastInTrendDir(float cycleExtreme, float priorExtreme, TrendDir trendDir) =>
+    na(priorExtreme) or na(cycleExtreme) ? false : (trendDir == TrendDir.UP ? cycleExtreme > priorExtreme : cycleExtreme < priorExtreme)
+
+// Real-body test — are BOTH open and close past the prior same-type wave's extreme in trend-confirming direction?
+f_realBodyPastInTrendDir(float openPrice, float closePrice, float priorExtreme, TrendDir trendDir) =>
+    na(priorExtreme) or na(openPrice) or na(closePrice) ? false : (trendDir == TrendDir.UP ? (openPrice > priorExtreme and closePrice > priorExtreme) : (openPrice < priorExtreme and closePrice < priorExtreme))
+
+f_bodyMajorityPastTrendLine(float openPrice, float closePrice, float trendLine, TrendDir trendDir) =>
+    float bodyLow = math.min(openPrice, closePrice)
+    float bodyHigh = math.max(openPrice, closePrice)
+    float bodySize = bodyHigh - bodyLow
+    if na(openPrice) or na(closePrice) or na(trendLine) or bodySize <= 0
+        false
+    else
+        float bodyAbove = math.max(0.0, bodyHigh - math.max(bodyLow, trendLine))
+        float bodyBelow = math.max(0.0, math.min(bodyHigh, trendLine) - bodyLow)
+        trendDir == TrendDir.UP ? bodyAbove / bodySize > 0.5 : bodyBelow / bodySize > 0.5
+
+f_setLabelText(label existingLabel, string txt) =>
+    if not na(existingLabel)
+        label.set_text(id = existingLabel, text = txt)
+
+f_setLabelPosition(label existingLabel, int labelBarIndex, float labelPrice) =>
+    if not na(existingLabel) and not na(labelBarIndex) and not na(labelPrice)
+        label.set_xy(id = existingLabel, x = labelBarIndex, y = labelPrice)
+
+f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, string labelText, color labelColor, int labelSize) =>
+    label updatedLabel = existingLabel
+    if na(updatedLabel)
+        updatedLabel := label.new(x = labelBarIndex, y = labelPrice, text = labelText, xloc = xloc.bar_index, yloc = yloc.price,
+             color = na, style = label.style_none, textcolor = labelColor, size = labelSize)
+    else
+        label.set_xy(id = updatedLabel, x = labelBarIndex, y = labelPrice)
+        label.set_text(id = updatedLabel, text = labelText)
+        label.set_textcolor(id = updatedLabel, textcolor = labelColor)
+        label.set_size(id = updatedLabel, size = labelSize)
+    updatedLabel
+
+f_clearLabel(label existingLabel) =>
+    if not na(existingLabel)
+        label.set_text(id = existingLabel, text = "")
+
+// ── State ───────────────────────────────────────────────────────────────────────────────────────
+//
+// Wave counters track what the NEXT wave attempt will be. A real wave advances by 2; F-waves and
+// letter-only cycles do NOT advance.
+//
+//   nextImpulseNumber       — the wave number the next impulse-direction cycle is attempting (1, 3, 5, ...).
+//   nextRetraceNumber       — the wave number the next retrace-direction cycle is attempting (2, 4, 6, ...).
+//   lastImpulseExtreme      — extreme price of the last CONFIRMED impulse (NA before wave 1).
+//   letterIndex             — global next-letter index for the active retrace zone (resets on impulse confirm).
+//   lastConfirmedTrendDir   — last confirmed trend state, used to detect when a new trend starts.
+//
+// Per-cycle classification (high cycle and low cycle independently tracked):
+//   {high,low}CycleAttemptedWaveNumber — what this cycle is "trying to be" (set at cycle start).
+//   {high,low}CycleQualifiesAsWave     — does the current extreme bar pass the qualification?
+//   {high,low}CycleIsFailed            — true if an odd-wave wick passed but the real body failed.
+//   {high,low}CycleLetterIndex         — letter index assigned at cycle start (-1 if pre-wave-1).
+//   {high,low}CycleWaveColor           — label color (locked at cycle start from the active trend).
+//
+// Retrace zone tracking (NEW — fixes the over-advancement bug):
+//   A retrace zone is the cycles between two CONFIRMED impulses. Within a zone, only the
+//   MOST EXTREME retrace candidate gets the wave number; others get letters only. The
+//   retrace counter (nextRetraceNumber) advances ONLY when an impulse confirms — closing
+//   the zone — NOT on every retrace cycle.
+//
+//   retraceZoneBestPrice    — extreme price of the current zone's best retrace candidate (NA if none yet).
+//   retraceZoneBestLabel    — label of the candidate that currently OWNS the wave number (for downgrade on takeover).
+//   retraceZoneBestLetterIdx — letter index of the current owner (so we can restore it as just-a-letter on takeover).
+var int nextImpulseNumber = 1
+var int nextRetraceNumber = 2
+var float lastImpulseExtreme = na
+var int letterIndex = 0
+var TrendDir lastConfirmedTrendDir = trend.direction
+
+var int highCycleAttemptedWaveNumber = 0
+var bool highCycleQualifiesAsWave = false
+var bool highCycleIsFailed = false
+var bool highCycleHasQualifiedBreak = false
+var bool highCycleHasWickBreak = false
+var bool highCycleHasTrendLineSeparation = false
+var bool highCycleIsImpulseSide = false
+var int highCycleLetterIndex = -1
+var color highCycleWaveColor = na
+var int highCycleBlockedUntilBarIndex = na
+var int highCycleWaveAnchorBarIndex = na
+var float highCycleWaveAnchorPrice = na
+var int highCycleLetterAnchorBarIndex = na
+var float highCycleLetterAnchorPrice = na
+
+var int lowCycleAttemptedWaveNumber = 0
+var bool lowCycleQualifiesAsWave = false
+var bool lowCycleIsFailed = false
+var bool lowCycleHasQualifiedBreak = false
+var bool lowCycleHasWickBreak = false
+var bool lowCycleHasTrendLineSeparation = false
+var bool lowCycleIsImpulseSide = false
+var int lowCycleLetterIndex = -1
+var color lowCycleWaveColor = na
+var int lowCycleBlockedUntilBarIndex = na
+var int lowCycleWaveAnchorBarIndex = na
+var float lowCycleWaveAnchorPrice = na
+var int lowCycleLetterAnchorBarIndex = na
+var float lowCycleLetterAnchorPrice = na
+
+var float retraceZoneBestPrice = na
+var label retraceZoneBestLabel = na
+var int retraceZoneBestLetterIdx = -1
+var int retraceZoneCompletedCount = 0
+var int retraceZoneBestAnchorBarIndex = na
+var float retraceZoneBestAnchorPrice = na
+var int retraceZoneBestExtremeBarIndex = na
+var float retraceZoneBestExtremePrice = na
+
+// ── Per-bar offsets in price units (ticks × mintick) ────────────────────────────────────────────
+float waveLabelOffsetTopPrice = syminfo.mintick * waveLabelOffsetTop
+float waveLabelOffsetBottomPrice = syminfo.mintick * waveLabelOffsetBottom
+
+// ── 1. RESET RULE — confirmed-bar trend change ──────────────────────────────────────────────────
+// When the trend state changes on a confirmed bar, reset immediately. If the active cycle already
+// matches the new trend direction, seed wave 1 on that same bar close instead of waiting for the
+// next cycle boundary.
+bool cycleStartedThisBar = cycleStatus.startedHighCycle or cycleStatus.startedLowCycle
+bool trendChangedThisBar = barstate.isconfirmed and trend.direction != lastConfirmedTrendDir
+
+if trendChangedThisBar
+    nextImpulseNumber := 1
+    nextRetraceNumber := 2
+    lastImpulseExtreme := na
+    letterIndex := 0
+    retraceZoneBestPrice := na
+    retraceZoneBestLabel := na
+    retraceZoneBestLetterIdx := -1
+    retraceZoneCompletedCount := 0
+    retraceZoneBestAnchorBarIndex := na
+    retraceZoneBestAnchorPrice := na
+    retraceZoneBestExtremeBarIndex := na
+    retraceZoneBestExtremePrice := na
+    highCycleAttemptedWaveNumber := 0
+    highCycleQualifiesAsWave := false
+    highCycleIsFailed := false
+    highCycleHasQualifiedBreak := false
+    highCycleHasWickBreak := false
+    highCycleHasTrendLineSeparation := false
+    highCycleIsImpulseSide := false
+    highCycleHasTrendLineSeparation := false
+    highCycleLetterIndex := -1
+    highCycleWaveColor := na
+    highCycleBlockedUntilBarIndex := na
+    highCycleWaveAnchorBarIndex := na
+    highCycleWaveAnchorPrice := na
+    highCycleLetterAnchorBarIndex := na
+    highCycleLetterAnchorPrice := na
+    lowCycleAttemptedWaveNumber := 0
+    lowCycleQualifiesAsWave := false
+    lowCycleIsFailed := false
+    lowCycleHasQualifiedBreak := false
+    lowCycleHasWickBreak := false
+    lowCycleHasTrendLineSeparation := false
+    lowCycleIsImpulseSide := false
+    lowCycleHasTrendLineSeparation := false
+    lowCycleLetterIndex := -1
+    lowCycleWaveColor := na
+    lowCycleBlockedUntilBarIndex := na
+    lowCycleWaveAnchorBarIndex := na
+    lowCycleWaveAnchorPrice := na
+    lowCycleLetterAnchorBarIndex := na
+    lowCycleLetterAnchorPrice := na
+
+    if trend.direction == TrendDir.UP and liveCycleSnapshot.activeCycleZone == CycleZone.HIGH and not na(liveCycleSnapshot.highCycleExtremeBar.price)
+        highCycleAttemptedWaveNumber := 1
+        highCycleWaveColor := waveUpColor
+    else if trend.direction == TrendDir.DOWN and liveCycleSnapshot.activeCycleZone == CycleZone.LOW and not na(liveCycleSnapshot.lowCycleExtremeBar.price)
+        lowCycleAttemptedWaveNumber := 1
+        lowCycleWaveColor := waveDownColor
+
+// ── 2. CYCLE END PROCESSING ──────────────────────────────────────────────────────────────────────
+
+// LOW cycle just ended (HIGH cycle is starting)
+if cycleStatus.startedHighCycle and not trendChangedThisBar and lowCycleAttemptedWaveNumber > 0 and not na(liveCycleSnapshot.lowCycleExtremeBar.price)
+    bool wasImpulse = lowCycleAttemptedWaveNumber % 2 == 1
+    if wasImpulse
+        // LOW = impulse in DOWN trend
+        if lowCycleQualifiesAsWave and not lowCycleIsFailed
+            // Real impulse → close retrace zone if open, then commit impulse
+            if not na(retraceZoneBestPrice)
+                nextRetraceNumber := nextRetraceNumber + 2
+                retraceZoneBestPrice := na
+                retraceZoneBestLabel := na
+                retraceZoneBestLetterIdx := -1
+                retraceZoneCompletedCount := 0
+                retraceZoneBestAnchorBarIndex := na
+                retraceZoneBestAnchorPrice := na
+                retraceZoneBestExtremeBarIndex := na
+                retraceZoneBestExtremePrice := na
+            lastImpulseExtreme := liveCycleSnapshot.lowCycleExtremeBar.price
+            nextImpulseNumber := nextImpulseNumber + 2
+            letterIndex := 0
+    else
+        // LOW = retrace in UP trend; update zone best
+        if lowCycleQualifiesAsWave
+            int cycleAnchorBarIndex = na(lowCycleLetterAnchorBarIndex) ? liveCycleSnapshot.lowCycleExtremeBar.barIndex : lowCycleLetterAnchorBarIndex
+            float cycleAnchorPrice = na(lowCycleLetterAnchorPrice) ? liveCycleSnapshot.lowCycleExtremeBar.price - waveLabelOffsetBottomPrice : lowCycleLetterAnchorPrice
+            retraceZoneCompletedCount := retraceZoneCompletedCount + 1
+            bool showLettersNow = retraceZoneCompletedCount >= 2
+            // For LOW retrace cycles, "more extreme" = lower low (deeper retrace)
+            bool isMoreExtreme = na(retraceZoneBestPrice) or liveCycleSnapshot.lowCycleExtremeBar.price < retraceZoneBestPrice
+            if isMoreExtreme
+                // Downgrade OLD best to letter-only (if any)
+                f_setLabelText(retraceZoneBestLabel, f_buildLabelText(0, false, false, showLettersNow ? retraceZoneBestLetterIdx : -1))
+                f_setLabelPosition(retraceZoneBestLabel, retraceZoneBestAnchorBarIndex, retraceZoneBestAnchorPrice)
+                // Promote this cycle to new zone best
+                retraceZoneBestPrice := liveCycleSnapshot.lowCycleExtremeBar.price
+                retraceZoneBestLetterIdx := lowCycleLetterIndex
+                retraceZoneBestAnchorBarIndex := cycleAnchorBarIndex
+                retraceZoneBestAnchorPrice := cycleAnchorPrice
+                retraceZoneBestExtremeBarIndex := liveCycleSnapshot.lowCycleExtremeBar.barIndex
+                retraceZoneBestExtremePrice := liveCycleSnapshot.lowCycleExtremeBar.price
+                retraceZoneBestLabel := f_upsertWaveLabel(
+                     existingLabel = liveCycleSnapshot.lowCycleExtremeBar.waveLabel,
+                     labelBarIndex = showLettersNow ? retraceZoneBestAnchorBarIndex : liveCycleSnapshot.lowCycleExtremeBar.barIndex,
+                     labelPrice = showLettersNow ? retraceZoneBestAnchorPrice : liveCycleSnapshot.lowCycleExtremeBar.price - waveLabelOffsetBottomPrice,
+                     labelText = f_buildLabelText(nextRetraceNumber, true, false, showLettersNow ? retraceZoneBestLetterIdx : -1),
+                     labelColor = showLettersNow ? complexRetraceUpColor : waveUpColor,
+                     labelSize = showLettersNow ? complexRetraceLabelSize : waveLabelSize)
+            else
+                retraceZoneBestLabel := f_upsertWaveLabel(
+                     existingLabel = retraceZoneBestLabel,
+                     labelBarIndex = showLettersNow ? retraceZoneBestAnchorBarIndex : retraceZoneBestExtremeBarIndex,
+                     labelPrice = showLettersNow ? retraceZoneBestAnchorPrice : retraceZoneBestExtremePrice - waveLabelOffsetBottomPrice,
+                     labelText = f_buildLabelText(nextRetraceNumber, true, false, showLettersNow ? retraceZoneBestLetterIdx : -1),
+                     labelColor = showLettersNow ? complexRetraceUpColor : waveUpColor,
+                     labelSize = showLettersNow ? complexRetraceLabelSize : waveLabelSize)
+                liveCycleSnapshot.lowCycleExtremeBar.waveLabel := f_upsertWaveLabel(
+                     existingLabel = liveCycleSnapshot.lowCycleExtremeBar.waveLabel,
+                     labelBarIndex = cycleAnchorBarIndex,
+                     labelPrice = cycleAnchorPrice,
+                     labelText = f_buildLabelText(0, false, false, showLettersNow ? lowCycleLetterIndex : -1),
+                     labelColor = complexRetraceUpColor,
+                     labelSize = complexRetraceLabelSize)
+                if not showLettersNow
+                    f_clearLabel(liveCycleSnapshot.lowCycleExtremeBar.waveLabel)
+                lowCycleAttemptedWaveNumber := 0
+
+// HIGH cycle just ended (LOW cycle is starting)
+if cycleStatus.startedLowCycle and not trendChangedThisBar and highCycleAttemptedWaveNumber > 0 and not na(liveCycleSnapshot.highCycleExtremeBar.price)
+    bool wasImpulse = highCycleAttemptedWaveNumber % 2 == 1
+    if wasImpulse
+        // HIGH = impulse in UP trend
+        if highCycleQualifiesAsWave and not highCycleIsFailed
+            if not na(retraceZoneBestPrice)
+                nextRetraceNumber := nextRetraceNumber + 2
+                retraceZoneBestPrice := na
+                retraceZoneBestLabel := na
+                retraceZoneBestLetterIdx := -1
+                retraceZoneCompletedCount := 0
+                retraceZoneBestAnchorBarIndex := na
+                retraceZoneBestAnchorPrice := na
+                retraceZoneBestExtremeBarIndex := na
+                retraceZoneBestExtremePrice := na
+            lastImpulseExtreme := liveCycleSnapshot.highCycleExtremeBar.price
+            nextImpulseNumber := nextImpulseNumber + 2
+            letterIndex := 0
+    else
+        // HIGH = retrace in DOWN trend; update zone best
+        if highCycleQualifiesAsWave
+            int cycleAnchorBarIndex = na(highCycleLetterAnchorBarIndex) ? liveCycleSnapshot.highCycleExtremeBar.barIndex : highCycleLetterAnchorBarIndex
+            float cycleAnchorPrice = na(highCycleLetterAnchorPrice) ? liveCycleSnapshot.highCycleExtremeBar.price + waveLabelOffsetTopPrice : highCycleLetterAnchorPrice
+            retraceZoneCompletedCount := retraceZoneCompletedCount + 1
+            bool showLettersNow = retraceZoneCompletedCount >= 2
+            // For HIGH retrace cycles, "more extreme" = higher high (deeper retrace)
+            bool isMoreExtreme = na(retraceZoneBestPrice) or liveCycleSnapshot.highCycleExtremeBar.price > retraceZoneBestPrice
+            if isMoreExtreme
+                f_setLabelText(retraceZoneBestLabel, f_buildLabelText(0, false, false, showLettersNow ? retraceZoneBestLetterIdx : -1))
+                f_setLabelPosition(retraceZoneBestLabel, retraceZoneBestAnchorBarIndex, retraceZoneBestAnchorPrice)
+                retraceZoneBestPrice := liveCycleSnapshot.highCycleExtremeBar.price
+                retraceZoneBestLetterIdx := highCycleLetterIndex
+                retraceZoneBestAnchorBarIndex := cycleAnchorBarIndex
+                retraceZoneBestAnchorPrice := cycleAnchorPrice
+                retraceZoneBestExtremeBarIndex := liveCycleSnapshot.highCycleExtremeBar.barIndex
+                retraceZoneBestExtremePrice := liveCycleSnapshot.highCycleExtremeBar.price
+                retraceZoneBestLabel := f_upsertWaveLabel(
+                     existingLabel = liveCycleSnapshot.highCycleExtremeBar.waveLabel,
+                     labelBarIndex = showLettersNow ? retraceZoneBestAnchorBarIndex : liveCycleSnapshot.highCycleExtremeBar.barIndex,
+                     labelPrice = showLettersNow ? retraceZoneBestAnchorPrice : liveCycleSnapshot.highCycleExtremeBar.price + waveLabelOffsetTopPrice,
+                     labelText = f_buildLabelText(nextRetraceNumber, true, false, showLettersNow ? retraceZoneBestLetterIdx : -1),
+                     labelColor = showLettersNow ? complexRetraceDownColor : waveDownColor,
+                     labelSize = showLettersNow ? complexRetraceLabelSize : waveLabelSize)
+            else
+                retraceZoneBestLabel := f_upsertWaveLabel(
+                     existingLabel = retraceZoneBestLabel,
+                     labelBarIndex = showLettersNow ? retraceZoneBestAnchorBarIndex : retraceZoneBestExtremeBarIndex,
+                     labelPrice = showLettersNow ? retraceZoneBestAnchorPrice : retraceZoneBestExtremePrice + waveLabelOffsetTopPrice,
+                     labelText = f_buildLabelText(nextRetraceNumber, true, false, showLettersNow ? retraceZoneBestLetterIdx : -1),
+                     labelColor = showLettersNow ? complexRetraceDownColor : waveDownColor,
+                     labelSize = showLettersNow ? complexRetraceLabelSize : waveLabelSize)
+                liveCycleSnapshot.highCycleExtremeBar.waveLabel := f_upsertWaveLabel(
+                     existingLabel = liveCycleSnapshot.highCycleExtremeBar.waveLabel,
+                     labelBarIndex = cycleAnchorBarIndex,
+                     labelPrice = cycleAnchorPrice,
+                     labelText = f_buildLabelText(0, false, false, showLettersNow ? highCycleLetterIndex : -1),
+                     labelColor = complexRetraceDownColor,
+                     labelSize = complexRetraceLabelSize)
+                if not showLettersNow
+                    f_clearLabel(liveCycleSnapshot.highCycleExtremeBar.waveLabel)
+                highCycleAttemptedWaveNumber := 0
+
+// ── 3. CYCLE START — initialize the new cycle's wave attempt ────────────────────────────────────
+// Assign the cycle's attempted wave number (from next* counters), color, and letter index (if
+// inside a retrace zone). Wave 1 and wave 2 are anchors: they auto-qualify. Later odd waves are
+// evaluated in step 4 against the prior confirmed odd wave's extreme.
+
+if cycleStatus.startedHighCycle
+    highCycleAttemptedWaveNumber := 0
+    highCycleQualifiesAsWave := false
+    highCycleIsFailed := false
+    highCycleHasQualifiedBreak := false
+    highCycleHasWickBreak := false
+    highCycleHasTrendLineSeparation := false
+    highCycleIsImpulseSide := false
+    highCycleLetterIndex := -1
+    highCycleWaveColor := na
+    highCycleBlockedUntilBarIndex := confirmedCycleSnapshot.lowCycleExtremeBar.barIndex
+    highCycleWaveAnchorBarIndex := na
+    highCycleWaveAnchorPrice := na
+    highCycleLetterAnchorBarIndex := na
+    highCycleLetterAnchorPrice := na
+
+    if trend.direction == TrendDir.UP
+        // HIGH cycle in UP trend = impulse direction
+        highCycleAttemptedWaveNumber := nextImpulseNumber
+        highCycleIsImpulseSide := true
+        highCycleWaveColor := waveUpColor
+        if nextImpulseNumber != 1
+            // Wave 3, 5, 7... — inside a retrace zone, gets a letter (shown only if it ends up as just-a-letter)
+            highCycleLetterIndex := letterIndex
+            letterIndex := letterIndex + 1
+    else if trend.direction == TrendDir.DOWN and nextImpulseNumber > 1
+        // HIGH cycle in DOWN trend = retrace direction (only meaningful after wave 1 confirmed)
+        highCycleAttemptedWaveNumber := nextRetraceNumber
+        highCycleIsImpulseSide := false
+        highCycleWaveColor := waveDownColor
+        highCycleLetterIndex := letterIndex
+        letterIndex := letterIndex + 1
+        highCycleQualifiesAsWave := true
+
+if cycleStatus.startedLowCycle
+    lowCycleAttemptedWaveNumber := 0
+    lowCycleQualifiesAsWave := false
+    lowCycleIsFailed := false
+    lowCycleHasQualifiedBreak := false
+    lowCycleHasWickBreak := false
+    lowCycleHasTrendLineSeparation := false
+    lowCycleIsImpulseSide := false
+    lowCycleLetterIndex := -1
+    lowCycleWaveColor := na
+    lowCycleBlockedUntilBarIndex := confirmedCycleSnapshot.highCycleExtremeBar.barIndex
+    lowCycleWaveAnchorBarIndex := na
+    lowCycleWaveAnchorPrice := na
+    lowCycleLetterAnchorBarIndex := na
+    lowCycleLetterAnchorPrice := na
+
+    if trend.direction == TrendDir.DOWN
+        // LOW cycle in DOWN trend = impulse direction
+        lowCycleAttemptedWaveNumber := nextImpulseNumber
+        lowCycleIsImpulseSide := true
+        lowCycleWaveColor := waveDownColor
+        if nextImpulseNumber != 1
+            lowCycleLetterIndex := letterIndex
+            letterIndex := letterIndex + 1
+    else if trend.direction == TrendDir.UP and nextImpulseNumber > 1
+        // LOW cycle in UP trend = retrace direction
+        lowCycleAttemptedWaveNumber := nextRetraceNumber
+        lowCycleIsImpulseSide := false
+        lowCycleWaveColor := waveUpColor
+        lowCycleLetterIndex := letterIndex
+        letterIndex := letterIndex + 1
+        lowCycleQualifiesAsWave := true
+
+// ── 4. LIVE QUALIFICATION — re-evaluate odd waves against the prior odd wave ────────────────────
+// Each bar, look at the active cycle's CURRENT extreme bar. Odd waves are validated against the
+// prior confirmed odd wave using wick + real-body rules. Retraces are handled by the retrace-zone
+// logic above, so they stay qualified candidates and are never marked failed here.
+//
+// Cycles in their "anchor" state (wave 1 / wave 2 — no prior to compare) skip this step; they
+// stay qualified=true from cycle start.
+
+// HIGH cycle re-evaluation
+if not na(liveCycleSnapshot.highCycleExtremeBar.price) and highCycleAttemptedWaveNumber > 0
+    bool isImpulse = highCycleAttemptedWaveNumber % 2 == 1
+    if isImpulse and highCycleAttemptedWaveNumber == 1
+        bool barBodyMajorityAboveTrend = f_bodyMajorityPastTrendLine(open, close, trendSma, TrendDir.UP)
+        highCycleHasTrendLineSeparation := highCycleHasTrendLineSeparation or barBodyMajorityAboveTrend
+        highCycleQualifiesAsWave := highCycleHasTrendLineSeparation
+        highCycleIsFailed := false
+    else if isImpulse and not na(lastImpulseExtreme)
+        bool barWickPass = f_wickPastInTrendDir(high, lastImpulseExtreme, trend.direction)
+        bool barBodyPass = f_realBodyPastInTrendDir(open, close, lastImpulseExtreme, trend.direction)
+        highCycleHasWickBreak := highCycleHasWickBreak or barWickPass
+        highCycleHasQualifiedBreak := highCycleHasQualifiedBreak or (barWickPass and barBodyPass)
+        if highCycleHasQualifiedBreak
+            highCycleQualifiesAsWave := true
+            highCycleIsFailed := false
+        else if highCycleHasWickBreak
+            highCycleQualifiesAsWave := true
+            highCycleIsFailed := true
+        else
+            highCycleQualifiesAsWave := false
+            highCycleIsFailed := false
+
+// LOW cycle re-evaluation (mirrored)
+if not na(liveCycleSnapshot.lowCycleExtremeBar.price) and lowCycleAttemptedWaveNumber > 0
+    bool isImpulse = lowCycleAttemptedWaveNumber % 2 == 1
+    if isImpulse and lowCycleAttemptedWaveNumber == 1
+        bool barBodyMajorityBelowTrend = f_bodyMajorityPastTrendLine(open, close, trendSma, TrendDir.DOWN)
+        lowCycleHasTrendLineSeparation := lowCycleHasTrendLineSeparation or barBodyMajorityBelowTrend
+        lowCycleQualifiesAsWave := lowCycleHasTrendLineSeparation
+        lowCycleIsFailed := false
+    else if isImpulse and not na(lastImpulseExtreme)
+        bool barWickPass = f_wickPastInTrendDir(low, lastImpulseExtreme, trend.direction)
+        bool barBodyPass = f_realBodyPastInTrendDir(open, close, lastImpulseExtreme, trend.direction)
+        lowCycleHasWickBreak := lowCycleHasWickBreak or barWickPass
+        lowCycleHasQualifiedBreak := lowCycleHasQualifiedBreak or (barWickPass and barBodyPass)
+        if lowCycleHasQualifiedBreak
+            lowCycleQualifiesAsWave := true
+            lowCycleIsFailed := false
+        else if lowCycleHasWickBreak
+            lowCycleQualifiesAsWave := true
+            lowCycleIsFailed := true
+        else
+            lowCycleQualifiesAsWave := false
+            lowCycleIsFailed := false
+
+// Retrace-letter anchor tracking.
+if highCycleAttemptedWaveNumber > 0 and highCycleAttemptedWaveNumber % 2 == 0 and not na(liveCycleSnapshot.highCycleExtremeBar.price)
+    if liveCycleSnapshot.highCycleExtremeBar.barIndex == bar_index
+        highCycleLetterAnchorBarIndex := na
+        highCycleLetterAnchorPrice := na
+    else if na(highCycleLetterAnchorBarIndex) and close < liveCycleSnapshot.highCycleExtremeBar.price and bar_index != highCycleBlockedUntilBarIndex
+        highCycleLetterAnchorBarIndex := bar_index
+        highCycleLetterAnchorPrice := high + waveLabelOffsetTopPrice
+
+if lowCycleAttemptedWaveNumber > 0 and lowCycleAttemptedWaveNumber % 2 == 0 and not na(liveCycleSnapshot.lowCycleExtremeBar.price)
+    if liveCycleSnapshot.lowCycleExtremeBar.barIndex == bar_index
+        lowCycleLetterAnchorBarIndex := na
+        lowCycleLetterAnchorPrice := na
+    else if na(lowCycleLetterAnchorBarIndex) and close > liveCycleSnapshot.lowCycleExtremeBar.price and bar_index != lowCycleBlockedUntilBarIndex
+        lowCycleLetterAnchorBarIndex := bar_index
+        lowCycleLetterAnchorPrice := low - waveLabelOffsetBottomPrice
+
+// Sticky live wave anchor tracking.
+if highCycleAttemptedWaveNumber > 0 and not na(liveCycleSnapshot.highCycleExtremeBar.barIndex)
+    int candidateBarIndex = f_preferredWaveAnchorBarIndex(liveCycleSnapshot.highCycleExtremeBar.barIndex, true)
+    float candidatePrice = f_priceAtBarIndex(candidateBarIndex, true)
+    if na(highCycleWaveAnchorPrice) or candidatePrice > highCycleWaveAnchorPrice
+        highCycleWaveAnchorBarIndex := candidateBarIndex
+        highCycleWaveAnchorPrice := candidatePrice
+
+if lowCycleAttemptedWaveNumber > 0 and not na(liveCycleSnapshot.lowCycleExtremeBar.barIndex)
+    int candidateBarIndex = f_preferredWaveAnchorBarIndex(liveCycleSnapshot.lowCycleExtremeBar.barIndex, false)
+    float candidatePrice = f_priceAtBarIndex(candidateBarIndex, false)
+    if na(lowCycleWaveAnchorPrice) or candidatePrice < lowCycleWaveAnchorPrice
+        lowCycleWaveAnchorBarIndex := candidateBarIndex
+        lowCycleWaveAnchorPrice := candidatePrice
+
+// ── 5. LIVE DRAW — build label text from current classification and place at the extreme bar ────
+// Label tracks the cycle's extreme bar position; text reflects the current classification. As
+// the extreme bar migrates within an open cycle, the label moves with it. Once the cycle ends
+// (next opposite cycle starts), the label is left at its last drawn position.
+
+if not na(liveCycleSnapshot.highCycleExtremeBar.price)
+    int drawWaveNumber = highCycleAttemptedWaveNumber
+    bool drawNumberMatchesCycleSide = drawWaveNumber == 0 or (highCycleIsImpulseSide and drawWaveNumber % 2 == 1) or ((not highCycleIsImpulseSide) and drawWaveNumber % 2 == 0)
+    int drawBarIndex = na(highCycleWaveAnchorBarIndex) ? liveCycleSnapshot.highCycleExtremeBar.barIndex : highCycleWaveAnchorBarIndex
+    float drawPrice = (na(highCycleWaveAnchorPrice) ? liveCycleSnapshot.highCycleExtremeBar.price : highCycleWaveAnchorPrice) + waveLabelOffsetTopPrice
+    if not drawNumberMatchesCycleSide
+        drawWaveNumber := 0
+    bool isRetrace = drawWaveNumber > 0 and drawWaveNumber % 2 == 0
+    bool lettersLive = retraceZoneCompletedCount >= 2
+    int drawLetterIdx = isRetrace and lettersLive ? highCycleLetterIndex : isRetrace ? -1 : highCycleLetterIndex
+    bool ownsLiveBest = isRetrace and highCycleQualifiesAsWave and (na(retraceZoneBestPrice) or liveCycleSnapshot.highCycleExtremeBar.price > retraceZoneBestPrice)
+    if isRetrace
+        if ownsLiveBest
+            f_setLabelText(retraceZoneBestLabel, f_buildLabelText(nextRetraceNumber, true, false,
+                 lettersLive ? retraceZoneBestLetterIdx : -1))
+            if lettersLive
+                f_setLabelPosition(retraceZoneBestLabel, retraceZoneBestAnchorBarIndex, retraceZoneBestAnchorPrice)
+        else
+            drawWaveNumber := 0
+        if not na(highCycleLetterAnchorBarIndex)
+            drawBarIndex := highCycleLetterAnchorBarIndex
+            drawPrice := highCycleLetterAnchorPrice
+        else
+            drawLetterIdx := -1
+    bool isLetterStyle = drawLetterIdx >= 0
+    color drawColor = highCycleIsFailed ? failedWaveUpColor : isLetterStyle ? complexRetraceDownColor : highCycleWaveColor
+    int drawSize = highCycleIsFailed ? failedWaveLabelSize : isLetterStyle ? complexRetraceLabelSize : waveLabelSize
+    string txt = f_buildLabelText(drawWaveNumber, highCycleQualifiesAsWave, highCycleIsFailed, drawLetterIdx)
+    if not na(drawBarIndex) and not na(highCycleBlockedUntilBarIndex) and drawBarIndex == highCycleBlockedUntilBarIndex and bar_index <= highCycleBlockedUntilBarIndex
+        txt := ""
+    if txt != ""
+        liveCycleSnapshot.highCycleExtremeBar.waveLabel := f_upsertWaveLabel(
+             existingLabel = liveCycleSnapshot.highCycleExtremeBar.waveLabel,
+             labelBarIndex = drawBarIndex,
+             labelPrice = drawPrice,
+             labelText = txt,
+             labelColor = drawColor,
+             labelSize = drawSize)
+    else
+        f_clearLabel(liveCycleSnapshot.highCycleExtremeBar.waveLabel)
+
+if not na(liveCycleSnapshot.lowCycleExtremeBar.price)
+    int drawWaveNumber = lowCycleAttemptedWaveNumber
+    bool drawNumberMatchesCycleSide = drawWaveNumber == 0 or (lowCycleIsImpulseSide and drawWaveNumber % 2 == 1) or ((not lowCycleIsImpulseSide) and drawWaveNumber % 2 == 0)
+    int drawBarIndex = na(lowCycleWaveAnchorBarIndex) ? liveCycleSnapshot.lowCycleExtremeBar.barIndex : lowCycleWaveAnchorBarIndex
+    float drawPrice = (na(lowCycleWaveAnchorPrice) ? liveCycleSnapshot.lowCycleExtremeBar.price : lowCycleWaveAnchorPrice) - waveLabelOffsetBottomPrice
+    if not drawNumberMatchesCycleSide
+        drawWaveNumber := 0
+    bool isRetrace = drawWaveNumber > 0 and drawWaveNumber % 2 == 0
+    bool lettersLive = retraceZoneCompletedCount >= 2
+    int drawLetterIdx = isRetrace and lettersLive ? lowCycleLetterIndex : isRetrace ? -1 : lowCycleLetterIndex
+    bool ownsLiveBest = isRetrace and lowCycleQualifiesAsWave and (na(retraceZoneBestPrice) or liveCycleSnapshot.lowCycleExtremeBar.price < retraceZoneBestPrice)
+    if isRetrace
+        if ownsLiveBest
+            f_setLabelText(retraceZoneBestLabel, f_buildLabelText(nextRetraceNumber, true, false,
+                 lettersLive ? retraceZoneBestLetterIdx : -1))
+            if lettersLive
+                f_setLabelPosition(retraceZoneBestLabel, retraceZoneBestAnchorBarIndex, retraceZoneBestAnchorPrice)
+        else
+            drawWaveNumber := 0
+        if not na(lowCycleLetterAnchorBarIndex)
+            drawBarIndex := lowCycleLetterAnchorBarIndex
+            drawPrice := lowCycleLetterAnchorPrice
+        else
+            drawLetterIdx := -1
+    bool isLetterStyle = drawLetterIdx >= 0
+    color drawColor = lowCycleIsFailed ? failedWaveDownColor : isLetterStyle ? complexRetraceUpColor : lowCycleWaveColor
+    int drawSize = lowCycleIsFailed ? failedWaveLabelSize : isLetterStyle ? complexRetraceLabelSize : waveLabelSize
+    string txt = f_buildLabelText(drawWaveNumber, lowCycleQualifiesAsWave, lowCycleIsFailed, drawLetterIdx)
+    if not na(drawBarIndex) and not na(lowCycleBlockedUntilBarIndex) and drawBarIndex == lowCycleBlockedUntilBarIndex and bar_index <= lowCycleBlockedUntilBarIndex
+        txt := ""
+    if txt != ""
+        liveCycleSnapshot.lowCycleExtremeBar.waveLabel := f_upsertWaveLabel(
+             existingLabel = liveCycleSnapshot.lowCycleExtremeBar.waveLabel,
+             labelBarIndex = drawBarIndex,
+             labelPrice = drawPrice,
+             labelText = txt,
+             labelColor = drawColor,
+             labelSize = drawSize)
+    else
+        f_clearLabel(liveCycleSnapshot.lowCycleExtremeBar.waveLabel)
+
+// ── 6. CONFIRMED TREND SNAPSHOT ──────────────────────────────────────────────────────────────────
+if barstate.isconfirmed
+    lastConfirmedTrendDir := trend.direction
 
 // 📊 PLOT
 plot(series = trendSma, title = "SMA", color = trend.plotColor, linewidth = 3, offset = trendSmaOffset)

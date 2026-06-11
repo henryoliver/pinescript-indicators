@@ -108,6 +108,13 @@ type HistoricalPoc
     int sessionBar
     bool isNaked
 
+// Pair of parallel sorted arrays used by the footprint profile merge.
+// Holding both in a UDT lets the merge swap target/scratch by reference
+// instead of copying merged rows back into the target.
+type ProfileBuffer
+    array<float> prices
+    array<float> volumes
+
 type FairValueGap
     float lower
     float upper
@@ -678,62 +685,70 @@ bool showNakedPocs = input.bool(defval = true, title = "Show Naked POCs", toolti
 int nakedPocMaxStored = input.int(defval = 8, title = "Max Naked POCs Stored", minval = 2, maxval = 20, tooltip = "Maximum number of historical POCs kept on the chart for naked-status tracking.", group = GROUP_VALUE)
 color valueAreaZoneColor = input.color(defval = color.new(color = #4C566A, transp = 90), title = "Value Area Zone Fill", tooltip = "Fill color for the shaded box between VAH and VAL.", group = GROUP_VALUE)
 
-var array<float> profileScratchPrices = array.new<float>()
-var array<float> profileScratchVolumes = array.new<float>()
+var ProfileBuffer profileScratch = ProfileBuffer.new(prices = array.new<float>(), volumes = array.new<float>())
 
-f_mergeSortedProfileRows(array<float> targetPrices, array<float> targetVolumes, array<float> sourcePrices, array<float> sourceVolumes) =>
-    int targetCount = array.size(id = targetPrices)
-    int sourceCount = array.size(id = sourcePrices)
+// Merges `source` into `target`, with `scratch` as a reusable workspace.
+// Writes the merged result into `scratch`, then swaps target/scratch field
+// references so the caller's `target` ends up pointing at the merged buffer
+// and `scratch` recycles the old target storage. This halves the work
+// versus building into scratch and pushing back into target.
+f_mergeSortedProfileRows(ProfileBuffer target, ProfileBuffer source, ProfileBuffer scratch) =>
+    int targetCount = target.prices.size()
+    int sourceCount = source.prices.size()
     if sourceCount > 0
-        array.clear(id = profileScratchPrices)
-        array.clear(id = profileScratchVolumes)
+        scratch.prices.clear()
+        scratch.volumes.clear()
         int targetIndex = 0
         int sourceIndex = 0
         while targetIndex < targetCount and sourceIndex < sourceCount
-            float targetPrice = array.get(id = targetPrices, index = targetIndex)
-            float sourcePrice = array.get(id = sourcePrices, index = sourceIndex)
+            float targetPrice = target.prices.get(targetIndex)
+            float sourcePrice = source.prices.get(sourceIndex)
             if targetPrice == sourcePrice
-                array.push(id = profileScratchPrices, value = targetPrice)
-                array.push(id = profileScratchVolumes, value = array.get(id = targetVolumes, index = targetIndex) + array.get(id = sourceVolumes, index = sourceIndex))
+                scratch.prices.push(targetPrice)
+                scratch.volumes.push(target.volumes.get(targetIndex) + source.volumes.get(sourceIndex))
                 targetIndex += 1
                 sourceIndex += 1
             else if targetPrice < sourcePrice
-                array.push(id = profileScratchPrices, value = targetPrice)
-                array.push(id = profileScratchVolumes, value = array.get(id = targetVolumes, index = targetIndex))
+                scratch.prices.push(targetPrice)
+                scratch.volumes.push(target.volumes.get(targetIndex))
                 targetIndex += 1
             else
-                array.push(id = profileScratchPrices, value = sourcePrice)
-                array.push(id = profileScratchVolumes, value = array.get(id = sourceVolumes, index = sourceIndex))
+                scratch.prices.push(sourcePrice)
+                scratch.volumes.push(source.volumes.get(sourceIndex))
                 sourceIndex += 1
         while targetIndex < targetCount
-            array.push(id = profileScratchPrices, value = array.get(id = targetPrices, index = targetIndex))
-            array.push(id = profileScratchVolumes, value = array.get(id = targetVolumes, index = targetIndex))
+            scratch.prices.push(target.prices.get(targetIndex))
+            scratch.volumes.push(target.volumes.get(targetIndex))
             targetIndex += 1
         while sourceIndex < sourceCount
-            array.push(id = profileScratchPrices, value = array.get(id = sourcePrices, index = sourceIndex))
-            array.push(id = profileScratchVolumes, value = array.get(id = sourceVolumes, index = sourceIndex))
+            scratch.prices.push(source.prices.get(sourceIndex))
+            scratch.volumes.push(source.volumes.get(sourceIndex))
             sourceIndex += 1
-        array.clear(id = targetPrices)
-        array.clear(id = targetVolumes)
-        int mergedCount = array.size(id = profileScratchPrices)
-        for mergedIndex = 0 to mergedCount - 1
-            array.push(id = targetPrices, value = array.get(id = profileScratchPrices, index = mergedIndex))
-            array.push(id = targetVolumes, value = array.get(id = profileScratchVolumes, index = mergedIndex))
+        // Swap target<->scratch by reference. Field assignment on a UDT
+        // propagates back to the caller's variable.
+        array<float> swapPrices  = target.prices
+        array<float> swapVolumes = target.volumes
+        target.prices  := scratch.prices
+        target.volumes := scratch.volumes
+        scratch.prices  := swapPrices
+        scratch.volumes := swapVolumes
 
 f_sessionFootprintProfile(array<float> rowPrices, array<float> rowVolumes, float rowHeight, float vaPercentInput) =>
     float pocPrice = na
     float vahPrice = na
     float valPrice = na
-    if array.size(id = rowPrices) > 0 and array.size(id = rowPrices) == array.size(id = rowVolumes)
+    int rowCount = array.size(id = rowPrices)
+    if rowCount > 0 and rowCount == array.size(id = rowVolumes)
         int pocIndex = array.indexof(id = rowVolumes, value = array.max(id = rowVolumes))
         float totalVolume = array.sum(id = rowVolumes)
         float cumulativeVolume = array.get(id = rowVolumes, index = pocIndex)
         int lowerIndex = pocIndex
         int upperIndex = pocIndex
+        int lastIndex = rowCount - 1
         float targetVolume = totalVolume * vaPercentInput * 0.01
-        while cumulativeVolume < targetVolume and (lowerIndex > 0 or upperIndex < array.size(id = rowVolumes) - 1)
+        while cumulativeVolume < targetVolume and (lowerIndex > 0 or upperIndex < lastIndex)
             float nextLowerVolume = lowerIndex > 0 ? array.get(id = rowVolumes, index = lowerIndex - 1) : -1.0
-            float nextUpperVolume = upperIndex < array.size(id = rowVolumes) - 1 ? array.get(id = rowVolumes, index = upperIndex + 1) : -1.0
+            float nextUpperVolume = upperIndex < lastIndex ? array.get(id = rowVolumes, index = upperIndex + 1) : -1.0
             if nextUpperVolume >= nextLowerVolume
                 upperIndex += 1
                 cumulativeVolume += array.get(id = rowVolumes, index = upperIndex)
@@ -747,10 +762,9 @@ f_sessionFootprintProfile(array<float> rowPrices, array<float> rowVolumes, float
 
 var footprint currentFootprint = na
 float valueAreaRowHeight = valueAreaIsActive ? valueAreaFootprintTicksPerRow * syminfo.mintick : na
-var array<float> sessionCommittedRowPrices = array.new<float>()
-var array<float> sessionCommittedRowVolumes = array.new<float>()
-var array<float> sessionCurrentBarRowPrices = array.new<float>()
-var array<float> sessionCurrentBarRowVolumes = array.new<float>()
+var ProfileBuffer sessionCommitted = ProfileBuffer.new(prices = array.new<float>(), volumes = array.new<float>())
+var ProfileBuffer sessionCurrentBar = ProfileBuffer.new(prices = array.new<float>(), volumes = array.new<float>())
+var ProfileBuffer devProfile = ProfileBuffer.new(prices = array.new<float>(), volumes = array.new<float>())
 var float prevSessionPoc = na
 var float prevSessionVah = na
 var float prevSessionVal = na
@@ -759,19 +773,21 @@ var float devSessionVah = na
 var float devSessionVal = na
 bool developingValueAreaIsActive = valueAreaIsActive and showValueArea and showDevelopingValueArea
 
-if valueAreaIsActive and confirmedBar and not confirmedNewSession and array.size(id = sessionCurrentBarRowPrices) > 0
-    f_mergeSortedProfileRows(targetPrices = sessionCommittedRowPrices, targetVolumes = sessionCommittedRowVolumes, sourcePrices = sessionCurrentBarRowPrices, sourceVolumes = sessionCurrentBarRowVolumes)
-    array.clear(id = sessionCurrentBarRowPrices)
-    array.clear(id = sessionCurrentBarRowVolumes)
+if valueAreaIsActive and confirmedBar and not confirmedNewSession and sessionCurrentBar.prices.size() > 0
+    f_mergeSortedProfileRows(sessionCommitted, sessionCurrentBar, profileScratch)
+    sessionCurrentBar.prices.clear()
+    sessionCurrentBar.volumes.clear()
 
 var array<HistoricalPoc> historicalPocs = array.new<HistoricalPoc>()
 if valueAreaIsActive and confirmedNewSession
-    array<float> previousSessionRowPrices = array.copy(id = sessionCommittedRowPrices)
-    array<float> previousSessionRowVolumes = array.copy(id = sessionCommittedRowVolumes)
-    if array.size(id = sessionCurrentBarRowPrices) > 0
-        f_mergeSortedProfileRows(targetPrices = previousSessionRowPrices, targetVolumes = previousSessionRowVolumes, sourcePrices = sessionCurrentBarRowPrices, sourceVolumes = sessionCurrentBarRowVolumes)
-    if array.size(id = previousSessionRowPrices) > 0
-        [calculatedPoc, calculatedVah, calculatedVal] = f_sessionFootprintProfile(rowPrices = previousSessionRowPrices, rowVolumes = previousSessionRowVolumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
+    // Fold any leftover current-bar rows into the committed profile, then
+    // compute the previous session's VA directly on the merged committed
+    // buffer. We clear committed below, so mutating it here is safe and
+    // avoids the prior `array.copy` pair.
+    if sessionCurrentBar.prices.size() > 0
+        f_mergeSortedProfileRows(sessionCommitted, sessionCurrentBar, profileScratch)
+    if sessionCommitted.prices.size() > 0
+        [calculatedPoc, calculatedVah, calculatedVal] = f_sessionFootprintProfile(rowPrices = sessionCommitted.prices, rowVolumes = sessionCommitted.volumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
         prevSessionPoc := calculatedPoc
         prevSessionVah := calculatedVah
         prevSessionVal := calculatedVal
@@ -780,10 +796,10 @@ if valueAreaIsActive and confirmedNewSession
             array.unshift(id = historicalPocs, value = newHistoricalPoc)
             while array.size(id = historicalPocs) > nakedPocMaxStored
                 array.pop(id = historicalPocs)
-    array.clear(id = sessionCommittedRowPrices)
-    array.clear(id = sessionCommittedRowVolumes)
-    array.clear(id = sessionCurrentBarRowPrices)
-    array.clear(id = sessionCurrentBarRowVolumes)
+    sessionCommitted.prices.clear()
+    sessionCommitted.volumes.clear()
+    sessionCurrentBar.prices.clear()
+    sessionCurrentBar.volumes.clear()
 
 if valueAreaIsActive and barstate.isconfirmed and array.size(id = historicalPocs) > 0
     int historicalPocCount = array.size(id = historicalPocs)
@@ -798,28 +814,36 @@ if confirmedBar
     footprint currentFootprintSource = valueAreaIsActive ? request.footprint(ticks_per_row = valueAreaFootprintTicksPerRow, va_percent = valueAreaPercent) : na
     currentFootprint := currentFootprintSource
     if valueAreaIsActive and not na(currentFootprint)
-        array.clear(id = sessionCurrentBarRowPrices)
-        array.clear(id = sessionCurrentBarRowVolumes)
+        sessionCurrentBar.prices.clear()
+        sessionCurrentBar.volumes.clear()
         array<volume_row> footprintRows = currentFootprint.rows()
         for currentRow in footprintRows
-            array.push(id = sessionCurrentBarRowPrices, value = volume_row.down_price(id = currentRow))
-            array.push(id = sessionCurrentBarRowVolumes, value = volume_row.total_volume(id = currentRow))
+            sessionCurrentBar.prices.push(volume_row.down_price(id = currentRow))
+            sessionCurrentBar.volumes.push(volume_row.total_volume(id = currentRow))
     else if not valueAreaIsActive
         currentFootprint := na
-        array.clear(id = sessionCurrentBarRowPrices)
-        array.clear(id = sessionCurrentBarRowVolumes)
+        sessionCurrentBar.prices.clear()
+        sessionCurrentBar.volumes.clear()
     if valueAreaIsActive and confirmedNewSession
         devSessionPoc := na
         devSessionVah := na
         devSessionVal := na
-// Developing VA copies and re-profiles arrays — refresh only at bar close.
+// Developing VA — refresh only at bar close on the last bar. We can't
+// merge the current-bar rows into `sessionCommitted` permanently (next
+// bar's per-bar merge would double-count), so we seed a reusable
+// `devProfile` buffer with committed and merge current-bar into that.
 if developingValueAreaIsActive and barstate.islast and confirmedBar
-    array<float> devRowPrices = array.copy(id = sessionCommittedRowPrices)
-    array<float> devRowVolumes = array.copy(id = sessionCommittedRowVolumes)
-    if array.size(id = sessionCurrentBarRowPrices) > 0
-        f_mergeSortedProfileRows(targetPrices = devRowPrices, targetVolumes = devRowVolumes, sourcePrices = sessionCurrentBarRowPrices, sourceVolumes = sessionCurrentBarRowVolumes)
-    if array.size(id = devRowPrices) > 0
-        [devPoc, devVah, devVal] = f_sessionFootprintProfile(rowPrices = devRowPrices, rowVolumes = devRowVolumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
+    devProfile.prices.clear()
+    devProfile.volumes.clear()
+    int committedCount = sessionCommitted.prices.size()
+    if committedCount > 0
+        for committedIndex = 0 to committedCount - 1
+            devProfile.prices.push(sessionCommitted.prices.get(committedIndex))
+            devProfile.volumes.push(sessionCommitted.volumes.get(committedIndex))
+    if sessionCurrentBar.prices.size() > 0
+        f_mergeSortedProfileRows(devProfile, sessionCurrentBar, profileScratch)
+    if devProfile.prices.size() > 0
+        [devPoc, devVah, devVal] = f_sessionFootprintProfile(rowPrices = devProfile.prices, rowVolumes = devProfile.volumes, rowHeight = valueAreaRowHeight, vaPercentInput = valueAreaPercent)
         devSessionPoc := devPoc
         devSessionVah := devVah
         devSessionVal := devVal
