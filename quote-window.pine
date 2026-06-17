@@ -158,21 +158,21 @@ color qwTableFrameColor = input.color(
 bool qwShowCash = input.bool(
      defval = true,
      title = "Show Cash Indexes",
-     tooltip = "SPY, QQQ, DIA, IWM — the four major US cash index ETFs. Bifurcation here = unresolved sentiment.",
+     tooltip = "SPY, QQQ, DIA, IWM — the four major US cash index ETFs. Bifurcation here = unresolved sentiment. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_CASH
  )
 
 bool qwShowFutures = input.bool(
      defval = true,
      title = "Show Futures Indexes",
-     tooltip = "ES1!, NQ1!, YM1!, RTY1! — the corresponding E-mini front-month continuous futures. Useful as a sentiment check against the cash side.",
+     tooltip = "ES1!, NQ1!, YM1!, RTY1! — the corresponding E-mini front-month continuous futures. Useful as a sentiment check against the cash side. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_FUTURES
  )
 
 bool qwShowSectors = input.bool(
      defval = true,
      title = "Show Sectors",
-     tooltip = "The 11 SPDR Select Sector ETFs. Sector dispersion is the dimension ADD/VOLD can't see — ADD aggregates every stock into one count and hides rotation.",
+     tooltip = "The 11 SPDR Select Sector ETFs. Sector dispersion is the dimension ADD/VOLD can't see — ADD aggregates every stock into one count and hides rotation. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_SECTORS
  )
 
@@ -343,15 +343,16 @@ array<QwReading> qwSectorReadings = array.from(
 // ─────────────────────────────────────────────────────────────────────────────
 // Aggregate diagnostics — bifurcation, sector commitment, color rotation.
 // Every regime check (bifurcation, misalignment, dominant fraction, data gap)
-// is gated on the respective show flag, so hiding a group fully excludes it
-// from the verdict. Bifurcation thresholds are uniform across groups —
-// committed (≥ COMMITMENT_THRESHOLD) on both sides AND minority above
-// QW_MINORITY_FRACTION of counted symbols — so cash, futures, and sectors no
-// longer use mismatched sensitivity (previously cash/futures triggered on any
-// noise-level mixed signal while sectors required commitment + minority).
+// runs against the full universe of cash + futures + sectors, regardless of
+// which groups the user has elected to display. Show* toggles affect table
+// rendering only. Bifurcation thresholds are uniform across groups — committed
+// (≥ COMMITMENT_THRESHOLD) on both sides AND minority above QW_MINORITY_FRACTION
+// of counted symbols — so cash, futures, and sectors no longer use mismatched
+// sensitivity (previously cash/futures triggered on any noise-level mixed
+// signal while sectors required commitment + minority).
 // ─────────────────────────────────────────────────────────────────────────────
-bool qwCashBifurcated    = qwShowCash    and f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
-bool qwFuturesBifurcated = qwShowFutures and f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
+bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
+bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
 
 float qwCashNet    = f_qwNetMean(readings = qwCashReadings)
 float qwFuturesNet = f_qwNetMean(readings = qwFuturesReadings)
@@ -363,7 +364,7 @@ float qwFuturesNet = f_qwNetMean(readings = qwFuturesReadings)
 // any time the overnight gap was meaningful.
 float qwCashNetVsClose    = f_qwNetMeanVsClose(readings = qwCashReadings)
 float qwFuturesNetVsClose = f_qwNetMeanVsClose(readings = qwFuturesReadings)
-bool qwCashFuturesMisaligned = qwShowCash and qwShowFutures and not na(qwCashNetVsClose) and not na(qwFuturesNetVsClose) and
+bool qwCashFuturesMisaligned = not na(qwCashNetVsClose) and not na(qwFuturesNetVsClose) and
      math.abs(qwCashNetVsClose) >= QW_NOISE_THRESHOLD and math.abs(qwFuturesNetVsClose) >= QW_NOISE_THRESHOLD and
      ((qwCashNetVsClose > 0.0) != (qwFuturesNetVsClose > 0.0))
 
@@ -373,7 +374,7 @@ int qwSectorRedsRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, t
 int qwSectorGreensComm  = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
 int qwSectorRedsComm    = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
 
-float qwDominantCommitFraction = qwShowSectors and qwSectorTotal > 0 ?
+float qwDominantCommitFraction = qwSectorTotal > 0 ?
      math.max(qwSectorGreensComm, qwSectorRedsComm) / float(qwSectorTotal) : 0.0
 // Lean uses committed counts; strict > means an exact tie (e.g. 0 vs 0
 // committed) resolves false rather than silently biasing green. A tie at any
@@ -382,7 +383,7 @@ float qwDominantCommitFraction = qwShowSectors and qwSectorTotal > 0 ?
 // is only consulted when one side is genuinely dominant.
 bool qwSectorsLeanGreen = qwSectorGreensComm > qwSectorRedsComm
 
-bool qwSectorsBifurcated = qwShowSectors and f_qwIsBifurcated(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = qwIgnoreCommoditySectors)
+bool qwSectorsBifurcated = f_qwIsBifurcated(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = qwIgnoreCommoditySectors)
 
 // Data availability — an enabled group must return at least
 // QW_PARTIAL_GAP_FRACTION of its expected symbols; otherwise the feed is
@@ -397,9 +398,9 @@ int qwFuturesReceived    = f_qwGroupSize(readings = qwFuturesReadings, excludeCo
 int qwCashMinReceived    = math.ceil(qwCashExpected    * QW_PARTIAL_GAP_FRACTION)
 int qwFuturesMinReceived = math.ceil(qwFuturesExpected * QW_PARTIAL_GAP_FRACTION)
 int qwSectorMinReceived  = math.ceil(qwSectorExpected  * QW_PARTIAL_GAP_FRACTION)
-bool qwCashDataGap       = qwShowCash    and qwCashReceived    < qwCashMinReceived
-bool qwFuturesDataGap    = qwShowFutures and qwFuturesReceived < qwFuturesMinReceived
-bool qwSectorsDataGap    = qwShowSectors and qwSectorTotal     < qwSectorMinReceived
+bool qwCashDataGap       = qwCashReceived    < qwCashMinReceived
+bool qwFuturesDataGap    = qwFuturesReceived < qwFuturesMinReceived
+bool qwSectorsDataGap    = qwSectorTotal     < qwSectorMinReceived
 bool qwDataGap           = qwCashDataGap or qwFuturesDataGap or qwSectorsDataGap
 
 // Color-rotation tracking: snapshot the sector green/red counts at the US
