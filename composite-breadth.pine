@@ -32,17 +32,18 @@ const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 COMPOSITE BREADTH
-// Market breadth composite built from VOLD, ADD, and PCTABOVEVWAP. TICK is kept
-// as context (strip + extreme markers) but no longer enters the weighted sum.
-// This section owns its inputs, data requests, calculations, color prep, and
-// plot-ready outputs.
+// Market breadth composite built from VOLD, ADD, PCTABOVEVWAP, and CUMTICK
+// (session-cumulative TICK slope). Raw TICK is kept as context only (strip
+// + extreme markers) — it doesn't enter the weighted sum because its raw
+// per-bar value is too noisy; the cumulative slope captures the same
+// information with persistence baked in. This section owns its inputs, data
+// requests, calculations, color prep, and plot-ready outputs.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_COMPOSITE_BREADTH_MARKET     = "🏛️ Market"
 const string GROUP_COMPOSITE_BREADTH_WEIGHTS    = "⚖️ Weights"
 const string GROUP_COMPOSITE_BREADTH_SIGNAL     = "🧮 Signal"
 const string GROUP_COMPOSITE_BREADTH_TICK       = "⚡ TICK Context"
 const string GROUP_COMPOSITE_BREADTH_PIVOTS     = "🪜 Structure (HH/HL/LH/LL)"
-const string GROUP_COMPOSITE_BREADTH_DIVERGENCE = "🔀 Divergence (price ↔ composite)"
 const string GROUP_COMPOSITE_BREADTH_DISPLAY    = "📋 Display"
 
 const float CBI_SCALE_MAX               = 100.0
@@ -61,28 +62,33 @@ const int   CBI_PIVOT_RIGHT_LEGS        = 1        // right-side confirmation la
 const float CBI_PIVOT_CONSENSUS_GATE    = 0.5      // consensus floor: pivots below this are likely artifacts of disagreement, suppressed
 const float CBI_PIVOT_EQUAL_TOLERANCE   = 1.0      // % of CBI_SCALE_MAX — pivots within this band of the prior same-type pivot are non-events (neither HH/LH nor HL/LL). Quiets the flat-consolidation false-flip case where strict <= would otherwise tag every flat retest as a fresh LH.
 const int   CBI_TICK_SMOOTH_LENGTH      = 5        // EMA smoothing length applied to raw TICK for the strip color and extreme detection
-const int   CBI_SOFT_WARN_HL_COUNT      = 2        // consecutive HLs in a bear state required before the next HL renders in amber (NORD13) as a "bear weakening" hint
 const int   CBI_ADAPTIVE_SIGNAL_BARS    = 30       // number of post-open bars during which the shorter "open" signal EMA is used when adaptive signal length is enabled
+const int   CBI_CUMTICK_SLOPE_WINDOW    = 5        // bars used to compute the cumulative TICK slope (5 bars × 2-min = 10 min) — short enough to catch real-time inflections, long enough to filter single-bar noise
+const float CBI_CUMTICK_SLOPE_SCALE     = 2500.0   // scale (= 5 × CBI_TICK_FIXED_SCALE) at which the CUMTICK slope confidence saturates at ±1. A 5-bar swing of ±2500 means raw TICK averaged ±500 for the entire window — strong directional pressure
+const int   CBI_FEED_HEALTH_GRACE_BARS  = 5        // bars after TICK first opens before a missing required feed triggers the log.warning — gives the USI feeds time to deliver their first non-na bar
 
 // ─── Market ───────────────────────────────────────────────────────────────────
 string compositeBreadthMarket = input.string(
      defval = "NASDAQ 100",
      title = "Market (Index)",
      options = ["S&P 500", "NASDAQ 100", "Dow Jones", "Russell 2000"],
-     tooltip = "S&P 500 → NYSE breadth (.NY). NASDAQ 100 → Nasdaq exchange-wide (.NQ). Dow Jones → exact Dow 30 breadth (.DJ) where available. Russell 2000 → US-wide composite (.US) — TradingView has no Russell-specific breadth feed. PCTABOVEVWAP for NDX falls back to .US (no .NQ feed published).",
+     tooltip = "S&P 500 → NYSE breadth (.NY). NASDAQ 100 → Nasdaq exchange-wide (.NQ) for ADVN/DECL/UPVOL/DNVOL/PCTABOVEVWAP. Dow Jones → exact Dow 30 breadth (.DJ) where available. Russell 2000 → US-wide composite (.US) — TradingView has no Russell-specific breadth feed.",
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-// ─── Weights (40/40/20 = VOLD/ADD/PCTABOVEVWAP) ───────────────────────────────
+// ─── Weights (35/35/15/15 = VOLD/ADD/PCTABOVEVWAP/CUMTICK) ────────────────────
 // Research synthesis: TRIN is a non-independent transformation of VOLD+ADD so
-// adding it would double-count; PCTABOVEVWAP is the only candidate with native
-// TradingView USI feed availability, intraday cadence, and a genuinely
-// independent breadth dimension (intraday positioning relative to the
-// institutional execution benchmark). TICK is demoted to context — practitioner
-// consensus is that raw/lightly-smoothed TICK is too noisy to function as a
-// weighted signal; its value lives in extremes and persistence patterns.
+// adding it would double-count; PCTABOVEVWAP captures intraday positioning vs
+// the institutional execution benchmark and is independent of the volume/issue
+// dimensions; CUMTICK (cumulative intraday TICK, slope-normalized) captures
+// session-persistent bid/offer pressure that raw TICK can't carry — it's the
+// canonical intraday divergence series used by professional desks against the
+// S&P/NDX index futures. Raw TICK remains context-only (strip + extremes);
+// practitioner consensus is that the raw per-bar value is too noisy to
+// function as a weighted signal — the cumulative slope encodes the same
+// pressure with persistence baked in.
 float compositeBreadthVoldWeight = input.float(
-     defval = 40,
+     defval = 35,
      title = "VOLD Weight",
      minval = 0,
      maxval = 100,
@@ -92,7 +98,7 @@ float compositeBreadthVoldWeight = input.float(
  )
 
 float compositeBreadthAddWeight = input.float(
-     defval = 40,
+     defval = 35,
      title = "ADD Weight",
      minval = 0,
      maxval = 100,
@@ -102,12 +108,22 @@ float compositeBreadthAddWeight = input.float(
  )
 
 float compositeBreadthPctVwapWeight = input.float(
-     defval = 20,
+     defval = 15,
      title = "PCTABOVEVWAP Weight",
      minval = 0,
      maxval = 100,
      step = 5,
-     tooltip = "Percent of stocks trading above their intraday VWAP — independent breadth dimension capturing real-time positioning vs the institutional execution benchmark. Confirmed available on TradingView for .NY/.DJ/.US; NDX falls back to .US.",
+     tooltip = "Percent of stocks trading above their intraday VWAP — independent breadth dimension capturing real-time positioning vs the institutional execution benchmark. Per-instrument routing: SPX → .NY, NDX → .NQ, Dow → .DJ, RUT → .US.",
+     group = GROUP_COMPOSITE_BREADTH_WEIGHTS
+ )
+
+float compositeBreadthCumTickWeight = input.float(
+     defval = 15,
+     title = "CUMTICK Weight",
+     minval = 0,
+     maxval = 100,
+     step = 5,
+     tooltip = "Cumulative session TICK, slope-normalized. Confidence is the 5-bar (10-minute on 2-min charts) rate-of-change of the running session sum of raw TICK, divided by CBI_CUMTICK_SLOPE_SCALE (2500). Positive = breadth strengthening on the bid; negative = weakening. This is the divergence-grade breadth series — raw TICK is too jagged to spot turns, raw level drifts with session length; the slope of the cumulative captures \"pressure right now\" with persistence baked in. Resets at each NYSE RTH open along with the TICK feed.",
      group = GROUP_COMPOSITE_BREADTH_WEIGHTS
  )
 
@@ -181,25 +197,18 @@ float compositeBreadthTickExtremeOffset = input.float(
      group = GROUP_COMPOSITE_BREADTH_TICK
  )
 
-bool compositeBreadthTickRegimeShowMarker = input.bool(
-     defval = true,
-     title = "Show TICK Regime Badge",
-     tooltip = "Plots a small chip near the right edge of the chart showing the session's cumulative TICK regime: fraction of bars (since open) where smoothed TICK > 0, mapped to a −1..+1 \"bullish-day / bearish-day\" read. Barry's #1 first-pass filter: \"if TICK stayed above zero the whole session, it's a bullish day.\" Green = persistent buying, red = persistent selling, grey = mixed.",
-     group = GROUP_COMPOSITE_BREADTH_TICK
- )
-
 // ─── Pivot structure ──────────────────────────────────────────────────────────
 bool compositeBreadthShowPivots = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Trend Structure Markers",
-     tooltip = "Detect pivots on the smoothed composite line, classify each new pivot as HH/HL/LH/LL relative to the prior same-type pivot, and color by TREND STATE: NORD8 cyan in bull, NORD11 red in bear. State flips the moment the bullish sequence breaks — a fresh HH sets bull, an LH OR an LL sets bear. HL is treated as a non-event (a bounce in a downtrend, a continuation in an uptrend) — it does NOT reclaim bull from bear. This is asymmetric on purpose: the bullish sequence breaks the moment a high fails to extend (LH alone is enough), but reclaiming bull requires a fresh HH. HL only seeds initial bull if no classification has set state yet. Per-event alerts (HH/HL/LH/LL) still fire individually. Pivots confirm CBI_PIVOT_RIGHT_LEGS bar(s) after they form — minimum lag in Pine (a turning point can't be known without one bar to the right). Baselines and trend state reset at each session open.",
+     tooltip = "Detect pivots on the smoothed composite line, classify each new pivot as HH/HL/LH/LL relative to the prior same-type pivot, and color by TREND STATE: NORD8 cyan in bull, NORD11 red in bear. State flips the moment the bullish sequence breaks — a fresh HH sets bull, an LH OR an LL sets bear. HL is treated as a non-event (a bounce in a downtrend, a continuation in an uptrend) — it does NOT reclaim bull from bear. This is asymmetric on purpose: the bullish sequence breaks the moment a high fails to extend (LH alone is enough), but reclaiming bull requires a fresh HH. HL only seeds initial bull if no classification has set state yet. Per-event alerts (HH/HL/LH/LL) still fire individually whether or not the markers are visible. Pivots confirm CBI_PIVOT_RIGHT_LEGS bar(s) after they form — minimum lag in Pine (a turning point can't be known without one bar to the right). Baselines and trend state reset at each session open. OFF by default to keep the composite line uncluttered.",
      group = GROUP_COMPOSITE_BREADTH_PIVOTS
  )
 
 bool compositeBreadthPivotGateByConsensus = input.bool(
      defval = true,
      title = "Suppress Pivots When Consensus Low",
-     tooltip = "When the three weighted components disagree, the consensus multiplier squeezes the composite line toward zero — which can manufacture pivots that aren't structural. Default ON suppresses pivot markers when consensus at the pivot bar was below 0.5. Turn off to see all pivots regardless of agreement.",
+     tooltip = "When the four weighted components disagree, the consensus multiplier squeezes the composite line toward zero — which can manufacture pivots that aren't structural. Default ON suppresses pivot markers when consensus at the pivot bar was below 0.5. Turn off to see all pivots regardless of agreement.",
      group = GROUP_COMPOSITE_BREADTH_PIVOTS
  )
 
@@ -207,13 +216,6 @@ bool compositeBreadthPivotUseTolerance = input.bool(
      defval = true,
      title = "Pivot Tolerance Band",
      tooltip = "When ON, a new pivot must exceed the prior same-type pivot by more than CBI_PIVOT_EQUAL_TOLERANCE (1% of scale) to register as HH/LH/HL/LL. Pivots inside that tolerance band are non-events — neither HH nor LH (and neither HL nor LL) — and don't flip trend state. Stops flat consolidation re-tests from being tagged LH and instantly flipping bull→bear. OFF reverts to strict <= / >= comparison.",
-     group = GROUP_COMPOSITE_BREADTH_PIVOTS
- )
-
-bool compositeBreadthPivotSoftWarn = input.bool(
-     defval = true,
-     title = "Soft-warn after consecutive HLs in bear",
-     tooltip = "When ON, after CBI_SOFT_WARN_HL_COUNT (2) consecutive HLs are detected inside an established bear state, subsequent HL pivots render in amber (NORD13) at half saturation — a \"bear weakening\" hint. Trend state itself does NOT flip until a fresh HH; this is a visual early warning only. Resets on any LH/LL or fresh HH.",
      group = GROUP_COMPOSITE_BREADTH_PIVOTS
  )
 
@@ -237,34 +239,6 @@ int compositeBreadthPivotSize = input.int(
      group = GROUP_COMPOSITE_BREADTH_PIVOTS
  )
 
-// ─── Divergence (price ↔ composite) ───────────────────────────────────────────
-bool compositeBreadthShowDivergences = input.bool(
-     defval = true,
-     title = "Show Price ↔ Composite Divergences",
-     tooltip = "Detects pivots on the chart symbol's high/low using the same leg config as the composite pivots, then compares each new composite-side pivot against the price level at the same bar versus the price level at the PRIOR composite pivot. Bearish divergence = composite made an LH while price made an HH (price extended, breadth did not). Bullish divergence = composite made an HL while price made an LL (price extended down, breadth did not). Markers plot on the composite line at the pivot bar; per-side alerts fire. This is Barry's actual money signal — internals refused to confirm.",
-     group = GROUP_COMPOSITE_BREADTH_DIVERGENCE
- )
-
-float compositeBreadthDivergenceOffset = input.float(
-     defval = 8.0,
-     title = "Divergence Marker Offset",
-     minval = 0.0,
-     maxval = 40.0,
-     step = 0.5,
-     tooltip = "Y-axis distance above/below the composite line for the divergence symbols. Default 8 sits the diamond clear of the 4px line and the pivot circle so the three marker types don't overlap on the same bar.",
-     group = GROUP_COMPOSITE_BREADTH_DIVERGENCE
- )
-
-int compositeBreadthDivergenceSize = input.int(
-     defval = 6,
-     title = "Divergence Marker Size",
-     minval = 0,
-     maxval = 12,
-     step = 1,
-     tooltip = "Diamond size in typographic points. 0 hides the marker. Sized slightly larger than the pivot circles so divergences read as the primary alert.",
-     group = GROUP_COMPOSITE_BREADTH_DIVERGENCE
- )
-
 // ─── Display ──────────────────────────────────────────────────────────────────
 bool compositeBreadthShowSignalLine = input.bool(
      defval = true,
@@ -281,19 +255,19 @@ bool compositeBreadthShowLine = input.bool(
  )
 
 bool compositeBreadthShowStrip = input.bool(
-     defval = true,
+     defval = false,
      title = "Component Strip",
-     tooltip = "Four thin colored rows showing each component's directional confidence: VOLD (top), ADD, PCTABOVEVWAP, TICK (bottom). The top three are the weighted components — alignment = breadth speaking with one voice. TICK row is context-only (lighter intensity to read as secondary): it does NOT contribute to the composite math, only to the visual read.",
+     tooltip = "Five thin colored rows showing each component's directional confidence: VOLD (top), ADD, PCTABOVEVWAP, CUMTICK, TICK (bottom). The top four are the weighted components and their row heights are proportional to their weights — alignment = breadth speaking with one voice. TICK row is context-only (thinner + lighter intensity to read as secondary): it does NOT contribute to the composite math, only to the visual read. OFF by default so the composite line gets the full vertical height of the indicator panel — turn on when you want to verify which component is driving the composite.",
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
 float compositeBreadthStripTopY = input.float(
-     defval = -30,
+     defval = -85,
      title = "Strip Position (Y)",
      minval = -120,
      maxval = -10,
      step = 5,
-     tooltip = "Y-coordinate where the strip's top edge sits. Four rows extend downward from here (rows touching, no gap). Default −30 sits the strip just below the composite working zone.",
+     tooltip = "Y-coordinate where the strip's top edge sits. Five rows (VOLD, ADD, PCTABOVEVWAP, CUMTICK, TICK context) extend downward from here, rows touching with no gap. Default −85 tucks the strip at the very bottom of the panel so the composite line gets the full ±100 height to breathe. Move closer to zero (e.g. −30) to put the strip nearer the composite, but the composite will visually compress as TradingView's auto-scaler extends the y-axis to include the strip footprint.",
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
@@ -303,7 +277,7 @@ float compositeBreadthStripRowHeight = input.float(
      minval = 1.0,
      maxval = 10.0,
      step = 0.5,
-     tooltip = "Height in y-axis units of each individual strip row. Four rows stack downward, so total strip span = 4 × this value. Default 3.0 → 12-unit total strip.",
+     tooltip = "Y-axis unit anchoring the total strip span. The five rows together occupy 4 × this value (preserved from the legacy 4-row layout — adding CUMTICK didn't grow the strip). The four weighted rows split a portion proportional to their weights; the TICK context row is fixed at 60% of one legacy row. Default 3.0 → 12-unit total strip.",
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
@@ -315,9 +289,9 @@ bool compositeBreadthShowZeroLine = input.bool(
  )
 
 bool compositeBreadthShowExtendedLevels = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Extended Levels (±60)",
-     tooltip = "Dotted reference lines at ±CBI_EXTENDED_LEVEL (60 by default). Beyond visual saturation the composite would otherwise look identical from ±35 to ±100; the dotted lines mark the \"extended for this market\" zone — Barry's equivalent of his manually-drawn 30-day VOLD support/resistance levels. Breadth pushing past ±60 is an extended directional reading, not a normal-range one.",
+     tooltip = "Dotted reference lines at ±CBI_EXTENDED_LEVEL (60 by default). Beyond visual saturation the composite would otherwise look identical from ±35 to ±100; the dotted lines mark the \"extended for this market\" zone — Barry's equivalent of his manually-drawn 30-day VOLD support/resistance levels. Breadth pushing past ±60 is an extended directional reading, not a normal-range one. OFF by default because the ±60 hlines pin TradingView's auto-scale to at least [−60, +60], which can compress the composite's actual swing. Turn on if you want fixed visual reference levels at the cost of some auto-scale flexibility.",
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
@@ -352,12 +326,13 @@ string compositeBreadthDownVolSymbol = switch compositeBreadthMarket
     "Russell 2000" => "USI:DNVOL.US"
     => "USI:DNVOL.NY"
 
-// PCTABOVEVWAP: .NY/.DJ/.US confirmed via TradingView symbol pages; .NQ not
-// verified in research, so NDX falls back to .US (whole-market intraday VWAP
-// breadth — captures the dimension even if not NDX-exact).
+// PCTABOVEVWAP: .NY/.NQ/.DJ/.US all confirmed live on TradingView symbol
+// pages. NDX uses .NQ (NASDAQ-100 specific intraday VWAP breadth) — earlier
+// versions fell back to .US because .NQ was unverified at the time; this is
+// now corrected and the routing is exchange-exact per instrument.
 string compositeBreadthPctVwapSymbol = switch compositeBreadthMarket
     "S&P 500"      => "USI:PCTABOVEVWAP.NY"
-    "NASDAQ 100"   => "USI:PCTABOVEVWAP.US"
+    "NASDAQ 100"   => "USI:PCTABOVEVWAP.NQ"
     "Dow Jones"    => "USI:PCTABOVEVWAP.DJ"
     "Russell 2000" => "USI:PCTABOVEVWAP.US"
     => "USI:PCTABOVEVWAP.NY"
@@ -445,6 +420,38 @@ float compositeBreadthTickValue = request.security(
  )
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 🔔 SESSION DETECTION
+// AnyFeedLive = at least one of the six breadth feeds is non-na this bar.
+// SessionJustOpened = the first bar of a transition from "all feeds dark" to
+// "at least one feed live" — used as the canonical session-open edge for ALL
+// session-wide resets (pivot baselines, feed-health counters, cumTick).
+// Independent of TICK specifically, so a missing TICK feed doesn't suppress
+// session detection. The existing TICK-feed-only edge stays for TICK-EMA-
+// specific resets that genuinely require TICK to be live.
+//
+// BarsSinceSessionOpen counts chart bars since the most recent session-open
+// transition, increments only while at least one feed is live (so the
+// off-RTH gap doesn't bloat the count). Used to gate cumTick slope
+// computation against the cross-session lookback leak and to mature the
+// feed-health warning even when TICK is the missing feed.
+// ═════════════════════════════════════════════════════════════════════════════
+bool compositeBreadthAnyFeedLive =
+     not na(compositeBreadthTickValue)    or
+     not na(compositeBreadthAdvValue)     or
+     not na(compositeBreadthDeclValue)    or
+     not na(compositeBreadthUpVolValue)   or
+     not na(compositeBreadthDownVolValue) or
+     not na(compositeBreadthPctVwapValue)
+
+bool compositeBreadthSessionJustOpened = compositeBreadthAnyFeedLive and not compositeBreadthAnyFeedLive[1]
+
+var int compositeBreadthBarsSinceSessionOpen = 0
+if compositeBreadthSessionJustOpened
+    compositeBreadthBarsSinceSessionOpen := 1
+else if compositeBreadthAnyFeedLive
+    compositeBreadthBarsSinceSessionOpen += 1
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧮 HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
 f_compositeBreadthClampedRatio(float numerator, float denominator) =>
@@ -529,36 +536,128 @@ else
 float compositeBreadthTickConfidence = not na(compositeBreadthTickSmoothed) ?
      math.max(-1.0, math.min(1.0, compositeBreadthTickSmoothed / CBI_TICK_FIXED_SCALE)) : na
 
-// TICK REGIME (session persistence)
-// Barry's #1 first-pass read of TICK is not the extreme — it's the persistence:
-// "If TICK stayed above zero the whole session, that's a bullish day. If it
-// stayed below, bearish. If it bounced across, no commitment." That signal is
-// independent of the extreme markers and isn't captured by the per-bar smoothed
-// TICK confidence. Track session-cumulative fraction of bars where smoothed
-// TICK > 0 and map to a −1..+1 regime read. Counter resets on the TICK feed's
-// first non-na bar (same NYSE-RTH boundary used to reset the smoothed EMA).
-var int compositeBreadthTickPositiveBars = 0
-var int compositeBreadthTickTotalBars    = 0
+// CUMTICK (cumulative session TICK, slope-normalized)
+// Sum of raw TICK across the session, reset at compositeBreadthSessionJustOpened
+// (any-feed session-open edge — broader than TICK-only so cumTick resets even
+// if TICK comes online slightly later than the other feeds). The LEVEL of
+// CUMTICK grows with session length, so it's not directly comparable across
+// bars; the SLOPE (CBI_CUMTICK_SLOPE_WINDOW-bar rate of change, default 5
+// bars = 10 min on 2-min) is what carries the signal: positive slope =
+// breadth strengthening on the bid right now, negative = weakening.
+// Normalize slope by CBI_CUMTICK_SLOPE_SCALE so confidence saturates at ±1
+// when raw TICK has averaged ±500 across the slope window — a strong
+// directional regime.
+//
+// Cross-session leak guard: the slope lookback compositeBreadthCumTickValue[
+// CBI_CUMTICK_SLOPE_WINDOW] would otherwise reach back across the off-RTH
+// gap into the PRIOR session's accumulated value, making the first ~5 bars
+// of every new session register a bogus full-magnitude slope (this-session
+// reset value minus yesterday's huge cumulative). The slope is therefore
+// gated on compositeBreadthBarsSinceSessionOpen > CBI_CUMTICK_SLOPE_WINDOW —
+// only computed when the entire lookback window is provably in-session.
+//
+// This is the divergence-grade breadth series. Raw TICK is too jagged to
+// spot pivot-style turns; PCTABOVEVWAP plateaus mid-session. CUMTICK slope
+// captures the inflections that price reversals actually pivot against.
+var float compositeBreadthCumTickValue = na
+if compositeBreadthSessionJustOpened or na(compositeBreadthCumTickValue)
+    compositeBreadthCumTickValue := compositeBreadthTickValue
+else if not na(compositeBreadthTickValue)
+    compositeBreadthCumTickValue := compositeBreadthCumTickValue + compositeBreadthTickValue
+// When TICK is na (off-RTH gap), leave cumTick at its last value — the next
+// session-open edge will reseed it via compositeBreadthSessionJustOpened.
 
-if compositeBreadthTickFeedJustOpened
-    compositeBreadthTickPositiveBars := 0
-    compositeBreadthTickTotalBars    := 0
+bool compositeBreadthCumTickSlopeReady = compositeBreadthBarsSinceSessionOpen > CBI_CUMTICK_SLOPE_WINDOW and
+     not na(compositeBreadthCumTickValue) and not na(compositeBreadthCumTickValue[CBI_CUMTICK_SLOPE_WINDOW])
+float compositeBreadthCumTickSlope = compositeBreadthCumTickSlopeReady ?
+     compositeBreadthCumTickValue - compositeBreadthCumTickValue[CBI_CUMTICK_SLOPE_WINDOW] : na
 
-if not na(compositeBreadthTickSmoothed)
-    compositeBreadthTickTotalBars += 1
-    if compositeBreadthTickSmoothed > 0.0
-        compositeBreadthTickPositiveBars += 1
+float compositeBreadthCumTickConfidence = not na(compositeBreadthCumTickSlope) ?
+     math.max(-1.0, math.min(1.0, compositeBreadthCumTickSlope / CBI_CUMTICK_SLOPE_SCALE)) : na
 
-float compositeBreadthTickRegime = compositeBreadthTickTotalBars > 0 ?
-     2.0 * compositeBreadthTickPositiveBars / compositeBreadthTickTotalBars - 1.0 : na
+// ═════════════════════════════════════════════════════════════════════════════
+// 🩺 FEED HEALTH MONITORING
+// All six request.security calls use ignore_invalid_symbol = true so an
+// invalid feed silently returns na — the composite would then run with
+// degraded inputs and no obvious signal that something is wrong. Track each
+// feed's "ever delivered in current session" state, emit a one-time
+// log.warning after a grace window if any feed is still missing, and render
+// a status badge on the last bar listing the unhealthy feeds.
+//
+// All counters and reset edges are tied to compositeBreadthSessionJustOpened
+// (any-feed session-open edge) rather than the TICK-only edge. Earlier
+// versions used compositeBreadthTickFeedJustOpened as the anchor, but that
+// meant a missing TICK feed would prevent BOTH the counter from incrementing
+// AND the warning path from ever maturing — the badge would show TICK as
+// missing but nothing else would ever fire. Using the broader edge fixes
+// that: any feed coming online opens the session for health-tracking
+// purposes, and a perpetually-missing TICK is just one more entry in the
+// missing-feeds list, not a circuit-breaker.
+// ═════════════════════════════════════════════════════════════════════════════
+var bool compositeBreadthAdvFeedLive        = false
+var bool compositeBreadthDeclFeedLive       = false
+var bool compositeBreadthUpVolFeedLive      = false
+var bool compositeBreadthDownVolFeedLive    = false
+var bool compositeBreadthPctVwapFeedLive    = false
+var bool compositeBreadthTickFeedLive       = false
+var bool compositeBreadthFeedWarningEmitted = false
+
+if compositeBreadthSessionJustOpened
+    compositeBreadthAdvFeedLive        := false
+    compositeBreadthDeclFeedLive       := false
+    compositeBreadthUpVolFeedLive      := false
+    compositeBreadthDownVolFeedLive    := false
+    compositeBreadthPctVwapFeedLive    := false
+    compositeBreadthTickFeedLive       := false
+    compositeBreadthFeedWarningEmitted := false
+
+if not na(compositeBreadthTickValue)
+    compositeBreadthTickFeedLive       := true
+if not na(compositeBreadthAdvValue)
+    compositeBreadthAdvFeedLive        := true
+if not na(compositeBreadthDeclValue)
+    compositeBreadthDeclFeedLive       := true
+if not na(compositeBreadthUpVolValue)
+    compositeBreadthUpVolFeedLive      := true
+if not na(compositeBreadthDownVolValue)
+    compositeBreadthDownVolFeedLive    := true
+if not na(compositeBreadthPctVwapValue)
+    compositeBreadthPctVwapFeedLive    := true
+
+// Build the list of missing feeds (label-rendering and log-warning use the
+// same source of truth).
+string compositeBreadthMissingFeedsText = ""
+if not compositeBreadthAdvFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "ADVN "
+if not compositeBreadthDeclFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "DECL "
+if not compositeBreadthUpVolFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "UPVOL "
+if not compositeBreadthDownVolFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "DNVOL "
+if not compositeBreadthPctVwapFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "PCTVWAP "
+if not compositeBreadthTickFeedLive
+    compositeBreadthMissingFeedsText := compositeBreadthMissingFeedsText + "TICK "
+
+// Emit a one-time log.warning per session once we're past the grace window.
+// Pine v6 routes this to the Pine logs panel (View → Pine Logs) so the user
+// can see which feed(s) failed without checking the chart. Uses
+// compositeBreadthBarsSinceSessionOpen (independent of TICK) so a missing
+// TICK feed doesn't suppress the warning.
+if compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS and not compositeBreadthFeedWarningEmitted and str.length(compositeBreadthMissingFeedsText) > 0
+    log.warning("CBI: feed(s) not delivering after " + str.tostring(value = CBI_FEED_HEALTH_GRACE_BARS) + " bars post-open — " + compositeBreadthMissingFeedsText + "(market = " + compositeBreadthMarket + ")")
+    compositeBreadthFeedWarningEmitted := true
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧬 COMPOSITE SCORE
-// Weighted sum × consensus multiplier × CBI_SCALE_MAX, using ONLY the three
-// weighted components. Consensus measures cross-component agreement: when the
-// three move together, the line is allowed to reach its full magnitude; when
-// they disagree, it's squeezed toward zero (the line and the strip together
-// then read "uncertain breadth", not "neutral breadth").
+// Weighted sum × consensus multiplier × CBI_SCALE_MAX, using FOUR weighted
+// components: VOLD, ADD, PCTABOVEVWAP, CUMTICK. Consensus measures cross-
+// component agreement: when the four move together, the line is allowed to
+// reach its full magnitude; when they disagree, it's squeezed toward zero
+// (the line and the strip together then read "uncertain breadth", not
+// "neutral breadth"). Raw TICK confidence is NOT a weighted component — it
+// only drives the context strip color and the extreme triangle markers.
 // ═════════════════════════════════════════════════════════════════════════════
 // A component is "active" only when both its data is present AND its weight is
 // non-zero. Setting a weight to 0 must fully remove that component from BOTH
@@ -567,10 +666,12 @@ float compositeBreadthTickRegime = compositeBreadthTickTotalBars > 0 ?
 bool compositeBreadthVoldActive    = not na(compositeBreadthVoldConfidence)    and compositeBreadthVoldWeight    > 0.0
 bool compositeBreadthAddActive     = not na(compositeBreadthAddConfidence)     and compositeBreadthAddWeight     > 0.0
 bool compositeBreadthPctVwapActive = not na(compositeBreadthPctVwapConfidence) and compositeBreadthPctVwapWeight > 0.0
+bool compositeBreadthCumTickActive = not na(compositeBreadthCumTickConfidence) and compositeBreadthCumTickWeight > 0.0
 
 int compositeBreadthActiveCount = (compositeBreadthVoldActive ? 1 : 0) +
-     (compositeBreadthAddActive ? 1 : 0) +
-     (compositeBreadthPctVwapActive ? 1 : 0)
+     (compositeBreadthAddActive     ? 1 : 0) +
+     (compositeBreadthPctVwapActive ? 1 : 0) +
+     (compositeBreadthCumTickActive ? 1 : 0)
 
 float compositeBreadthWeightedSum = 0.0
 float compositeBreadthWeightTotal = 0.0
@@ -583,56 +684,67 @@ if compositeBreadthAddActive
 if compositeBreadthPctVwapActive
     compositeBreadthWeightedSum += compositeBreadthPctVwapWeight * compositeBreadthPctVwapConfidence
     compositeBreadthWeightTotal += compositeBreadthPctVwapWeight
+if compositeBreadthCumTickActive
+    compositeBreadthWeightedSum += compositeBreadthCumTickWeight * compositeBreadthCumTickConfidence
+    compositeBreadthWeightTotal += compositeBreadthCumTickWeight
 
 float compositeBreadthDirectional = compositeBreadthWeightTotal > 0.0 ?
      compositeBreadthWeightedSum / compositeBreadthWeightTotal : na
 
 float compositeBreadthConfidenceSum = (compositeBreadthVoldActive    ? compositeBreadthVoldConfidence    : 0.0) +
      (compositeBreadthAddActive     ? compositeBreadthAddConfidence     : 0.0) +
-     (compositeBreadthPctVwapActive ? compositeBreadthPctVwapConfidence : 0.0)
+     (compositeBreadthPctVwapActive ? compositeBreadthPctVwapConfidence : 0.0) +
+     (compositeBreadthCumTickActive ? compositeBreadthCumTickConfidence : 0.0)
 float compositeBreadthMeanConfidence = compositeBreadthActiveCount > 0 ?
      compositeBreadthConfidenceSum / compositeBreadthActiveCount : 0.0
 float compositeBreadthDeviationSumSquared = (compositeBreadthVoldActive    ? math.pow(base = compositeBreadthVoldConfidence    - compositeBreadthMeanConfidence, exponent = 2) : 0.0) +
      (compositeBreadthAddActive     ? math.pow(base = compositeBreadthAddConfidence     - compositeBreadthMeanConfidence, exponent = 2) : 0.0) +
-     (compositeBreadthPctVwapActive ? math.pow(base = compositeBreadthPctVwapConfidence - compositeBreadthMeanConfidence, exponent = 2) : 0.0)
+     (compositeBreadthPctVwapActive ? math.pow(base = compositeBreadthPctVwapConfidence - compositeBreadthMeanConfidence, exponent = 2) : 0.0) +
+     (compositeBreadthCumTickActive ? math.pow(base = compositeBreadthCumTickConfidence - compositeBreadthMeanConfidence, exponent = 2) : 0.0)
 float compositeBreadthStdevConfidence = compositeBreadthActiveCount > 0 ?
      math.sqrt(number = compositeBreadthDeviationSumSquared / compositeBreadthActiveCount) : 0.0
-float compositeBreadthMaxStdev = compositeBreadthActiveCount >= 3 ? CBI_THREE_WAY_MAX_STDEV : 1.0
+// Max stdev varies by active count: 3 active = sqrt(8/9) ≈ 0.9428 (two at +1,
+// one at -1 or vice versa); 2 and 4 active both max at 1.0 (perfect split).
+// 1 or 0 active falls through to the consensus = 1.0 fast-path below.
+float compositeBreadthMaxStdev = compositeBreadthActiveCount == 3 ? CBI_THREE_WAY_MAX_STDEV : 1.0
 float compositeBreadthMagnitudeConsensus = math.max(0.0, 1.0 - compositeBreadthStdevConfidence / compositeBreadthMaxStdev)
 
 // Sign-aware consensus. The original stdev-only squeeze can over-suppress clean
 // trending sessions where PCTABOVEVWAP migrates more slowly than VOLD/ADD —
-// even though all three point the same direction. The fix splits agreement
-// into two questions: (1) team — how many components share the sign of the
-// mean? (2) magnitude — within the team, how tightly do they cluster?
+// even though all components point the same direction. The fix splits
+// agreement into two questions: (1) team — how many components share the sign
+// of the mean? (2) magnitude — within the team, how tightly do they cluster?
 //
-// When all 3 share sign (3/3 same team), the line is allowed to express its
-// directional value — we floor the consensus at 0.85 even if magnitudes
-// disagree, because magnitude divergence in the same direction is sensitivity,
-// not disagreement.
+// When all components share sign (full team agreement: 3/3 or 4/4), the line
+// expresses its directional value — we floor the consensus at 0.85 even if
+// magnitudes disagree, because magnitude divergence in the same direction is
+// sensitivity, not disagreement.
 //
-// When 2/3 share sign, both the sign penalty (~0.7×) and the magnitude penalty
-// stack — there's a real dissenter and the line should squeeze.
-//
-// When 1/3 share sign, full squeeze (≤ 0.3 sign factor × magnitude penalty) —
-// the components are fighting; "uncertain breadth" is the right read.
+// At ~2/3 or 3/4 agreement (ratio ≥ 0.666), the sign penalty (0.7×) and the
+// magnitude penalty stack — there's a real dissenter and the line should
+// squeeze. At ~half (ratio ≥ 0.333), full squeeze (0.3×). Below that, the
+// components are fighting (0.1×) — "uncertain breadth" is the right read.
 bool compositeBreadthMeanIsPositive = compositeBreadthMeanConfidence >= 0.0
 int compositeBreadthSignAlignedCount =
      (compositeBreadthVoldActive    and ((compositeBreadthVoldConfidence    >= 0.0) == compositeBreadthMeanIsPositive) ? 1 : 0) +
      (compositeBreadthAddActive     and ((compositeBreadthAddConfidence     >= 0.0) == compositeBreadthMeanIsPositive) ? 1 : 0) +
-     (compositeBreadthPctVwapActive and ((compositeBreadthPctVwapConfidence >= 0.0) == compositeBreadthMeanIsPositive) ? 1 : 0)
+     (compositeBreadthPctVwapActive and ((compositeBreadthPctVwapConfidence >= 0.0) == compositeBreadthMeanIsPositive) ? 1 : 0) +
+     (compositeBreadthCumTickActive and ((compositeBreadthCumTickConfidence >= 0.0) == compositeBreadthMeanIsPositive) ? 1 : 0)
 float compositeBreadthSignAlignmentRatio = compositeBreadthActiveCount > 0 ?
      compositeBreadthSignAlignedCount / float(compositeBreadthActiveCount) : 1.0
 float compositeBreadthSignFactor = compositeBreadthSignAlignmentRatio >= 0.999 ? 1.0 :
      compositeBreadthSignAlignmentRatio >= 0.666 ? 0.7 :
      compositeBreadthSignAlignmentRatio >= 0.333 ? 0.3 : 0.1
 
-float compositeBreadthConsensus = compositeBreadthActiveCount <= 1 ? 1.0 :
-     compositeBreadthSignAwareConsensus ?
-        (compositeBreadthSignAlignmentRatio >= 0.999 ?
-            math.max(0.85, compositeBreadthMagnitudeConsensus) :
-            compositeBreadthSignFactor * compositeBreadthMagnitudeConsensus) :
-        compositeBreadthMagnitudeConsensus
+float compositeBreadthConsensus = 1.0
+if compositeBreadthActiveCount > 1
+    if compositeBreadthSignAwareConsensus
+        if compositeBreadthSignAlignmentRatio >= 0.999
+            compositeBreadthConsensus := math.max(0.85, compositeBreadthMagnitudeConsensus)
+        else
+            compositeBreadthConsensus := compositeBreadthSignFactor * compositeBreadthMagnitudeConsensus
+    else
+        compositeBreadthConsensus := compositeBreadthMagnitudeConsensus
 
 float compositeBreadthLineValue = na(compositeBreadthDirectional) ? na :
      compositeBreadthDirectional * compositeBreadthConsensus * CBI_SCALE_MAX
@@ -692,7 +804,7 @@ bool compositeBreadthTickExtremeDown = not na(compositeBreadthTickSmoothed) and 
 
 // Rising-edge detection is decoupled from the actual plot fire so a TICK
 // extreme that lands on a bar with na displayLine (rare: TICK is live but
-// all three weighted breadth feeds gapped simultaneously) doesn't get
+// all four weighted breadth feeds gapped simultaneously) doesn't get
 // consumed silently. The edge arms a pending flag; the marker fires on
 // the first subsequent bar where displayLine is valid. Pending is cleared
 // at the next session open so a stale arm from yesterday can't fire today.
@@ -737,13 +849,6 @@ if compositeBreadthTickExtremeDownNew
 float compositeBreadthPivotHighValue = ta.pivothigh(source = compositeBreadthDisplayLine, leftbars = CBI_PIVOT_LEFT_LEGS, rightbars = CBI_PIVOT_RIGHT_LEGS)
 float compositeBreadthPivotLowValue  = ta.pivotlow (source = compositeBreadthDisplayLine, leftbars = CBI_PIVOT_LEFT_LEGS, rightbars = CBI_PIVOT_RIGHT_LEGS)
 
-// Price-side pivots (chart symbol high/low) — used by the divergence detector.
-// Same leg config as the composite pivots so the two series are directly
-// comparable. These are computed every bar; they only feed the divergence
-// logic, never the composite line or its own pivots.
-float compositeBreadthPricePivotHighValue = ta.pivothigh(source = high, leftbars = CBI_PIVOT_LEFT_LEGS, rightbars = CBI_PIVOT_RIGHT_LEGS)
-float compositeBreadthPricePivotLowValue  = ta.pivotlow (source = low,  leftbars = CBI_PIVOT_LEFT_LEGS, rightbars = CBI_PIVOT_RIGHT_LEGS)
-
 // Consensus AT the pivot bar (RIGHT_LEGS bars ago) — not current consensus.
 // Evaluated BEFORE the last-pivot baseline updates so a suppressed pivot can't
 // become the comparison baseline for the next one (which would corrupt the
@@ -761,80 +866,70 @@ bool compositeBreadthPivotAllowed = not compositeBreadthPivotGateByConsensus or
 float compositeBreadthPivotTolerance = compositeBreadthPivotUseTolerance ?
      CBI_PIVOT_EQUAL_TOLERANCE / 100.0 * CBI_SCALE_MAX : 0.0
 
-var float compositeBreadthLastPivotHigh                 = na
-var float compositeBreadthLastPivotLow                  = na
-var int   compositeBreadthTrendState                    = 0
-var label compositeBreadthLastHighLabel                 = na
-var label compositeBreadthLastLowLabel                  = na
-var int   compositeBreadthLastPivotType                 = 0   // 1 = last rendered pivot was a high, -1 = low, 0 = none yet
-var int   compositeBreadthConsecutiveHLCount            = 0   // counts HLs accumulated inside the current bear state; resets on any LH/LL/HH or fresh bull
-var float compositeBreadthPriceAtLastCompositeHigh      = na  // price level (chart high) at the bar of the most recent ACCEPTED composite high pivot
-var float compositeBreadthPriceAtLastCompositeLow       = na  // price level (chart low)  at the bar of the most recent ACCEPTED composite low  pivot
+var float compositeBreadthLastPivotHigh = na
+var float compositeBreadthLastPivotLow  = na
+var int   compositeBreadthTrendState    = 0
+var label compositeBreadthLastHighLabel = na
+var label compositeBreadthLastLowLabel  = na
+var int   compositeBreadthLastPivotType = 0   // 1 = last rendered pivot was a high, -1 = low, 0 = none yet
 
-// Session-open reset — pivot baselines, trend state, the alternation tracker,
-// soft-warn counter, and the price-vs-composite divergence anchors are all
-// intraday-only. Anchored to compositeBreadthTickFeedJustOpened (the TICK
-// feed's first non-na bar at NYSE RTH open) rather than the displayLine
-// na->value edge. The displayLine can blank mid-session if all three weighted
-// breadth feeds gap on the same bar (rare but possible during a USI outage);
-// using that edge would falsely wipe pivot history on every such hiccup. The
-// TICK feed's na->value transition is a clean US-RTH boundary regardless of
-// chart symbol — same edge used to reseed the TICK EMA above. Label refs are
-// intentionally NOT cleared here; yesterday's pivot markers stay visible as
-// historical context.
-if compositeBreadthTickFeedJustOpened
-    compositeBreadthLastPivotHigh            := na
-    compositeBreadthLastPivotLow             := na
-    compositeBreadthTrendState               := 0
-    compositeBreadthLastPivotType            := 0
-    compositeBreadthConsecutiveHLCount       := 0
-    compositeBreadthPriceAtLastCompositeHigh := na
-    compositeBreadthPriceAtLastCompositeLow  := na
+// Session-open reset — pivot baselines, trend state, and the alternation
+// tracker are intraday-only. Anchored to compositeBreadthSessionJustOpened
+// (any-feed
+// first non-na bar at NYSE RTH open) rather than the displayLine na->value
+// edge. The displayLine can blank mid-session if all four weighted breadth
+// feeds gap on the same bar (rare but possible during a USI outage); using
+// that edge would falsely wipe pivot history on every such hiccup. The
+// session-open edge is a clean US-RTH boundary regardless of chart symbol
+// or which specific feeds are live. Label refs are intentionally NOT
+// cleared here; yesterday's pivot markers stay visible as historical
+// context.
+if compositeBreadthSessionJustOpened
+    compositeBreadthLastPivotHigh := na
+    compositeBreadthLastPivotLow  := na
+    compositeBreadthTrendState    := 0
+    compositeBreadthLastPivotType := 0
 
-bool compositeBreadthIsHH         = false
-bool compositeBreadthIsLH         = false
-bool compositeBreadthIsHL         = false
-bool compositeBreadthIsLL         = false
-bool compositeBreadthBearDivergence = false   // price HH + composite LH on the same composite-pivot bar
-bool compositeBreadthBullDivergence = false   // price LL + composite HL on the same composite-pivot bar
+bool compositeBreadthIsHH = false
+bool compositeBreadthIsLH = false
+bool compositeBreadthIsHL = false
+bool compositeBreadthIsLL = false
 
-if not na(compositeBreadthPivotHighValue)
-    // Price level at the same bar as this composite high pivot.
-    float compositeBreadthPriceAtThisCompositeHigh = high[CBI_PIVOT_RIGHT_LEGS]
+// Gate pivot processing on barstate.isconfirmed so realtime intrabar ticks
+// can't fire the pivot block before the confirmation bar has closed. Without
+// this, ta.pivothigh / ta.pivotlow can return a value early in the
+// confirmation bar that the bar's eventual final high/low then invalidates —
+// causing the pivot label and alert to print and then repaint. The gate
+// adds at most one bar of cosmetic lag in realtime (historical bars are
+// always confirmed) and makes the indicator behave identically to its
+// "once per bar close" alert-config counterpart.
+if not na(compositeBreadthPivotHighValue) and barstate.isconfirmed
     if not na(compositeBreadthLastPivotHigh)
         float compositeBreadthHighDelta = compositeBreadthPivotHighValue - compositeBreadthLastPivotHigh
         compositeBreadthIsHH := compositeBreadthHighDelta >  compositeBreadthPivotTolerance
         compositeBreadthIsLH := compositeBreadthHighDelta < -compositeBreadthPivotTolerance
-        // Bear divergence: composite made an LH while price made an HH between
-        // this composite pivot and the previous accepted one. Computed before
-        // the price anchor updates so the comparison uses the prior anchor.
-        if compositeBreadthIsLH and not na(compositeBreadthPriceAtLastCompositeHigh) and
-           compositeBreadthPriceAtThisCompositeHigh > compositeBreadthPriceAtLastCompositeHigh and
-           compositeBreadthPivotAllowed
-            compositeBreadthBearDivergence := true
-    // Only accept the pivot as the new baseline when it would have been shown.
-    // Suppressed (low-consensus) pivots are treated as if they didn't happen
-    // for classification purposes — the next visible pivot is compared against
-    // the last accepted one, preserving structural continuity. Same rule
-    // applies to the price anchor used by the divergence detector.
-    if compositeBreadthPivotAllowed
-        compositeBreadthLastPivotHigh            := compositeBreadthPivotHighValue
-        compositeBreadthPriceAtLastCompositeHigh := compositeBreadthPriceAtThisCompositeHigh
+    // Only accept the pivot as the new baseline when (a) the consensus gate
+    // passes AND (b) the pivot is either the FIRST pivot of the session
+    // (nothing to compare against) or has been CLASSIFIED as HH/LH (outside
+    // the tolerance band). Within-tolerance pivots must NOT become the new
+    // baseline — if they did, repeated within-tolerance pivots would silently
+    // drift the baseline through the tolerance band and slow trends would
+    // never classify as structure. Suppressed (low-consensus) pivots are
+    // also treated as if they didn't happen, preserving structural continuity.
+    bool compositeBreadthHighIsFirstPivot = na(compositeBreadthLastPivotHigh)
+    bool compositeBreadthHighIsClassified = compositeBreadthIsHH or compositeBreadthIsLH
+    if compositeBreadthPivotAllowed and (compositeBreadthHighIsFirstPivot or compositeBreadthHighIsClassified)
+        compositeBreadthLastPivotHigh := compositeBreadthPivotHighValue
 
-if not na(compositeBreadthPivotLowValue)
-    float compositeBreadthPriceAtThisCompositeLow = low[CBI_PIVOT_RIGHT_LEGS]
+if not na(compositeBreadthPivotLowValue) and barstate.isconfirmed
     if not na(compositeBreadthLastPivotLow)
         float compositeBreadthLowDelta = compositeBreadthPivotLowValue - compositeBreadthLastPivotLow
         compositeBreadthIsHL := compositeBreadthLowDelta >  compositeBreadthPivotTolerance
         compositeBreadthIsLL := compositeBreadthLowDelta < -compositeBreadthPivotTolerance
-        // Bull divergence: composite made an HL while price made an LL.
-        if compositeBreadthIsHL and not na(compositeBreadthPriceAtLastCompositeLow) and
-           compositeBreadthPriceAtThisCompositeLow < compositeBreadthPriceAtLastCompositeLow and
-           compositeBreadthPivotAllowed
-            compositeBreadthBullDivergence := true
-    if compositeBreadthPivotAllowed
-        compositeBreadthLastPivotLow            := compositeBreadthPivotLowValue
-        compositeBreadthPriceAtLastCompositeLow := compositeBreadthPriceAtThisCompositeLow
+    bool compositeBreadthLowIsFirstPivot = na(compositeBreadthLastPivotLow)
+    bool compositeBreadthLowIsClassified = compositeBreadthIsHL or compositeBreadthIsLL
+    if compositeBreadthPivotAllowed and (compositeBreadthLowIsFirstPivot or compositeBreadthLowIsClassified)
+        compositeBreadthLastPivotLow := compositeBreadthPivotLowValue
 
 // Trend state — the "bullish sequence is broken" rule. Bull state requires a
 // fresh HH (the strong continuation/reclamation signal). Bear state can be
@@ -848,33 +943,23 @@ if not na(compositeBreadthPivotLowValue)
 //
 // Soft-warn HL counter: while bear state is active, count consecutive HL
 // pivots (each higher low is a structural improvement). After
-// CBI_SOFT_WARN_HL_COUNT consecutive HLs, the next HL renders in amber as
-// "bear weakening" hint. Counter resets on any HH (state flip to bull), LH
-// (rejection at lower high — bear confirmed), or LL (continuation of bear).
-if compositeBreadthPivotAllowed
+// Gated on barstate.isconfirmed — without the gate, the isHH/isLH/HL/LL bools
+// could be true mid-bar from a pre-confirmation pivot, flipping the trend
+// state and then un-flipping when the bar's final extremes invalidate the
+// pivot. Confined to the confirmed-bar path so state transitions are
+// monotonic and non-repainting.
+if compositeBreadthPivotAllowed and barstate.isconfirmed
     if compositeBreadthIsHH
-        compositeBreadthTrendState         := 1
-        compositeBreadthConsecutiveHLCount := 0
+        compositeBreadthTrendState := 1
     else if compositeBreadthIsLH or compositeBreadthIsLL
-        compositeBreadthTrendState         := -1
-        compositeBreadthConsecutiveHLCount := 0
-    else if compositeBreadthIsHL
-        if compositeBreadthTrendState == -1
-            compositeBreadthConsecutiveHLCount += 1
-        else if compositeBreadthTrendState == 0
-            compositeBreadthTrendState := 1
-
-bool compositeBreadthSoftWarnHL = compositeBreadthPivotSoftWarn and
-     compositeBreadthIsHL and compositeBreadthTrendState == -1 and
-     compositeBreadthConsecutiveHLCount >= CBI_SOFT_WARN_HL_COUNT
+        compositeBreadthTrendState := -1
+    else if compositeBreadthIsHL and compositeBreadthTrendState == 0
+        compositeBreadthTrendState := 1
 
 alertcondition(compositeBreadthIsHH and compositeBreadthPivotAllowed, title = "Composite HH", message = "Composite breadth made a higher high — bullish continuation structure.")
-alertcondition(compositeBreadthIsLH and compositeBreadthPivotAllowed, title = "Composite LH", message = "Composite breadth made a lower high — bearish warning, first divergence signal.")
+alertcondition(compositeBreadthIsLH and compositeBreadthPivotAllowed, title = "Composite LH", message = "Composite breadth made a lower high — bullish structure broken, watch for confirmation.")
 alertcondition(compositeBreadthIsHL and compositeBreadthPivotAllowed, title = "Composite HL", message = "Composite breadth made a higher low — bullish retrace held.")
 alertcondition(compositeBreadthIsLL and compositeBreadthPivotAllowed, title = "Composite LL", message = "Composite breadth made a lower low — bearish confirmation.")
-alertcondition(compositeBreadthSoftWarnHL, title = "Bear weakening (consecutive HLs)", message = "Composite has printed multiple higher lows inside an established bear state — bear weakening, watch for HH reclamation.")
-alertcondition(compositeBreadthBearDivergence, title = "Bearish Divergence (price HH, composite LH)", message = "Price made a higher high but composite breadth made a lower high — exhaustion warning, wait for next cycle on price.")
-alertcondition(compositeBreadthBullDivergence, title = "Bullish Divergence (price LL, composite HL)", message = "Price made a lower low but composite breadth made a higher low — exhaustion warning, wait for next cycle on price.")
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS + STRIP COORDINATES
@@ -903,34 +988,43 @@ color compositeBreadthPctVwapStripColor = f_compositeBreadthProgressiveColor(
      minTransp = CBI_STRIP_MIN_TRANSP
  )
 
+color compositeBreadthCumTickStripColor = f_compositeBreadthProgressiveColor(
+     value = compositeBreadthCumTickConfidence,
+     scale = CBI_STRIP_OPACITY_ANCHOR,
+     minTransp = CBI_STRIP_MIN_TRANSP
+ )
+
 color compositeBreadthTickStripColor = f_compositeBreadthProgressiveColor(
      value = compositeBreadthTickConfidence,
      scale = CBI_STRIP_OPACITY_ANCHOR,
      minTransp = CBI_STRIP_MIN_TRANSP_TICK
  )
 
-// Strip row heights proportional to component weight. VOLD/ADD/PCTABOVEVWAP
-// rows are sized by their share of the configured weights, so the visual
-// importance of each row matches the math — a 40/40/20 split renders the VOLD
-// and ADD rows visibly taller than PCTABOVEVWAP. TICK is context-only so it
-// gets a thinner fixed-fraction row (60% of one legacy row) that reads as
-// secondary at a glance. Total strip span is preserved at 4 × stripRowHeight
-// so the existing Y-coordinate input still controls the same screen real
-// estate. If all three weights are zero (degenerate config), fall back to an
-// even three-way split for the weighted rows.
-float compositeBreadthTotalRowWeight       = compositeBreadthVoldWeight + compositeBreadthAddWeight + compositeBreadthPctVwapWeight
+// Strip row heights proportional to component weight. The four weighted rows
+// (VOLD / ADD / PCTABOVEVWAP / CUMTICK) are sized by their share of the
+// configured weights, so visual importance matches the math — a 35/35/15/15
+// split renders VOLD and ADD twice as tall as PCTABOVEVWAP or CUMTICK. TICK is
+// context-only so it gets a thinner fixed-fraction row (60% of one legacy row)
+// that reads as secondary at a glance. Total strip span is preserved at
+// 4 × stripRowHeight so the existing Y-coordinate input still controls the
+// same screen real estate even though there are now 5 rows. If all four
+// weights are zero (degenerate config), fall back to an even four-way split.
+float compositeBreadthTotalRowWeight       = compositeBreadthVoldWeight + compositeBreadthAddWeight + compositeBreadthPctVwapWeight + compositeBreadthCumTickWeight
 float compositeBreadthStripTotalHeight     = 4.0 * compositeBreadthStripRowHeight
 float compositeBreadthTickRowHeight        = 0.6 * compositeBreadthStripRowHeight
 float compositeBreadthWeightedRowsHeight   = compositeBreadthStripTotalHeight - compositeBreadthTickRowHeight
 float compositeBreadthVoldRowHeight        = compositeBreadthTotalRowWeight > 0.0 ?
      compositeBreadthWeightedRowsHeight * compositeBreadthVoldWeight    / compositeBreadthTotalRowWeight :
-     compositeBreadthWeightedRowsHeight / 3.0
+     compositeBreadthWeightedRowsHeight / 4.0
 float compositeBreadthAddRowHeight         = compositeBreadthTotalRowWeight > 0.0 ?
      compositeBreadthWeightedRowsHeight * compositeBreadthAddWeight     / compositeBreadthTotalRowWeight :
-     compositeBreadthWeightedRowsHeight / 3.0
+     compositeBreadthWeightedRowsHeight / 4.0
 float compositeBreadthPctVwapRowHeight     = compositeBreadthTotalRowWeight > 0.0 ?
      compositeBreadthWeightedRowsHeight * compositeBreadthPctVwapWeight / compositeBreadthTotalRowWeight :
-     compositeBreadthWeightedRowsHeight / 3.0
+     compositeBreadthWeightedRowsHeight / 4.0
+float compositeBreadthCumTickRowHeight     = compositeBreadthTotalRowWeight > 0.0 ?
+     compositeBreadthWeightedRowsHeight * compositeBreadthCumTickWeight / compositeBreadthTotalRowWeight :
+     compositeBreadthWeightedRowsHeight / 4.0
 
 float compositeBreadthVoldRowTop     = compositeBreadthStripTopY
 float compositeBreadthVoldRowBase    = compositeBreadthVoldRowTop    - compositeBreadthVoldRowHeight
@@ -938,34 +1032,48 @@ float compositeBreadthAddRowTop      = compositeBreadthVoldRowBase
 float compositeBreadthAddRowBase     = compositeBreadthAddRowTop     - compositeBreadthAddRowHeight
 float compositeBreadthPctVwapRowTop  = compositeBreadthAddRowBase
 float compositeBreadthPctVwapRowBase = compositeBreadthPctVwapRowTop - compositeBreadthPctVwapRowHeight
-float compositeBreadthTickRowTop     = compositeBreadthPctVwapRowBase
+float compositeBreadthCumTickRowTop  = compositeBreadthPctVwapRowBase
+float compositeBreadthCumTickRowBase = compositeBreadthCumTickRowTop - compositeBreadthCumTickRowHeight
+float compositeBreadthTickRowTop     = compositeBreadthCumTickRowBase
 float compositeBreadthTickRowBase    = compositeBreadthTickRowTop    - compositeBreadthTickRowHeight
 
-color compositeBreadthZeroLineColor = compositeBreadthShowZeroLine ?
-     NORD3 : color.new(color = NORD3, transp = 100)
+// Zero hline color stays solid; the display toggle handles show/hide. Using
+// transparency alone would leave the line invisible but still pinning the
+// y-axis to include 0 (which is usually fine for the composite, but consistent
+// behaviour across all hlines is cleaner — every togglable hline uses
+// display.none when off).
+color compositeBreadthZeroLineColor = NORD3
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 PLOTS
 // Final plot calls stay here due to Pine placement constraints. All series and
 // styling inputs are prepared inside the owning Composite Breadth section.
 // ═════════════════════════════════════════════════════════════════════════════
-hline(price = 0, title = "Zero", color = compositeBreadthZeroLineColor, linestyle = hline.style_solid, linewidth = 3)
+hline(price = 0, title = "Zero", color = compositeBreadthZeroLineColor, linestyle = hline.style_solid, linewidth = 3, display = compositeBreadthShowZeroLine ? display.all : display.none)
 
 // Extended-level reference lines at ±CBI_EXTENDED_LEVEL. Dotted, dim NORD3.
 // Past visual saturation the composite line looks the same from ±35 onward
 // — these lines re-introduce a "this is extended for this market" cue,
 // equivalent to Barry's manually drawn 30-day VOLD support/resistance levels.
-// Toggling off via input zeroes the alpha rather than removing the call
-// (hline price must be const).
-color compositeBreadthExtendedLineColor = compositeBreadthShowExtendedLevels ?
-     color.new(color = NORD3, transp = 60) : color.new(color = NORD3, transp = 100)
-hline(price =  CBI_EXTENDED_LEVEL, title = "Extended Up",   color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1)
-hline(price = -CBI_EXTENDED_LEVEL, title = "Extended Down", color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1)
+// Toggling off uses display.none rather than alpha=100: an hline with alpha=100
+// is invisible but its `price` parameter still pins TradingView's auto-scale
+// to include ±60, which compresses the composite's natural swing around zero.
+// display.none removes the hline from the scale calculation entirely.
+color compositeBreadthExtendedLineColor = color.new(color = NORD3, transp = 60)
+hline(price =  CBI_EXTENDED_LEVEL, title = "Extended Up",   color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1, display = compositeBreadthShowExtendedLevels ? display.all : display.none)
+hline(price = -CBI_EXTENDED_LEVEL, title = "Extended Down", color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1, display = compositeBreadthShowExtendedLevels ? display.all : display.none)
 
-plot(series = compositeBreadthShowStrip ? compositeBreadthVoldRowTop     : na, title = "VOLD Strip",         color = compositeBreadthVoldStripColor,    style = plot.style_columns, histbase = compositeBreadthVoldRowBase)
-plot(series = compositeBreadthShowStrip ? compositeBreadthAddRowTop      : na, title = "ADD Strip",          color = compositeBreadthAddStripColor,     style = plot.style_columns, histbase = compositeBreadthAddRowBase)
-plot(series = compositeBreadthShowStrip ? compositeBreadthPctVwapRowTop  : na, title = "PCTABOVEVWAP Strip", color = compositeBreadthPctVwapStripColor, style = plot.style_columns, histbase = compositeBreadthPctVwapRowBase)
-plot(series = compositeBreadthShowStrip ? compositeBreadthTickRowTop     : na, title = "TICK Strip (context)", color = compositeBreadthTickStripColor,  style = plot.style_columns, histbase = compositeBreadthTickRowBase)
+// Strip plots use display.none when off, NOT just na series. plot.style_columns
+// with na series still passes histbase (around -85 to -97) into TradingView's
+// auto-scale calculation, which pins the y-axis lower bound to ~-97 even when
+// nothing visible is drawn — that's what made the composite hover near zero.
+// display.none excludes the plot from scale entirely; na series + display.none
+// is the canonical "fully hidden toggle" pattern in Pine v6.
+plot(series = compositeBreadthShowStrip ? compositeBreadthVoldRowTop     : na, title = "VOLD Strip",         color = compositeBreadthVoldStripColor,    style = plot.style_columns, histbase = compositeBreadthVoldRowBase,    display = compositeBreadthShowStrip ? display.all : display.none)
+plot(series = compositeBreadthShowStrip ? compositeBreadthAddRowTop      : na, title = "ADD Strip",          color = compositeBreadthAddStripColor,     style = plot.style_columns, histbase = compositeBreadthAddRowBase,     display = compositeBreadthShowStrip ? display.all : display.none)
+plot(series = compositeBreadthShowStrip ? compositeBreadthPctVwapRowTop  : na, title = "PCTABOVEVWAP Strip", color = compositeBreadthPctVwapStripColor, style = plot.style_columns, histbase = compositeBreadthPctVwapRowBase, display = compositeBreadthShowStrip ? display.all : display.none)
+plot(series = compositeBreadthShowStrip ? compositeBreadthCumTickRowTop  : na, title = "CUMTICK Strip",      color = compositeBreadthCumTickStripColor, style = plot.style_columns, histbase = compositeBreadthCumTickRowBase, display = compositeBreadthShowStrip ? display.all : display.none)
+plot(series = compositeBreadthShowStrip ? compositeBreadthTickRowTop     : na, title = "TICK Strip (context)", color = compositeBreadthTickStripColor,  style = plot.style_columns, histbase = compositeBreadthTickRowBase,    display = compositeBreadthShowStrip ? display.all : display.none)
 
 plot(series = compositeBreadthShowLine       ? compositeBreadthDisplayLine    : na, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
 plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal",    color = NORD3,                     linewidth = 2)
@@ -975,19 +1083,8 @@ plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue :
 // extreme high, down-triangle below on extreme low. Read as "watch next cycle
 // on price" cues, not entries.
 color compositeBreadthTickExtremeColor = color.new(color = NORD13, transp = 50)
-plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeUpNew   ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Up",   style = shape.triangleup,   location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny)
-plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeDownNew ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Down", style = shape.triangledown, location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny)
-
-// Divergence markers — diamonds on the composite line at the bar of the
-// composite-side pivot whose price counterpart printed an extension in the
-// other direction. Bear div = price HH + composite LH (filled red diamond
-// above the composite line). Bull div = price LL + composite HL (filled green
-// diamond below). Sized one tier above the pivot circles so divergences read
-// as the primary alert. Same RIGHT_LEGS confirmation lag as the pivot circles.
-color compositeBreadthBearDivColor = color.new(color = NORD11, transp = 20)
-color compositeBreadthBullDivColor = color.new(color = NORD14, transp = 20)
-plotshape(series = compositeBreadthShowDivergences and compositeBreadthBearDivergence ? compositeBreadthPivotHighValue + compositeBreadthDivergenceOffset : na, title = "Bearish Divergence", style = shape.diamond, location = location.absolute, color = compositeBreadthBearDivColor, size = size.small, offset = -CBI_PIVOT_RIGHT_LEGS)
-plotshape(series = compositeBreadthShowDivergences and compositeBreadthBullDivergence ? compositeBreadthPivotLowValue  - compositeBreadthDivergenceOffset : na, title = "Bullish Divergence", style = shape.diamond, location = location.absolute, color = compositeBreadthBullDivColor, size = size.small, offset = -CBI_PIVOT_RIGHT_LEGS)
+plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeUpNew   ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Up",   style = shape.triangleup,   location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny, display = compositeBreadthTickShowExtremes ? display.all : display.none)
+plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeDownNew ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Down", style = shape.triangledown, location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny, display = compositeBreadthTickShowExtremes ? display.all : display.none)
 
 // Pivot structure markers on the composite. Color is by TREND STATE (set by
 // the most recent decisive classification), not per-pivot type. This means
@@ -998,11 +1095,6 @@ plotshape(series = compositeBreadthShowDivergences and compositeBreadthBullDiver
 // it just seeds bull on the very first pivot of a session when nothing else
 // has set state yet.
 //
-// Soft-warn override: an HL pivot inside an established bear state that
-// follows >= CBI_SOFT_WARN_HL_COUNT prior HLs renders in NORD13 amber instead
-// of bear red — a "bear weakening" visual hint that the structural picture
-// is improving without committing to a state flip.
-//
 // Rendered as deletable labels (not plotshape) so the strict zig-zag rule
 // can be enforced: between two same-type pivots there MUST be an
 // opposite-type pivot. If a new pivot's type matches the previous rendered
@@ -1011,12 +1103,10 @@ plotshape(series = compositeBreadthShowDivergences and compositeBreadthBullDiver
 // the HH, etc. Placed at the pivot bar via x = bar_index - RIGHT_LEGS so
 // the circle sits at the actual turning point (RIGHT_LEGS bars left of the
 // confirmation bar). Highs offset above the line, lows offset below.
-color compositeBreadthTrendColor    = compositeBreadthTrendState ==  1 ? color.new(color = NORD8,  transp = 70) :
+color compositeBreadthTrendColor = compositeBreadthTrendState ==  1 ? color.new(color = NORD8,  transp = 70) :
      compositeBreadthTrendState == -1 ? color.new(color = NORD11, transp = 70) : na
-color compositeBreadthSoftWarnColor = color.new(color = NORD13, transp = 60)
 if compositeBreadthShowPivots and compositeBreadthPivotAllowed
     int compositeBreadthPivotBarIndex = bar_index - CBI_PIVOT_RIGHT_LEGS
-    color compositeBreadthLowPivotColor = compositeBreadthSoftWarnHL ? compositeBreadthSoftWarnColor : compositeBreadthTrendColor
     if compositeBreadthIsHH or compositeBreadthIsLH
         if compositeBreadthLastPivotType == 1 and not na(compositeBreadthLastHighLabel)
             label.delete(id = compositeBreadthLastHighLabel)
@@ -1040,39 +1130,49 @@ if compositeBreadthShowPivots and compositeBreadthPivotAllowed
              text = "",
              xloc = xloc.bar_index,
              yloc = yloc.price,
-             color = compositeBreadthLowPivotColor,
+             color = compositeBreadthTrendColor,
              style = label.style_circle,
              size = compositeBreadthPivotSize
          )
         compositeBreadthLastPivotType := -1
 
-// TICK regime badge — one label updated each bar showing the session's
-// cumulative TICK persistence read. Green when >0.3 (TICK above zero most of
-// the session), red when <-0.3 (TICK below zero most of the session), grey in
-// between (no commitment). Captures Barry's "TICK stayed above/below zero all
-// session" first-pass filter directly on the chart instead of requiring the
-// eye to integrate the TICK strip.
-var label compositeBreadthTickRegimeLabel = na
-if compositeBreadthTickRegimeShowMarker and barstate.islast and not na(compositeBreadthTickRegime)
-    if not na(compositeBreadthTickRegimeLabel)
-        label.delete(id = compositeBreadthTickRegimeLabel)
-    color compositeBreadthRegimeColor = compositeBreadthTickRegime >  0.3 ? NORD14 :
-         compositeBreadthTickRegime < -0.3 ? NORD11 : NORD3
-    string compositeBreadthRegimeText = "TICK regime " + str.tostring(value = compositeBreadthTickRegime, format = "#.##")
-    compositeBreadthTickRegimeLabel := label.new(
-         x = bar_index,
-         y = CBI_SCALE_MAX * 0.85,
-         text = compositeBreadthRegimeText,
-         xloc = xloc.bar_index,
-         yloc = yloc.price,
-         color = color.new(color = compositeBreadthRegimeColor, transp = 60),
-         textcolor = NORD6,
-         style = label.style_label_left,
-         size = size.small
-     )
+// Feed-health badge — one persistent label updated in-place each bar via
+// label.set_*() (more efficient than the delete+recreate pattern; TradingView
+// docs recommend this when the label persists across the whole chart life).
+// Created once on the first bar where any feed is missing; hidden by setting
+// transparency to 100 when everything is healthy so we don't churn handles.
+var label compositeBreadthFeedHealthLabel = na
+if barstate.islast
+    bool compositeBreadthAnyFeedMissing = str.length(compositeBreadthMissingFeedsText) > 0
+    if compositeBreadthAnyFeedMissing
+        string compositeBreadthFeedHealthRenderText = "⚠ CBI feeds missing: " + compositeBreadthMissingFeedsText
+        color compositeBreadthFeedHealthLabelColor = color.new(color = NORD11, transp = 20)
+        if na(compositeBreadthFeedHealthLabel)
+            compositeBreadthFeedHealthLabel := label.new(
+                 x = bar_index,
+                 y = CBI_SCALE_MAX * 0.95,
+                 text = compositeBreadthFeedHealthRenderText,
+                 xloc = xloc.bar_index,
+                 yloc = yloc.price,
+                 color = compositeBreadthFeedHealthLabelColor,
+                 textcolor = NORD6,
+                 style = label.style_label_left,
+                 size = size.normal
+             )
+        else
+            label.set_xy       (id = compositeBreadthFeedHealthLabel, x = bar_index, y = CBI_SCALE_MAX * 0.95)
+            label.set_text     (id = compositeBreadthFeedHealthLabel, text = compositeBreadthFeedHealthRenderText)
+            label.set_color    (id = compositeBreadthFeedHealthLabel, color = compositeBreadthFeedHealthLabelColor)
+            label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = NORD6)
+    else if not na(compositeBreadthFeedHealthLabel)
+        // All feeds healthy — hide via full transparency instead of
+        // deleting+recreating each render.
+        label.set_color    (id = compositeBreadthFeedHealthLabel, color = color.new(color = NORD11, transp = 100))
+        label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = color.new(color = NORD6, transp = 100))
 
 // Additional alerts on the smoothed composite line.
 alertcondition(ta.crossover (compositeBreadthDisplayLine, compositeBreadthSignalLineValue), title = "Composite crosses above Signal", message = "Composite breadth crossed above signal — upward momentum building.")
 alertcondition(ta.crossunder(compositeBreadthDisplayLine, compositeBreadthSignalLineValue), title = "Composite crosses below Signal", message = "Composite breadth crossed below signal — downward momentum building.")
 alertcondition(ta.crossover (compositeBreadthDisplayLine,  50.0), title = "Composite crosses +50 (impulse up)",   message = "Composite breadth crossed above +50 — bullish breadth impulse.")
 alertcondition(ta.crossunder(compositeBreadthDisplayLine, -50.0), title = "Composite crosses −50 (impulse down)", message = "Composite breadth crossed below −50 — bearish breadth impulse.")
+alertcondition(str.length(compositeBreadthMissingFeedsText) > 0 and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS, title = "CBI: Feed(s) missing", message = "One or more required breadth feeds have not delivered after the post-open grace window. Check the Pine logs panel and the feed-health badge for details.")

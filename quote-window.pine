@@ -34,11 +34,9 @@ const color NORD15 = #B48EAD
 // Commitment thresholds — derived from the source methodology:
 //   |%| < 0.2 = noise (treat as neutral)
 //   0.2–0.5  = drift, not committed
-//   0.5–1.0  = commitment building
-//   ≥ 1.0    = fully committed
+//   ≥ 0.5    = committed
 const float QW_NOISE_THRESHOLD       = 0.2
 const float QW_COMMITMENT_THRESHOLD  = 0.5
-const float QW_VIVID_THRESHOLD       = 1.0
 // Regime fractions: ≥75 % sectors agreeing = committed regime, 50–75 % = mild.
 const float QW_COMMITTED_FRACTION    = 0.75
 const float QW_MILD_FRACTION         = 0.50
@@ -511,12 +509,6 @@ f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed) =>
          text_valign = text.align_center,
          text_size = qwTextSize,
          bgcolor = rowBg)
-
-f_qwBlankRow(table tableId, int rowIndex) =>
-    table.cell(table_id = tableId, column = 0, row = rowIndex, text = "",
-         bgcolor = color.new(color = NORD0, transp = 100))
-    table.cell(table_id = tableId, column = 1, row = rowIndex, text = "",
-         bgcolor = color.new(color = NORD0, transp = 100))
 
 string qwRegimeTooltip =
      "🧭 REGIME GUIDE\n" +
