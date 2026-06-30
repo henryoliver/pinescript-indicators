@@ -1,6 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// MACD & Waves - Momentum wave counting based on MACD structure (HH/HL/LL/LH)
+// MACD & Waves - Top Dog Trading momentum waves (Barry Burns)
+// MOM = MACD line (5/20 EMA), DAD = signal line (30 EMA). Each momentum wave is timed by
+// the cycle indicator (Stochastic 5,2,3); MOM supplies the level. Trend & wave count come
+// from HH/HL (up) vs LL/LH (down) on the registered MOM extremes — not from zero crosses.
 
 //@version=6
 indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", max_labels_count = 500)
@@ -82,15 +85,34 @@ zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = GROUP_C
 macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
 signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
 
-// Wave Counting Settings
+// Wave Counting Settings — Top Dog Trading momentum waves (Barry Burns)
+// A momentum wave is timed by the cycle indicator (Stochastic), not by MACD pivots or
+// zero-line crosses. Each completed cycle registers one wave; MOM (the MACD line)
+// supplies the level reached. Trend = HH/HL (up) or LL/LH (down) on those MOM extremes.
 showWaves = input.bool(defval = true, title = "Show Wave Count", group = GROUP_WAVES)
-pivotLookback = input.int(defval = 3, title = "Pivot Lookback", minval = 1, maxval = 10,
-     tooltip = "Bars to left and right for pivot detection on MACD", group = GROUP_WAVES)
+
+// Cycle indicator (Stochastic) — the wave trigger. Barry's settings: %K 5, %K smooth 2, %D smooth 3.
+cycleKLength = input.int(defval = 5, title = "Cycle %K Length", minval = 1, group = GROUP_WAVES,
+     tooltip = "Stochastic %K length. Barry's cycle indicator uses 5.")
+cycleKSmooth = input.int(defval = 2, title = "Cycle %K Smoothing", minval = 1, group = GROUP_WAVES)
+cycleDSmooth = input.int(defval = 3, title = "Cycle %D Smoothing", minval = 1, group = GROUP_WAVES)
+cycleMidline = input.float(defval = 50, title = "Cycle Midline", minval = 1, maxval = 99, group = GROUP_WAVES,
+     tooltip = "Above the midline = cycle-high territory, below = cycle-low territory. A MOM wave is registered each time the cycle completes (crosses through the band).")
+cycleHysteresis = input.float(defval = 5, title = "Cycle Band (±)", minval = 0, maxval = 25, step = 0.5, group = GROUP_WAVES,
+     tooltip = "Half-width of the cycle band around the midline. Barry's 45/55 band = 5. Set 0 for a single 50 line; widen to reduce whipsaw.")
+
+// Signal line angle (VISUAL coloring only — not used for wave counting)
 signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = GROUP_WAVES,
      tooltip = "Number of bars to determine signal line angle (for color only, not wave counting)")
 signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = GROUP_WAVES,
      tooltip = "Angle threshold for signal line color (not used for wave counting)")
-waveColor = input.color(defval = NORD3, title = "Wave Label Color", group = GROUP_WAVES)
+
+// Wave label styling. Impulse waves (odd) take the trend color; retraces (even) — the
+// continuation entries, wave 2 especially — take the retrace accent.
+waveImpulseUpColor = input.color(defval = NORD14, title = "Wave · Up Impulse", group = GROUP_WAVES)
+waveImpulseDownColor = input.color(defval = NORD11, title = "Wave · Down Impulse", group = GROUP_WAVES)
+waveRetraceColor = input.color(defval = NORD13, title = "Wave · Retrace (tradeable)", group = GROUP_WAVES,
+     tooltip = "Retrace waves (even numbers) are the continuation entries — wave 2 is the highest-probability one.")
 waveLabelSize = input.int(defval = 14, title = "Wave Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
 minBarsBetweenLabels = input.int(defval = 5, title = "Min Bars Between Labels", minval = 0, maxval = 200, group = GROUP_WAVES)
 
@@ -125,187 +147,110 @@ signalSlopeAngle = na(signalPast) or signalHeight == 0 ? 0 : math.atan(signalHei
 signalCurrentColor = math.abs(signalSlopeAngle) < signalFlatThreshold ? signalColorNeutral :
      signalSlopeAngle > 0 ? signalColorUp : signalColorDown
 
-// === MACD PIVOT DETECTION ===
-// Detect MACD highs and lows using pivot points
-macdHigh = ta.pivothigh(source = macd, leftbars = pivotLookback, rightbars = pivotLookback)
-macdLow = ta.pivotlow(source = macd, leftbars = pivotLookback, rightbars = pivotLookback)
+// === CYCLE INDICATOR (Stochastic) — the wave trigger ===
+// Barry's "cycle" energy. The Stochastic times each momentum wave; MOM (the MACD line)
+// supplies the level reached. Plotted to the data window only (0-100 scale would crush MACD).
+cycleK = ta.sma(ta.stoch(close, high, low, cycleKLength), cycleKSmooth)
+cycleD = ta.sma(cycleK, cycleDSmooth)
 
-// Track when new pivots are confirmed
-newMacdHigh = not na(macdHigh)
-newMacdLow = not na(macdLow)
+cycleUpper = cycleMidline + cycleHysteresis
+cycleLower = cycleMidline - cycleHysteresis
 
-// Get pivot values and bars (pivots are offset by lookback period)
-pivotHighValue = newMacdHigh ? macd[pivotLookback] : na
-pivotLowValue = newMacdLow ? macd[pivotLookback] : na
-pivotHighBar = newMacdHigh ? bar_index - pivotLookback : na
-pivotLowBar = newMacdLow ? bar_index - pivotLookback : na
+// === MOMENTUM WAVE COUNTING (Top Dog Trading) ===
+// MOM high = highest MACD value reached while %D is in cycle-high territory.
+// MOM low  = lowest MACD value reached while %D is in cycle-low territory.
+// A cycle completes when %D crosses through the band to the opposite zone; that registers
+// the wave at the MOM extreme. Trend is read off the registered extremes:
+//   HH + HL → uptrend (highs odd/impulse, lows even/retrace)
+//   LL + LH → downtrend (lows odd/impulse, highs even/retrace)
+// The count resets to wave 1 whenever structure flips. The newest wave is provisional
+// until the next swing confirms it — this matches how Barry teaches the live count.
+var int cycleState = 0          // 1 = cycle-high zone, -1 = cycle-low zone, 0 = neutral
+var float runMax = na           // running MOM max during the current high cycle
+var int runMaxBar = na
+var float runMin = na           // running MOM min during the current low cycle
+var int runMinBar = na
 
-// === WAVE COUNTING BASED ON MACD STRUCTURE ===
-// Track MACD structure (HH/HL for uptrend, LL/LH for downtrend)
-varip string macdTrend = TREND_NONE
-varip int waveNumber = 0
-varip float lastHigh = na
-varip float lastLow = na
-varip int lastHighBar = na
-varip int lastLowBar = na
-varip float wave1Value = na
-varip int wave1Bar = na
-varip bool wave1Confirmed = false
-varip bool macdHooked = false
-varip int lastLabelBar = na
+var string macdTrend = TREND_NONE
+var int waveNumber = 0
+var float lastHigh = na
+var float lastLow = na
+var int lastLabelBar = na
 
 f_canLabel(int labelBar) =>
     showWaves and (minBarsBetweenLabels == 0 or na(lastLabelBar) or math.abs(labelBar - lastLabelBar) >= minBarsBetweenLabels)
 
-// Detect structure and count waves
-if barstate.isconfirmed and newMacdHigh
-    currentHigh = pivotHighValue
-    currentHighBar = pivotHighBar
+f_waveColor(bool isImpulse, bool isUp) =>
+    isImpulse ? (isUp ? waveImpulseUpColor : waveImpulseDownColor) : waveRetraceColor
 
-    // Compare to last high
-    if not na(lastHigh)
-        if currentHigh > lastHigh
-            // Higher High (HH)
-            if macdTrend == TREND_NONE or macdTrend == TREND_DOWN
-                // Structure change to uptrend - this could be wave 1
-                macdTrend := TREND_UP
-                waveNumber := 1
-                wave1Value := currentHigh
-                wave1Bar := currentHighBar
-                wave1Confirmed := false
-                lastHigh := currentHigh
-                lastHighBar := currentHighBar
-                macdHooked := false
-                // Don't label yet - wait for wave 2 confirmation
+// Draws the wave label when spacing allows. Returns the bar to store as lastLabelBar
+// (the new bar if drawn, otherwise the unchanged previous value) — Pine functions cannot
+// reassign globals, so the caller does the assignment.
+f_drawWave(int waveBar, float waveValue, int num, int labelStyle, color textColor) =>
+    int result = lastLabelBar
+    if f_canLabel(waveBar)
+        label.new(x = waveBar, y = waveValue, text = str.tostring(num),
+             style = labelStyle, color = color.new(color.gray, 100),
+             textcolor = textColor, size = waveLabelSizeConst, yloc = yloc.price,
+             textalign = text.align_center)
+        result := waveBar
+    result
 
-            else if macdTrend == TREND_UP and waveNumber % 2 == 0 and macdHooked
-                // Odd wave (impulse) in uptrend - must be HH and MACD hooked
-                waveNumber += 1
-                lastHigh := currentHigh
-                lastHighBar := currentHighBar
-                macdHooked := false
+if barstate.isconfirmed
+    // Cycle zone with hysteresis: hold the prior zone while %D sits inside the band.
+    newState = cycleD >= cycleUpper ? 1 : cycleD <= cycleLower ? -1 : cycleState
 
-                if f_canLabel(currentHighBar)
-                    label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
-                         style = label.style_label_down, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                         textalign = text.align_center)
-                    lastLabelBar := currentHighBar
+    // Track the MOM extreme reached within the active zone.
+    if newState == 1 and (na(runMax) or macd > runMax)
+        runMax := macd
+        runMaxBar := bar_index
+    if newState == -1 and (na(runMin) or macd < runMin)
+        runMin := macd
+        runMinBar := bar_index
 
-        else if currentHigh < lastHigh
-            // Lower High (LH)
-            if macdTrend == TREND_UP
-                // Structure might be changing to downtrend - this could be wave 1
-                // But wave 1 in downtrend is a LL, not LH
-                // So we just track this LH but don't change trend yet
-                lastHigh := currentHigh
-                lastHighBar := currentHighBar
-
-            else if macdTrend == TREND_DOWN and waveNumber % 2 == 1 and waveNumber > 0
-                // Even wave (retrace) in downtrend - confirms wave 1 if not yet confirmed
-                if not wave1Confirmed and waveNumber == 1
-                    // NOW we can label wave 1 retroactively
-                    wave1Confirmed := true
-                    if f_canLabel(wave1Bar)
-                        label.new(x = wave1Bar, y = wave1Value, text = "1",
-                             style = label.style_label_up, color = color.new(waveColor, 100),
-                             textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                             textalign = text.align_center)
-                        lastLabelBar := wave1Bar
-
-                waveNumber += 1
-                lastHigh := currentHigh
-                lastHighBar := currentHighBar
-
-                if f_canLabel(currentHighBar)
-                    label.new(x = currentHighBar, y = currentHigh, text = str.tostring(waveNumber),
-                         style = label.style_label_down, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                         textalign = text.align_center)
-                    lastLabelBar := currentHighBar
-    else
+    // Cycle high completes when %D leaves the high zone for the low zone.
+    if cycleState == 1 and newState == -1 and not na(runMax)
+        currentHigh = runMax
+        currentHighBar = runMaxBar
+        if not na(lastHigh)
+            if currentHigh > lastHigh
+                // Higher High → bullish impulse (odd wave)
+                if macdTrend != TREND_UP
+                    macdTrend := TREND_UP
+                    waveNumber := 1
+                else
+                    waveNumber += 1
+                lastLabelBar := f_drawWave(currentHighBar, currentHigh, waveNumber, label.style_label_down, f_waveColor(true, true))
+            else
+                // Lower High → retrace high in a downtrend (even wave)
+                if macdTrend == TREND_DOWN
+                    waveNumber += 1
+                    lastLabelBar := f_drawWave(currentHighBar, currentHigh, waveNumber, label.style_label_down, f_waveColor(false, false))
         lastHigh := currentHigh
-        lastHighBar := currentHighBar
+        runMax := na
 
-if barstate.isconfirmed and newMacdLow
-    currentLow = pivotLowValue
-    currentLowBar = pivotLowBar
-
-    // Compare to last low
-    if not na(lastLow)
-        if currentLow < lastLow
-            // Lower Low (LL)
-            if macdTrend == TREND_NONE or macdTrend == TREND_UP
-                // Structure change to downtrend - this could be wave 1
-                macdTrend := TREND_DOWN
-                waveNumber := 1
-                wave1Value := currentLow
-                wave1Bar := currentLowBar
-                wave1Confirmed := false
-                lastLow := currentLow
-                lastLowBar := currentLowBar
-                macdHooked := false
-                // Don't label yet - wait for wave 2 confirmation
-
-            else if macdTrend == TREND_DOWN and waveNumber % 2 == 0 and macdHooked
-                // Odd wave (impulse) in downtrend - must be LL and MACD hooked
-                waveNumber += 1
-                lastLow := currentLow
-                lastLowBar := currentLowBar
-                macdHooked := false
-
-                if f_canLabel(currentLowBar)
-                    label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
-                         style = label.style_label_up, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                         textalign = text.align_center)
-                    lastLabelBar := currentLowBar
-
-        else if currentLow > lastLow
-            // Higher Low (HL)
-            if macdTrend == TREND_DOWN
-                // Structure might be changing to uptrend - this could be wave 1
-                // But we need to wait for HH to confirm
-                // For now, just track this HL
-                lastLow := currentLow
-                lastLowBar := currentLowBar
-
-            else if macdTrend == TREND_UP
-                // Even wave (retrace) in uptrend - confirms wave 1 if not yet confirmed
-                if not wave1Confirmed and waveNumber == 1
-                    // NOW we can label wave 1 retroactively
-                    wave1Confirmed := true
-                    if f_canLabel(wave1Bar)
-                        label.new(x = wave1Bar, y = wave1Value, text = "1",
-                             style = label.style_label_down, color = color.new(waveColor, 100),
-                             textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                             textalign = text.align_center)
-                        lastLabelBar := wave1Bar
-
-                waveNumber += 1
-                lastLow := currentLow
-                lastLowBar := currentLowBar
-
-                if f_canLabel(currentLowBar)
-                    label.new(x = currentLowBar, y = currentLow, text = str.tostring(waveNumber),
-                         style = label.style_label_up, color = color.new(waveColor, 100),
-                         textcolor = waveColor, size = waveLabelSizeConst, yloc = yloc.price,
-                         textalign = text.align_center)
-                    lastLabelBar := currentLowBar
-    else
+    // Cycle low completes when %D leaves the low zone for the high zone.
+    if cycleState == -1 and newState == 1 and not na(runMin)
+        currentLow = runMin
+        currentLowBar = runMinBar
+        if not na(lastLow)
+            if currentLow < lastLow
+                // Lower Low → bearish impulse (odd wave)
+                if macdTrend != TREND_DOWN
+                    macdTrend := TREND_DOWN
+                    waveNumber := 1
+                else
+                    waveNumber += 1
+                lastLabelBar := f_drawWave(currentLowBar, currentLow, waveNumber, label.style_label_up, f_waveColor(true, false))
+            else
+                // Higher Low → retrace low in an uptrend (even wave)
+                if macdTrend == TREND_UP
+                    waveNumber += 1
+                    lastLabelBar := f_drawWave(currentLowBar, currentLow, waveNumber, label.style_label_up, f_waveColor(false, true))
         lastLow := currentLow
-        lastLowBar := currentLowBar
+        runMin := na
 
-// Check for MACD hooking (required between impulse waves)
-if barstate.isconfirmed and macdTrend == TREND_UP and not na(lastHigh) and waveNumber % 2 == 1
-    // After odd wave in uptrend, check if MACD hooked down
-    if macd < lastHigh
-        macdHooked := true
-
-if barstate.isconfirmed and macdTrend == TREND_DOWN and not na(lastLow) and waveNumber % 2 == 1
-    // After odd wave in downtrend, check if MACD hooked up
-    if macd > lastLow
-        macdHooked := true
+    cycleState := newState
 
 // === PLOTS ===
 // Zero line
@@ -319,3 +264,7 @@ plot(series = showMacdLine ? macd : na, title = "MACD", color = macdColor, linew
 
 // Signal line (color based on angle - visual only)
 plot(series = showSignalLine ? signal : na, title = "Signal", color = signalCurrentColor, linewidth = signalWidth)
+
+// Cycle indicator (data window only — 0-100 scale, used to time the waves)
+plot(series = cycleK, title = "Cycle %K", color = NORD8, display = display.data_window)
+plot(series = cycleD, title = "Cycle %D", color = NORD9, display = display.data_window)

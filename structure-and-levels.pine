@@ -74,6 +74,17 @@ float chartClose = close
 float chartHigh = high
 float chartLow = low
 
+// Running min/max of the chart symbol's own data. Used to decide whether zero is
+// genuinely inside this symbol's price scale (true for breadth/cumulative studies
+// like the Advance/Decline line or OBV, false for ordinary price symbols). This is
+// derived from the chart itself, not the higher-timeframe security request, because
+// that request returns na on many index/breadth tickers.
+var float chartScaleMin = na
+var float chartScaleMax = na
+chartScaleMin := na(chartScaleMin) ? chartLow : math.min(chartScaleMin, chartLow)
+chartScaleMax := na(chartScaleMax) ? chartHigh : math.max(chartScaleMax, chartHigh)
+bool zeroWithinChartScale = not na(chartScaleMin) and not na(chartScaleMax) and chartScaleMin <= 0 and chartScaleMax >= 0
+
 var int sessionStartBarIndex = na
 var int latestRegularSessionDayKey = na
 var array<line> renderedLines = array.new<line>()
@@ -460,9 +471,13 @@ if barstate.islastconfirmedhistory or barstate.islast
     if showTrendLines and showCurrentSessionIntraday
         f_renderTrendLines(lines = renderedLines, upTrendSegment = activeUpTrend, downTrendSegment = activeDownTrend, sessionStartBar = sessionStartBarIndex, lookbackBars = trendLineLookbackBars, projectionBars = trendLineProjectionBars, lineWidth = trendLineWidth, styleInput = trendLineStyleInput, referencePrice = chartClose, recentRange = trendRecentRange)
 
+    // Zero baseline is independent of Long-Term S/R: it draws for ANY symbol whose
+    // scale contains zero (breadth, cumulative volume), and never forces zero onto a
+    // pure price chart where it would distort the scale.
+    if showLongTermZeroLine and zeroWithinChartScale
+        resolvedZeroLineStyle = f_trendLineStyle(styleInput = longTermZeroLineStyleInput)
+        line zeroLine = line.new(x1 = bar_index - 1, y1 = 0.0, x2 = bar_index, y2 = 0.0, xloc = xloc.bar_index, extend = extend.both, color = longTermZeroLineColor, width = longTermZeroLineWidth, style = resolvedZeroLineStyle)
+        array.push(id = renderedLines, value = zeroLine)
+
     if showLongTermStructure
-        if showLongTermZeroLine
-            resolvedZeroLineStyle = f_trendLineStyle(styleInput = longTermZeroLineStyleInput)
-            line zeroLine = line.new(x1 = bar_index - 1, y1 = 0.0, x2 = bar_index, y2 = 0.0, xloc = xloc.bar_index, extend = extend.both, color = longTermZeroLineColor, width = longTermZeroLineWidth, style = resolvedZeroLineStyle)
-            array.push(id = renderedLines, value = zeroLine)
         f_renderLongTermStructure(lines = renderedLines, keyLevels = longTermKeyLevels, levelsPerSide = longTermLevelsPerSide, referencePrice = chartClose, zeroAwareMode = longTermZeroAwareMode, zeroLevelExclusionDistance = longTermZeroLevelExclusionDistance)

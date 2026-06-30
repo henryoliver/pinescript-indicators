@@ -295,6 +295,13 @@ bool compositeBreadthShowExtendedLevels = input.bool(
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
+bool compositeBreadthShowSessionDivider = input.bool(
+     defval = true,
+     title = "Session Divider",
+     tooltip = "Tint the first bar of each NYSE RTH session so day boundaries are obvious at a glance — without it, back-to-back sessions blur together and you can't tell where one day ends and the next begins. Anchored to the same any-feed session-open edge that resets the cumTick, pivot baselines, and feed-health counters, so the divider lands exactly where the indicator's state resets.",
+     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+ )
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔗 SYMBOL ROUTING
 // ═════════════════════════════════════════════════════════════════════════════
@@ -365,6 +372,15 @@ string compositeBreadthTickSymbol = compositeBreadthTickNyseOnly ?
 // with explicit na-clearing of the display/signal state below). For TICK
 // specifically, the session-reset detector also relies on a real na→value
 // transition to reseed the EMA at each NYSE RTH open.
+//
+// lookahead = barmerge.lookahead_off is intentional and correct here, NOT an
+// oversight against the repo's "use lookahead_on for real-time accuracy" note
+// (that guidance applies to HIGHER-timeframe requests). Every request below
+// uses timeframe = timeframe.period — the chart's own timeframe — so there is
+// no higher-timeframe bar to look ahead into and lookahead has no effect on the
+// returned series. lookahead_off is also the non-repainting default; flipping
+// to lookahead_on with `close` would leak future data on HTF requests, so off
+// stays the safe choice if these are ever pointed at a higher timeframe.
 float compositeBreadthAdvValue = request.security(
      symbol = compositeBreadthAdvSymbol,
      timeframe = timeframe.period,
@@ -443,7 +459,19 @@ bool compositeBreadthAnyFeedLive =
      not na(compositeBreadthDownVolValue) or
      not na(compositeBreadthPctVwapValue)
 
-bool compositeBreadthSessionJustOpened = compositeBreadthAnyFeedLive and not compositeBreadthAnyFeedLive[1]
+// Session-open edge is TIME-anchored, not feed-presence-anchored. The earlier
+// "AnyFeedLive false→true" approach relied on a real off-session bar existing
+// between sessions to create the na→value transition. That holds on futures /
+// extended-hours charts (overnight bars come back na), but on an RTH-only chart
+// there are NO dark bars between sessions: the bar before 09:30 is yesterday's
+// 16:00, whose feeds were live, so AnyFeedLive[1] is true and the edge never
+// fires — silently skipping the daily reset of cumTick, signal seed, pivot
+// state, feed-health flags, and the session divider. Pinning to the NYSE RTH
+// open window (09:30–09:35 ET, weekdays) fires reliably on BOTH chart types and
+// decouples the reset from feed health — a session still opens at 09:30 even if
+// a feed is dead, which is more correct than gating on whether data arrived.
+bool compositeBreadthInRthOpen = not na(time(timeframe.period, "0930-0935:23456", "America/New_York"))
+bool compositeBreadthSessionJustOpened = compositeBreadthInRthOpen and not compositeBreadthInRthOpen[1]
 
 var int compositeBreadthBarsSinceSessionOpen = 0
 if compositeBreadthSessionJustOpened
@@ -645,7 +673,11 @@ if not compositeBreadthTickFeedLive
 // can see which feed(s) failed without checking the chart. Uses
 // compositeBreadthBarsSinceSessionOpen (independent of TICK) so a missing
 // TICK feed doesn't suppress the warning.
-if compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS and not compositeBreadthFeedWarningEmitted and str.length(compositeBreadthMissingFeedsText) > 0
+// Gated to barstate.isrealtime: this is a LIVE health check, not a backtest
+// signal. The emitted-flag resets every session, so without this
+// guard a multi-day historical load would fire one warning per historical
+// session with a missing feed and flood the Pine Logs panel on every load.
+if barstate.isrealtime and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS and not compositeBreadthFeedWarningEmitted and str.length(compositeBreadthMissingFeedsText) > 0
     log.warning("CBI: feed(s) not delivering after " + str.tostring(value = CBI_FEED_HEALTH_GRACE_BARS) + " bars post-open — " + compositeBreadthMissingFeedsText + "(market = " + compositeBreadthMarket + ")")
     compositeBreadthFeedWarningEmitted := true
 
@@ -956,10 +988,10 @@ if compositeBreadthPivotAllowed and barstate.isconfirmed
     else if compositeBreadthIsHL and compositeBreadthTrendState == 0
         compositeBreadthTrendState := 1
 
-alertcondition(compositeBreadthIsHH and compositeBreadthPivotAllowed, title = "Composite HH", message = "Composite breadth made a higher high — bullish continuation structure.")
-alertcondition(compositeBreadthIsLH and compositeBreadthPivotAllowed, title = "Composite LH", message = "Composite breadth made a lower high — bullish structure broken, watch for confirmation.")
-alertcondition(compositeBreadthIsHL and compositeBreadthPivotAllowed, title = "Composite HL", message = "Composite breadth made a higher low — bullish retrace held.")
-alertcondition(compositeBreadthIsLL and compositeBreadthPivotAllowed, title = "Composite LL", message = "Composite breadth made a lower low — bearish confirmation.")
+alertcondition(condition = compositeBreadthIsHH and compositeBreadthPivotAllowed, title = "Composite HH", message = "Composite breadth made a higher high — bullish continuation structure.")
+alertcondition(condition = compositeBreadthIsLH and compositeBreadthPivotAllowed, title = "Composite LH", message = "Composite breadth made a lower high — bullish structure broken, watch for confirmation.")
+alertcondition(condition = compositeBreadthIsHL and compositeBreadthPivotAllowed, title = "Composite HL", message = "Composite breadth made a higher low — bullish retrace held.")
+alertcondition(condition = compositeBreadthIsLL and compositeBreadthPivotAllowed, title = "Composite LL", message = "Composite breadth made a lower low — bearish confirmation.")
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS + STRIP COORDINATES
@@ -1075,6 +1107,11 @@ plot(series = compositeBreadthShowStrip ? compositeBreadthPctVwapRowTop  : na, t
 plot(series = compositeBreadthShowStrip ? compositeBreadthCumTickRowTop  : na, title = "CUMTICK Strip",      color = compositeBreadthCumTickStripColor, style = plot.style_columns, histbase = compositeBreadthCumTickRowBase, display = compositeBreadthShowStrip ? display.all : display.none)
 plot(series = compositeBreadthShowStrip ? compositeBreadthTickRowTop     : na, title = "TICK Strip (context)", color = compositeBreadthTickStripColor,  style = plot.style_columns, histbase = compositeBreadthTickRowBase,    display = compositeBreadthShowStrip ? display.all : display.none)
 
+// Session divider — vertical column tint on the session-open bar so each new
+// RTH day is visually separated from the prior one. Same any-feed edge that
+// drives every other session-wide reset.
+bgcolor(color = compositeBreadthShowSessionDivider and compositeBreadthSessionJustOpened ? color.new(color = NORD3, transp = 70) : na, title = "Session Divider")
+
 plot(series = compositeBreadthShowLine       ? compositeBreadthDisplayLine    : na, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
 plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal",    color = NORD3,                     linewidth = 2)
 
@@ -1171,8 +1208,8 @@ if barstate.islast
         label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = color.new(color = NORD6, transp = 100))
 
 // Additional alerts on the smoothed composite line.
-alertcondition(ta.crossover (compositeBreadthDisplayLine, compositeBreadthSignalLineValue), title = "Composite crosses above Signal", message = "Composite breadth crossed above signal — upward momentum building.")
-alertcondition(ta.crossunder(compositeBreadthDisplayLine, compositeBreadthSignalLineValue), title = "Composite crosses below Signal", message = "Composite breadth crossed below signal — downward momentum building.")
-alertcondition(ta.crossover (compositeBreadthDisplayLine,  50.0), title = "Composite crosses +50 (impulse up)",   message = "Composite breadth crossed above +50 — bullish breadth impulse.")
-alertcondition(ta.crossunder(compositeBreadthDisplayLine, -50.0), title = "Composite crosses −50 (impulse down)", message = "Composite breadth crossed below −50 — bearish breadth impulse.")
-alertcondition(str.length(compositeBreadthMissingFeedsText) > 0 and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS, title = "CBI: Feed(s) missing", message = "One or more required breadth feeds have not delivered after the post-open grace window. Check the Pine logs panel and the feed-health badge for details.")
+alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue), title = "Composite crosses above Signal", message = "Composite breadth crossed above signal — upward momentum building.")
+alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue), title = "Composite crosses below Signal", message = "Composite breadth crossed below signal — downward momentum building.")
+alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 =  50.0), title = "Composite crosses +50 (impulse up)",   message = "Composite breadth crossed above +50 — bullish breadth impulse.")
+alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = -50.0), title = "Composite crosses −50 (impulse down)", message = "Composite breadth crossed below −50 — bearish breadth impulse.")
+alertcondition(condition = str.length(compositeBreadthMissingFeedsText) > 0 and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS, title = "CBI: Feed(s) missing", message = "One or more required breadth feeds have not delivered after the post-open grace window. Check the Pine logs panel and the feed-health badge for details.")
