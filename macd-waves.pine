@@ -1,28 +1,25 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// MACD & Waves - Top Dog Trading momentum waves (Barry Burns)
+// MACD & Waves — Top Dog Trading momentum waves (Barry Burns)
 // MOM = MACD line (5/20 EMA), DAD = signal line (30 EMA). Each momentum wave is timed by
 // the cycle indicator (Stochastic 5,2,3); MOM supplies the level. Trend & wave count come
-// from HH/HL (up) vs LL/LH (down) on the registered MOM extremes — not from zero crosses.
+// from HH/HL (up) vs LL/LH (down) on the registered MOM extremes — not from MACD pivots,
+// zero crosses, or the signal line angle.
 
 //@version=6
 indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", max_labels_count = 500)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-const string GROUP_GENERAL = "⚙️ General"
-const string GROUP_MACD = "📈 MACD Settings"
-const string GROUP_DISPLAY = "🖥️ Display"
-const string GROUP_COLORS = "🎨 Colors"
-const string GROUP_STYLING = "🧱 Styling"
-const string GROUP_WAVES = "🌊 Wave Counting"
-
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
 // Nord Theme Color
 // Polar Night
 const color NORD0 = #2E3440
 const color NORD1 = #3B4252
 const color NORD2 = #434C5E
 const color NORD3 = #4C566A
-// Snow Storm  
+// Snow Storm
 const color NORD4 = #D8DEE9
 const color NORD5 = #E5E9F0
 const color NORD6 = #ECEFF4
@@ -38,233 +35,139 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Calculation Constants
-const string TREND_UP   = "up"
-const string TREND_DOWN = "down"
-const string TREND_NONE = "none"
+// Shared trend colors — consumed by both the MACD signal line and the wave labels.
+const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-const float RADIANS_TO_DEGREES = 180 / math.pi
+// ═════════════════════════════════════════════════════════════════════════════
+// 📈 MACD
+// MOM/DAD engine: MACD line, signal line, histogram, and their plot colors.
+// Signal line color reads the slope (visual only — never used for wave counting).
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_MACD = "📈 MACD"
 
-// 🧩 TYPE DEFINITIONS
-enum MAType
-    SMA = "SMA"
-    EMA = "EMA"
+macdSource = input.source(defval = close, title = "Source", group = GROUP_MACD)
+macdFastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = GROUP_MACD)
+macdSlowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = GROUP_MACD)
+macdSignalLength = input.int(defval = 30, title = "Signal Length", minval = 1, group = GROUP_MACD)
+macdOscMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["EMA", "SMA"], group = GROUP_MACD, display = display.none)
+macdSignalMAType = input.string(defval = "EMA", title = "Signal MA Type", options = ["EMA", "SMA"], group = GROUP_MACD, display = display.none)
 
-// 🎛️ USER INPUT SETTINGS
+// Helper function to calculate an EMA or SMA of a source series.
+f_ma(float maSource, int maLength, simple string maType) =>
+    maType == "EMA" ? ta.ema(source = maSource, length = maLength) : ta.sma(source = maSource, length = maLength)
 
-// Source
-src = input.source(defval = close, title = "Source", group = GROUP_MACD)
+float macd = f_ma(macdSource, macdFastLength, macdOscMAType) - f_ma(macdSource, macdSlowLength, macdOscMAType)
+float signal = f_ma(macd, macdSignalLength, macdSignalMAType)
+float hist = macd - signal
 
-// Lengths
-fastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = GROUP_MACD)
-slowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = GROUP_MACD)
-signalLength = input.int(defval = 30, title = "Signal Smoothing", minval = 1, maxval = 50, group = GROUP_MACD)
+color histColor = hist >= 0 ?
+     (hist > hist[1] ? NORD9 : color.new(color = NORD9, transp = 60)) :
+     (hist > hist[1] ? color.new(color = NORD10, transp = 60) : NORD10)
+color signalColor = signal > signal[1] ? TREND_UP_COLOR : TREND_DOWN_COLOR
 
-// MA Types
-oscillatorMAType = input.enum(defval = MAType.EMA, title = "Oscillator MA Type", group = GROUP_MACD)
-signalMAType = input.enum(defval = MAType.EMA, title = "Signal Line MA Type", group = GROUP_MACD)
+// ═════════════════════════════════════════════════════════════════════════════
+// 🌊 WAVES
+// Momentum wave counting. MOM high = highest MACD value while %D holds the
+// cycle-high zone (≥ upper band, held through the mid-band); MOM low = lowest
+// MACD while %D holds the cycle-low zone. A wave registers when %D crosses
+// through the band to the opposite zone. Trend is read off the registered
+// extremes: HH → up impulse, HL → up retrace, LL → down impulse, LH → down
+// retrace. The count resets to 1 when an impulse flips the structure; the
+// newest wave is provisional until the next swing confirms it.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_WAVES = "🌊 Waves"
 
-// Visual Settings
-showHistogram = input.bool(defval = false, title = "Show Histogram", group = GROUP_DISPLAY)
-showMacdLine = input.bool(defval = true, title = "Show MACD Line", group = GROUP_DISPLAY)
-showSignalLine = input.bool(defval = true, title = "Show Signal Line", group = GROUP_DISPLAY)
-showZeroLine = input.bool(defval = true, title = "Show Zero Line", group = GROUP_DISPLAY)
-
-// Colors
-histColorUp = input.color(defval = NORD9, title = "Histogram Rising", group = GROUP_COLORS)
-histColorUpFading = input.color(defval = color.new(NORD9, 60), title = "Histogram Rising (Fading)", group = GROUP_COLORS)
-histColorDown = input.color(defval = NORD10, title = "Histogram Falling", group = GROUP_COLORS)
-histColorDownFading = input.color(defval = color.new(NORD10, 60), title = "Histogram Falling (Fading)", group = GROUP_COLORS)
-macdColor = input.color(defval = NORD3, title = "MACD Line", group = GROUP_COLORS)
-signalColorUp = input.color(defval = color.new(NORD8, 60), title = "Signal Line (Up)", group = GROUP_COLORS)
-signalColorNeutral = input.color(defval = NORD2, title = "Signal Line (Neutral)", group = GROUP_COLORS)
-signalColorDown = input.color(defval = color.new(NORD11, 60), title = "Signal Line (Down)", group = GROUP_COLORS)
-zeroLineColor = input.color(defval = NORD3, title = "Zero Line", group = GROUP_COLORS)
-
-// Line Widths
-macdWidth = input.int(defval = 2, title = "MACD Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
-signalWidth = input.int(defval = 4, title = "Signal Line Width", minval = 1, maxval = 5, group = GROUP_STYLING)
-
-// Wave Counting Settings — Top Dog Trading momentum waves (Barry Burns)
-// A momentum wave is timed by the cycle indicator (Stochastic), not by MACD pivots or
-// zero-line crosses. Each completed cycle registers one wave; MOM (the MACD line)
-// supplies the level reached. Trend = HH/HL (up) or LL/LH (down) on those MOM extremes.
-showWaves = input.bool(defval = true, title = "Show Wave Count", group = GROUP_WAVES)
-
-// Cycle indicator (Stochastic) — the wave trigger. Barry's settings: %K 5, %K smooth 2, %D smooth 3.
+showWaveCount = input.bool(defval = true, title = "Show Wave Count", group = GROUP_WAVES)
 cycleKLength = input.int(defval = 5, title = "Cycle %K Length", minval = 1, group = GROUP_WAVES,
      tooltip = "Stochastic %K length. Barry's cycle indicator uses 5.")
-cycleKSmooth = input.int(defval = 2, title = "Cycle %K Smoothing", minval = 1, group = GROUP_WAVES)
-cycleDSmooth = input.int(defval = 3, title = "Cycle %D Smoothing", minval = 1, group = GROUP_WAVES)
-cycleMidline = input.float(defval = 50, title = "Cycle Midline", minval = 1, maxval = 99, group = GROUP_WAVES,
-     tooltip = "Above the midline = cycle-high territory, below = cycle-low territory. A MOM wave is registered each time the cycle completes (crosses through the band).")
-cycleHysteresis = input.float(defval = 5, title = "Cycle Band (±)", minval = 0, maxval = 25, step = 0.5, group = GROUP_WAVES,
-     tooltip = "Half-width of the cycle band around the midline. Barry's 45/55 band = 5. Set 0 for a single 50 line; widen to reduce whipsaw.")
+cycleKSmoothing = input.int(defval = 2, title = "Cycle %K Smoothing", minval = 1, group = GROUP_WAVES)
+cycleDSmoothing = input.int(defval = 3, title = "Cycle %D Smoothing", minval = 1, group = GROUP_WAVES)
+cycleBandHalfWidth = input.float(defval = 5, title = "Cycle Band (± around 50)", minval = 0, maxval = 25, group = GROUP_WAVES,
+     tooltip = "Barry's 45/55 band = 5. A wave registers when %D crosses through the band to the opposite zone. Set 0 for a single 50 line; widen to reduce whipsaw.")
 
-// Signal line angle (VISUAL coloring only — not used for wave counting)
-signalTrendLookback = input.int(defval = 5, title = "Signal Trend Lookback (Visual Only)", minval = 2, maxval = 20, group = GROUP_WAVES,
-     tooltip = "Number of bars to determine signal line angle (for color only, not wave counting)")
-signalFlatThreshold = input.float(defval = 0.0001, title = "Signal Flat Threshold (Visual Only)", minval = 0.0001, maxval = 5.0, step = 0.0001, group = GROUP_WAVES,
-     tooltip = "Angle threshold for signal line color (not used for wave counting)")
+float cycleD = ta.sma(source = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing), length = cycleDSmoothing)
+float cycleUpperBand = 50 + cycleBandHalfWidth
+float cycleLowerBand = 50 - cycleBandHalfWidth
 
-// Wave label styling. Impulse waves (odd) take the trend color; retraces (even) — the
-// continuation entries, wave 2 especially — take the retrace accent.
-waveImpulseUpColor = input.color(defval = NORD14, title = "Wave · Up Impulse", group = GROUP_WAVES)
-waveImpulseDownColor = input.color(defval = NORD11, title = "Wave · Down Impulse", group = GROUP_WAVES)
-waveRetraceColor = input.color(defval = NORD13, title = "Wave · Retrace (tradeable)", group = GROUP_WAVES,
-     tooltip = "Retrace waves (even numbers) are the continuation entries — wave 2 is the highest-probability one.")
-waveLabelSize = input.int(defval = 14, title = "Wave Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_WAVES)
-minBarsBetweenLabels = input.int(defval = 5, title = "Min Bars Between Labels", minval = 0, maxval = 200, group = GROUP_WAVES)
-
-// Map wave label size to the label size value used by Pine.
-waveLabelSizeConst = waveLabelSize
-
-// 🧮 CALCULATIONS
-// Calculate fast and slow moving averages
-fastMA = oscillatorMAType == MAType.SMA ? ta.sma(source = src, length = fastLength) : ta.ema(source = src, length = fastLength)
-slowMA = oscillatorMAType == MAType.SMA ? ta.sma(source = src, length = slowLength) : ta.ema(source = src, length = slowLength)
-
-// Calculate MACD line
-macd = fastMA - slowMA
-
-// Calculate signal line (DAD)
-signal = signalMAType == MAType.SMA ? ta.sma(source = macd, length = signalLength) : ta.ema(source = macd, length = signalLength)
-
-// Calculate histogram
-hist = macd - signal
-
-// Determine histogram color based on momentum
-histColor = hist >= 0 ?
-     (hist > hist[1] ? histColorUp : histColorUpFading) :
-     (hist > hist[1] ? histColorDownFading : histColorDown)
-
-// Signal line slope (VISUAL ONLY - not used for wave counting)
-signalPast = signalTrendLookback <= bar_index ? signal[signalTrendLookback] : na
-signalHeight = signal - signalPast
-signalSlopeAngle = na(signalPast) or signalHeight == 0 ? 0 : math.atan(signalHeight / signalTrendLookback) * RADIANS_TO_DEGREES
-
-// Determine signal line color based on angle (VISUAL ONLY)
-signalCurrentColor = math.abs(signalSlopeAngle) < signalFlatThreshold ? signalColorNeutral :
-     signalSlopeAngle > 0 ? signalColorUp : signalColorDown
-
-// === CYCLE INDICATOR (Stochastic) — the wave trigger ===
-// Barry's "cycle" energy. The Stochastic times each momentum wave; MOM (the MACD line)
-// supplies the level reached. Plotted to the data window only (0-100 scale would crush MACD).
-cycleK = ta.sma(ta.stoch(close, high, low, cycleKLength), cycleKSmooth)
-cycleD = ta.sma(cycleK, cycleDSmooth)
-
-cycleUpper = cycleMidline + cycleHysteresis
-cycleLower = cycleMidline - cycleHysteresis
-
-// === MOMENTUM WAVE COUNTING (Top Dog Trading) ===
-// MOM high = highest MACD value reached while %D is in cycle-high territory.
-// MOM low  = lowest MACD value reached while %D is in cycle-low territory.
-// A cycle completes when %D crosses through the band to the opposite zone; that registers
-// the wave at the MOM extreme. Trend is read off the registered extremes:
-//   HH + HL → uptrend (highs odd/impulse, lows even/retrace)
-//   LL + LH → downtrend (lows odd/impulse, highs even/retrace)
-// The count resets to wave 1 whenever structure flips. The newest wave is provisional
-// until the next swing confirms it — this matches how Barry teaches the live count.
-var int cycleState = 0          // 1 = cycle-high zone, -1 = cycle-low zone, 0 = neutral
-var float runMax = na           // running MOM max during the current high cycle
-var int runMaxBar = na
-var float runMin = na           // running MOM min during the current low cycle
-var int runMinBar = na
-
-var string macdTrend = TREND_NONE
+var int cycleZone = 0        // 1 = cycle-high zone, -1 = cycle-low zone, 0 = unseeded
+var int waveTrend = 0        // 1 = up (HH/HL), -1 = down (LL/LH)
 var int waveNumber = 0
-var float lastHigh = na
-var float lastLow = na
-var int lastLabelBar = na
+var float waveRunMax = na    // running MOM max during the current high zone
+var int waveRunMaxBar = na
+var float waveRunMin = na    // running MOM min during the current low zone
+var int waveRunMinBar = na
+var float waveLastHigh = na  // last registered MOM high
+var float waveLastLow = na   // last registered MOM low
 
-f_canLabel(int labelBar) =>
-    showWaves and (minBarsBetweenLabels == 0 or na(lastLabelBar) or math.abs(labelBar - lastLabelBar) >= minBarsBetweenLabels)
+// Helper function to draw a wave count label at a registered MOM extreme.
+f_drawWave(int waveBar, float waveValue, int waveIndex, bool isHigh, color waveTextColor) =>
+    if showWaveCount
+        label.new(x = waveBar, y = waveValue, text = str.tostring(waveIndex),
+             style = isHigh ? label.style_label_down : label.style_label_up,
+             color = color.new(color = color.gray, transp = 100),
+             textcolor = waveTextColor, size = 14)
 
-f_waveColor(bool isImpulse, bool isUp) =>
-    isImpulse ? (isUp ? waveImpulseUpColor : waveImpulseDownColor) : waveRetraceColor
+// The engine runs on every realtime tick so the count moves intrabar. Pine's
+// rollback keeps it honest: var state and intrabar-created labels revert on
+// each update, so intrabar registrations stay provisional until the bar's
+// closing tick commits them.
 
-// Draws the wave label when spacing allows. Returns the bar to store as lastLabelBar
-// (the new bar if drawn, otherwise the unchanged previous value) — Pine functions cannot
-// reassign globals, so the caller does the assignment.
-f_drawWave(int waveBar, float waveValue, int num, int labelStyle, color textColor) =>
-    int result = lastLabelBar
-    if f_canLabel(waveBar)
-        label.new(x = waveBar, y = waveValue, text = str.tostring(num),
-             style = labelStyle, color = color.new(color.gray, 100),
-             textcolor = textColor, size = waveLabelSizeConst, yloc = yloc.price,
-             textalign = text.align_center)
-        result := waveBar
-    result
+// Zone with hysteresis: %D must reach a band edge to claim a zone and holds it
+// through the mid-band. The MOM extreme is tracked across the whole zone hold.
+int cycleNewZone = cycleD >= cycleUpperBand ? 1 : cycleD <= cycleLowerBand ? -1 : cycleZone
 
-if barstate.isconfirmed
-    // Cycle zone with hysteresis: hold the prior zone while %D sits inside the band.
-    newState = cycleD >= cycleUpper ? 1 : cycleD <= cycleLower ? -1 : cycleState
+if cycleNewZone == 1 and (na(waveRunMax) or macd > waveRunMax)
+    waveRunMax := macd
+    waveRunMaxBar := bar_index
+if cycleNewZone == -1 and (na(waveRunMin) or macd < waveRunMin)
+    waveRunMin := macd
+    waveRunMinBar := bar_index
 
-    // Track the MOM extreme reached within the active zone.
-    if newState == 1 and (na(runMax) or macd > runMax)
-        runMax := macd
-        runMaxBar := bar_index
-    if newState == -1 and (na(runMin) or macd < runMin)
-        runMin := macd
-        runMinBar := bar_index
+// The high zone completes when %D crosses through the band to the low zone —
+// register the MOM high.
+if cycleZone == 1 and cycleNewZone == -1 and not na(waveRunMax)
+    if not na(waveLastHigh)
+        if waveRunMax > waveLastHigh
+            // Higher High — up impulse. Resets the count to 1 on a structure flip.
+            waveNumber := waveTrend == 1 ? waveNumber + 1 : 1
+            waveTrend := 1
+            f_drawWave(waveRunMaxBar, waveRunMax, waveNumber, true, TREND_UP_COLOR)
+        else if waveTrend == -1
+            // Lower High — down retrace, counted only while the trend is down.
+            waveNumber += 1
+            f_drawWave(waveRunMaxBar, waveRunMax, waveNumber, true, TREND_DOWN_COLOR)
+    waveLastHigh := waveRunMax
+    waveRunMax := na
 
-    // Cycle high completes when %D leaves the high zone for the low zone.
-    if cycleState == 1 and newState == -1 and not na(runMax)
-        currentHigh = runMax
-        currentHighBar = runMaxBar
-        if not na(lastHigh)
-            if currentHigh > lastHigh
-                // Higher High → bullish impulse (odd wave)
-                if macdTrend != TREND_UP
-                    macdTrend := TREND_UP
-                    waveNumber := 1
-                else
-                    waveNumber += 1
-                lastLabelBar := f_drawWave(currentHighBar, currentHigh, waveNumber, label.style_label_down, f_waveColor(true, true))
-            else
-                // Lower High → retrace high in a downtrend (even wave)
-                if macdTrend == TREND_DOWN
-                    waveNumber += 1
-                    lastLabelBar := f_drawWave(currentHighBar, currentHigh, waveNumber, label.style_label_down, f_waveColor(false, false))
-        lastHigh := currentHigh
-        runMax := na
+// The low zone completes when %D crosses through the band to the high zone —
+// register the MOM low.
+if cycleZone == -1 and cycleNewZone == 1 and not na(waveRunMin)
+    if not na(waveLastLow)
+        if waveRunMin < waveLastLow
+            // Lower Low — down impulse. Resets the count to 1 on a structure flip.
+            waveNumber := waveTrend == -1 ? waveNumber + 1 : 1
+            waveTrend := -1
+            f_drawWave(waveRunMinBar, waveRunMin, waveNumber, false, TREND_DOWN_COLOR)
+        else if waveTrend == 1
+            // Higher Low — up retrace, counted only while the trend is up.
+            waveNumber += 1
+            f_drawWave(waveRunMinBar, waveRunMin, waveNumber, false, TREND_UP_COLOR)
+    waveLastLow := waveRunMin
+    waveRunMin := na
 
-    // Cycle low completes when %D leaves the low zone for the high zone.
-    if cycleState == -1 and newState == 1 and not na(runMin)
-        currentLow = runMin
-        currentLowBar = runMinBar
-        if not na(lastLow)
-            if currentLow < lastLow
-                // Lower Low → bearish impulse (odd wave)
-                if macdTrend != TREND_DOWN
-                    macdTrend := TREND_DOWN
-                    waveNumber := 1
-                else
-                    waveNumber += 1
-                lastLabelBar := f_drawWave(currentLowBar, currentLow, waveNumber, label.style_label_up, f_waveColor(true, false))
-            else
-                // Higher Low → retrace low in an uptrend (even wave)
-                if macdTrend == TREND_UP
-                    waveNumber += 1
-                    lastLabelBar := f_drawWave(currentLowBar, currentLow, waveNumber, label.style_label_up, f_waveColor(false, true))
-        lastLow := currentLow
-        runMin := na
+cycleZone := cycleNewZone
 
-    cycleState := newState
-
-// === PLOTS ===
-// Zero line
-hline(price = showZeroLine ? 0 : na, title = "Zero Line", color = zeroLineColor, linestyle = hline.style_dashed, linewidth = 1)
-
-// Histogram
-plot(series = showHistogram ? hist : na, title = "Histogram", style = plot.style_columns, color = histColor)
-
-// MACD line
-plot(series = showMacdLine ? macd : na, title = "MACD", color = macdColor, linewidth = macdWidth)
-
-// Signal line (color based on angle - visual only)
-plot(series = showSignalLine ? signal : na, title = "Signal", color = signalCurrentColor, linewidth = signalWidth)
-
-// Cycle indicator (data window only — 0-100 scale, used to time the waves)
-plot(series = cycleK, title = "Cycle %K", color = NORD8, display = display.data_window)
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 PLOTS
+// Final plot, hline, and alert statements only — all series and colors are
+// computed in their owning sections above.
+// ═════════════════════════════════════════════════════════════════════════════
+hline(price = 0, title = "Zero Line", color = color.new(color = NORD3, transp = 50), linestyle = hline.style_dashed)
+plot(series = hist, title = "Histogram", color = histColor, style = plot.style_columns, display = display.none)
+plot(series = macd, title = "MACD", color = NORD3, linewidth = 2)
+plot(series = signal, title = "Signal", color = signalColor, linewidth = 4)
 plot(series = cycleD, title = "Cycle %D", color = NORD9, display = display.data_window)
+
+alertcondition(condition = hist[1] >= 0 and hist < 0, title = "Rising to falling", message = "MACD histogram switched from a rising to falling state")
+alertcondition(condition = hist[1] <= 0 and hist > 0, title = "Falling to rising", message = "MACD histogram switched from a falling to rising state")

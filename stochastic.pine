@@ -1,10 +1,11 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Stochastic — Top Dog Trading "Energy of Cycles".
-// Serves two roles in one indicator:
-//   1. CYCLE indicator on the setup chart        → 5/2/3 stochastic, 80/20 + 55/45 bands.
-//   2. LONG TERM CYCLE CONFIRMATION on the 3× HTF → same cycle settings pulled from the
-//      confirmation chart (Barry's 3:1 fractal ratio). Read %D direction to confirm the trade.
+// Stochastic — Top Dog Trading cycle indicator (the Cycles energy: the market's "breathing").
+// Setup-chart entry trigger: Barry's 5/2/3 settings, 80/20 cycle extremes, 55/45 mid levels.
+// %K is the entry trigger: hooks mark cycle highs/lows (entry one tick beyond the hook bar);
+// two hooks at the same extreme = mini-divergence. %D is the exit line: a %D hook against the
+// trade on the confirmation chart trails the stop.
+// %K is solid NORD3. %D is colored by direction: up = NORD8 @ 80% opacity, down = NORD9 @ 40% opacity.
 
 //@version=6
 indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true)
@@ -13,7 +14,6 @@ indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price
 const string GROUP_STOCH = "📈 Cycle (Setup Chart)"
 const string GROUP_STYLE = "🎨 Style"
 const string GROUP_BANDS = "📏 Bands"
-const string GROUP_CONFIRM = "🔭 Long Term Cycle Confirmation"
 
 // Nord Theme Color
 // Polar Night
@@ -37,17 +37,19 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
+// Direction colors (same pair as the trend coloring in macd-waves)
+const color UP_COLOR = color.new(color = NORD8, transp = 20)
+const color DOWN_COLOR = color.new(color = NORD9, transp = 60)
+
 // 🎛️ USER INPUT SETTINGS
 
-// Stochastic Input Settings (Barry's cycle defaults: %K 5, %K Smoothing 2, %D 3)
+// Stochastic Input Settings (Barry's cycle defaults: %K Length 5, %K Smoothing 2, %D Smoothing 3)
 int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_STOCH)
 int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_STOCH)
 int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_STOCH)
 
-// Stochastic Colors & Width
-color colorK = input.color(defval = NORD3, title = "%K Color", group = GROUP_STYLE)
+// Style
 int widthK = input.int(defval = 2, title = "%K Width", minval = 1, maxval = 10, group = GROUP_STYLE)
-color colorD = input.color(defval = color.new(color = NORD2, transp = 60), title = "%D Color", group = GROUP_STYLE)
 int widthD = input.int(defval = 4, title = "%D Width", minval = 1, maxval = 10, group = GROUP_STYLE)
 
 // Band Settings
@@ -64,63 +66,22 @@ float lowerBand = input.float(defval = 20, title = "Lower Band", minval = 0, max
 color bandColor = input.color(defval = NORD3, title = "Band Color", group = GROUP_BANDS)
 int bandWidth = input.int(defval = 1, title = "Band Width", minval = 1, maxval = 10, group = GROUP_BANDS)
 
-// Long Term Cycle Confirmation Settings
-// The confirmation chart is the higher timeframe in Barry's 3:1 fractal. Same cycle settings,
-// bigger scale. Confirm the trade by the direction/position of the confirmation %D.
-bool showConfirm = input.bool(defval = false, title = "Show Long Term Cycle", group = GROUP_CONFIRM,
-     tooltip = "Plots the cycle stochastic from the confirmation (higher) timeframe using the same %K/%D settings.")
-bool confirmAuto = input.bool(defval = true, title = "Auto Confirmation Timeframe (Fractal Ratio)", group = GROUP_CONFIRM,
-     tooltip = "When on, the confirmation timeframe is the chart timeframe × the ratio below (Barry's 3:1 rule).")
-int confirmRatio = input.int(defval = 3, title = "Fractal Ratio", minval = 2, maxval = 12, group = GROUP_CONFIRM,
-     tooltip = "Barry's standard is 3 (setup : confirmation = 1 : 3).")
-string confirmTimeframe = input.timeframe(defval = "", title = "Manual Confirmation Timeframe", group = GROUP_CONFIRM,
-     tooltip = "Used only when Auto is off. Leave blank to fall back to the chart timeframe.")
-bool confirmShowK = input.bool(defval = false, title = "Show Confirmation %K", group = GROUP_CONFIRM)
-bool confirmShowD = input.bool(defval = true, title = "Show Confirmation %D", group = GROUP_CONFIRM,
-     tooltip = "%D is the line Barry reads on the confirmation chart to confirm direction.")
-color colorConfirmK = input.color(defval = color.new(color = NORD8, transp = 40), title = "Confirmation %K Color", group = GROUP_CONFIRM)
-int widthConfirmK = input.int(defval = 1, title = "Confirmation %K Width", minval = 1, maxval = 10, group = GROUP_CONFIRM)
-color colorConfirmD = input.color(defval = NORD10, title = "Confirmation %D Color", group = GROUP_CONFIRM)
-int widthConfirmD = input.int(defval = 3, title = "Confirmation %D Width", minval = 1, maxval = 10, group = GROUP_CONFIRM)
-
 // 🧮 CALCULATIONS
-// Stochastic %K/%D (reused for both the local cycle and the HTF confirmation so the
-// confirmation is a true fractal of the setup — same indicator, bigger scale).
-f_stoch(simple int lenK, simple int smoothingK, simple int lenD) =>
-    float kk = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = lenK), length = smoothingK)
-    float dd = ta.sma(source = kk, length = lenD)
-    [kk, dd]
+float k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
+float d = ta.sma(source = k, length = periodD)
 
-// Local cycle (setup chart)
-[k, d] = f_stoch(lenK = periodK, smoothingK = smoothK, lenD = periodD)
-
-// Resolve the confirmation timeframe
-int chartSeconds = timeframe.in_seconds()
-string resolvedConfirmTimeframe = confirmAuto ? timeframe.from_seconds(seconds = chartSeconds * confirmRatio) : (confirmTimeframe == "" ? timeframe.period : confirmTimeframe)
-
-// Long term cycle (confirmation chart) — same settings, pulled from the higher timeframe.
-[confirmKRaw, confirmDRaw] = request.security(
-     symbol = syminfo.tickerid,
-     timeframe = resolvedConfirmTimeframe,
-     expression = f_stoch(lenK = periodK, smoothingK = smoothK, lenD = periodD),
-     lookahead = barmerge.lookahead_off,
-     gaps = barmerge.gaps_off)
-
-float confirmK = showConfirm and confirmShowK ? confirmKRaw : na
-float confirmD = showConfirm and confirmShowD ? confirmDRaw : na
+// Direction of %D — hold the last direction on flat bars so the color doesn't flicker.
+var bool dRising = true
+dRising := d > d[1] ? true : d < d[1] ? false : dRising
 
 // 📊 PLOT
-// Plot Stochastic Lines (setup chart cycle)
-plot(series = d, title = "%D", color = colorD, linewidth = widthD)
-plot(series = k, title = "%K", color = colorK, linewidth = widthK)
-
-// Plot Long Term Cycle Confirmation (higher timeframe)
-plot(series = confirmD, title = "LT %D", color = colorConfirmD, linewidth = widthConfirmD)
-plot(series = confirmK, title = "LT %K", color = colorConfirmK, linewidth = widthConfirmK)
+// %D first so %K draws on top of it.
+plot(series = d, title = "%D", color = dRising ? UP_COLOR : DOWN_COLOR, linewidth = widthD)
+plot(series = k, title = "%K", color = NORD3, linewidth = widthK)
 
 // Plot Bands
-h0 = hline(price = showUpperBand ? upperBand : na, title = "Upper Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+hline(price = showUpperBand ? upperBand : na, title = "Upper Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
 hline(price = showUpperMidBand ? upperMidBand : na, title = "Upper Mid Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
 hline(price = showMiddleBand ? middleBand : na, title = "Middle Band", color = color.new(color = bandColor, transp = 50), linewidth = bandWidth)
 hline(price = showLowerMidBand ? lowerMidBand : na, title = "Lower Mid Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
-h1 = hline(price = showLowerBand ? lowerBand : na, title = "Lower Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
+hline(price = showLowerBand ? lowerBand : na, title = "Lower Band", color = bandColor, linewidth = bandWidth, linestyle = hline.style_dashed)
