@@ -3,26 +3,41 @@
 // Major Swings - standalone extraction of the Support & Resistance swing engine
 
 //@version=6
-indicator(title = "Major Swings", shorttitle = "Swings", overlay = true, max_lines_count = 100, max_labels_count = 100, calc_bars_count = 5000)
+indicator(title = "Major Swings", shorttitle = "💦 Swings", overlay = true, max_lines_count = 100, max_labels_count = 100, calc_bars_count = 5000)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
 // ═════════════════════════════════════════════════════════════════════════════
 // Nord Theme Color
-const color NORD0 = #2E3440
-const color NORD4 = #D8DEE9
+// Polar Night
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+// Snow Storm
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+// Frost
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧩 TYPE DEFINITIONS
+// Custom Pine types and enums used by the indicator.
 // ═════════════════════════════════════════════════════════════════════════════
 enum SwingSourceMode
     BODIES = "Bodies"
     WICKS  = "Wicks"
-
-enum DistanceMode
-    TICKS   = "Ticks"
-    ATR     = "ATR"
-    PERCENT = "Percent"
 
 enum LineStyleMode
     SOLID  = "Solid"
@@ -42,62 +57,23 @@ type Swing
     float volumeBaseline
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ⚙️ INPUTS
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_SWINGS = "🌊 Major Swings"
-const string GROUP_LEVELS = "🎨 Level Lines"
-const string GROUP_RENDER = "⚙️ Render"
-
-int swingStrength = input.int(defval = 11, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low.", group = GROUP_SWINGS)
-SwingSourceMode swingSourceMode = input.enum(defval = SwingSourceMode.BODIES, title = "Swing Source", tooltip = "Bodies uses candle bodies for cleaner shelves. Wicks uses full highs and lows for more reactive liquidity levels.", group = GROUP_SWINGS)
-int swingLevelsPerSide = input.int(defval = 2, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing highs and swing lows to keep visible after merging. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
-bool swingPrioritizeUnbroken = input.bool(defval = true, title = "Prioritize Unbroken Levels", tooltip = "When on, untouched swing levels are kept ahead of already-broken levels when the per-side limit is reached.", group = GROUP_SWINGS)
-DistanceMode swingMergeMode = input.enum(defval = DistanceMode.ATR, title = "Merge Distance Mode", tooltip = "How nearby same-side swings are merged before plotting.", group = GROUP_SWINGS)
-int swingMergeTicks = input.int(defval = 250, title = "Swing Merge Distance (Ticks)", minval = 10, maxval = 500, tooltip = "Merges nearby same-side swing levels at render time to reduce duplicate shelves when Merge Distance Mode is Ticks.", group = GROUP_SWINGS)
-float swingMergeAtrMult = input.float(defval = 0.35, title = "Merge Distance ATR Multiplier", minval = 0.05, maxval = 5.0, step = 0.05, tooltip = "Merges nearby same-side swing levels using an ATR-based distance when Merge Distance Mode is ATR.", group = GROUP_SWINGS)
-float swingMergePercent = input.float(defval = 0.20, title = "Merge Distance Percent", minval = 0.01, maxval = 5.0, step = 0.01, tooltip = "Merges nearby same-side swing levels using a percent-of-price distance when Merge Distance Mode is Percent.", group = GROUP_SWINGS)
-int sharedAtrLength = input.int(defval = 14, title = "ATR Length", minval = 1, tooltip = "ATR lookback used by the ATR-based merge distance.", group = GROUP_SWINGS)
-
-bool showSwingLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each visible swing level.", group = GROUP_RENDER)
-int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all swing labels.", group = GROUP_RENDER)
-int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
-int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
-// Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
-// the extend input stays at 400 to keep a safe margin from that limit.
-int renderExtendBars = input.int(defval = 4, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right swing levels extend beyond the current bar.", group = GROUP_RENDER)
-int renderLabelRightBars = input.int(defval = 80, title = "Label Right Bars", minval = 1, maxval = 1000, tooltip = "How far left from the current bar labels should sit.", group = GROUP_RENDER)
-color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by swing labels.", group = GROUP_RENDER)
-
-color unbrokenLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Unbroken Color", tooltip = "Line color for swing levels price has not touched yet.", group = GROUP_LEVELS, inline = "unbroken")
-LineStyleMode unbrokenLevelStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", tooltip = "Line style for untouched swing levels.", group = GROUP_LEVELS, inline = "unbroken")
-color sweptLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Swept Color", tooltip = "Line color for swing levels whose wick was raided but whose body level still holds.", group = GROUP_LEVELS, inline = "swept")
-LineStyleMode sweptLevelStyle = input.enum(defval = LineStyleMode.SOLID, title = "", tooltip = "Line style for swept swing levels.", group = GROUP_LEVELS, inline = "swept")
-color brokenLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Broken Color", tooltip = "Line color for swing levels price has closed through.", group = GROUP_LEVELS, inline = "broken")
-LineStyleMode brokenLevelStyle = input.enum(defval = LineStyleMode.DASHED, title = "", tooltip = "Line style for broken swing levels.", group = GROUP_LEVELS, inline = "broken")
-bool useWeightBasedWidth = input.bool(defval = true, title = "Strength-Based Line Width", tooltip = "When on, line width (1-3) reflects swing strength: recency plus volume and sweep bonuses. When off, all levels use the fixed width below.", group = GROUP_LEVELS)
-int fixedLineWidth = input.int(defval = 2, title = "Fixed Line Width", minval = 1, maxval = 5, tooltip = "Line width used for all swing levels when Strength-Based Line Width is off.", group = GROUP_LEVELS)
-
-// ═════════════════════════════════════════════════════════════════════════════
 // 🧮 SHARED CALCULATIONS
+// Shared helpers and orchestration only.
 // ═════════════════════════════════════════════════════════════════════════════
 bool confirmedBar = barstate.isconfirmed
-float sharedAtrSeries = ta.atr(length = sharedAtrLength)
-var float sharedAtrValue = na
-if confirmedBar
-    sharedAtrValue := sharedAtrSeries
-// Rendering rebuilds once per closed bar to keep the live bar static. The
-// `not hasRenderedFrame` escape covers loading a chart while the market is
-// open: there `islastconfirmedhistory` is true only on the bar *before* the
-// realtime bar (where islast is false), so without it nothing would draw
-// until the current bar closes.
-var bool hasRenderedFrame = false
-bool shouldRefreshRender = barstate.islast and (confirmedBar or barstate.islastconfirmedhistory or not hasRenderedFrame)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 MAJOR SWINGS
 // Stores recent confirmed swing highs and lows as raw structure references.
+// Exports the swing store for the render engine.
 // ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_SWINGS = "🌊 Major Swings"
 const int MAX_SWINGS_STORED = 24
+
+int swingStrength = input.int(defval = 11, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low.", group = GROUP_SWINGS)
+SwingSourceMode swingSourceMode = input.enum(defval = SwingSourceMode.BODIES, title = "Swing Source", tooltip = "Bodies uses candle bodies for cleaner shelves. Wicks uses full highs and lows for more reactive liquidity levels.", group = GROUP_SWINGS)
+int swingLevelsPerSide = input.int(defval = 3, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing highs and swing lows to keep visible, newest first. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
+bool swingPrioritizeUnbroken = input.bool(defval = true, title = "Prioritize Unbroken Levels", tooltip = "When on, untouched swing levels are kept ahead of already-broken levels when the per-side limit is reached.", group = GROUP_SWINGS)
 
 var array<Swing> structuralSwings = array.new<Swing>()
 var float structLastSH = na
@@ -118,15 +94,12 @@ float confirmedSwingLow = confirmedBar ? confirmedSwingLowRaw : na
 f_getNearestUnbrokenSwings() =>
     float refreshedNearestUnbrokenHighSwing = na
     float refreshedNearestUnbrokenLowSwing = na
-    int structuralSwingCount = array.size(id = structuralSwings)
-    if structuralSwingCount > 0
-        for swingIndex = 0 to structuralSwingCount - 1
-            Swing trackedSwing = array.get(id = structuralSwings, index = swingIndex)
-            if not trackedSwing.isBroken
-                if trackedSwing.isHigh
-                    refreshedNearestUnbrokenHighSwing := na(refreshedNearestUnbrokenHighSwing) ? trackedSwing.price : math.min(refreshedNearestUnbrokenHighSwing, trackedSwing.price)
-                else
-                    refreshedNearestUnbrokenLowSwing := na(refreshedNearestUnbrokenLowSwing) ? trackedSwing.price : math.max(refreshedNearestUnbrokenLowSwing, trackedSwing.price)
+    for trackedSwing in structuralSwings
+        if not trackedSwing.isBroken
+            if trackedSwing.isHigh
+                refreshedNearestUnbrokenHighSwing := na(refreshedNearestUnbrokenHighSwing) ? trackedSwing.price : math.min(refreshedNearestUnbrokenHighSwing, trackedSwing.price)
+            else
+                refreshedNearestUnbrokenLowSwing := na(refreshedNearestUnbrokenLowSwing) ? trackedSwing.price : math.max(refreshedNearestUnbrokenLowSwing, trackedSwing.price)
     [refreshedNearestUnbrokenHighSwing, refreshedNearestUnbrokenLowSwing]
 
 f_registerStructuralSwing(float swingPrice, int swingBar, bool isHighSwing, string swingType, float swingVolume, float swingVolumeBaseline) =>
@@ -152,18 +125,16 @@ bool canTestHighSwings = not na(nearestUnbrokenHighSwing) and high >= nearestUnb
 bool canTestLowSwings = not na(nearestUnbrokenLowSwing) and low <= nearestUnbrokenLowSwing
 
 // Defer swing break/sweep state changes until bar close to avoid repeating this scan on every realtime tick.
-if barstate.isconfirmed and structuralSwingCount > 0 and (canTestHighSwings or canTestLowSwings)
+if confirmedBar and structuralSwingCount > 0 and (canTestHighSwings or canTestLowSwings)
     bool refreshNearestUnbroken = false
-    for brokenIndex = 0 to structuralSwingCount - 1
-        Swing trackedSwing = array.get(id = structuralSwings, index = brokenIndex)
+    for trackedSwing in structuralSwings
         bool shouldCheckSwing = trackedSwing.isHigh ? canTestHighSwings : canTestLowSwings
         if shouldCheckSwing and not trackedSwing.isBroken
-            float swingPriceCheck = trackedSwing.price
-            bool isHighSwingCheck = trackedSwing.isHigh
-            bool wickBreached = isHighSwingCheck ? high >= swingPriceCheck : low <= swingPriceCheck
-            bool bodyBreached = isHighSwingCheck ? currentBodyHigh >= swingPriceCheck : currentBodyLow <= swingPriceCheck
+            bool wickBreached = trackedSwing.isHigh ? high >= trackedSwing.price : low <= trackedSwing.price
             if wickBreached
-                if bodyBreached
+                // Body comparison only runs on actual wick breaches, which
+                // keeps the common no-touch iteration to a single comparison.
+                if trackedSwing.isHigh ? currentBodyHigh >= trackedSwing.price : currentBodyLow <= trackedSwing.price
                     trackedSwing.isBroken := true
                     trackedSwing.isSwept := false
                     refreshNearestUnbroken := true
@@ -174,19 +145,41 @@ if barstate.isconfirmed and structuralSwingCount > 0 and (canTestHighSwings or c
         nearestUnbrokenHighSwing := refreshedNearestUnbrokenHighSwing
         nearestUnbrokenLowSwing := refreshedNearestUnbrokenLowSwing
 
-f_hasNearbySwing(array<float> existingPrices, float candidatePrice, float mergeDistance) =>
-    bool hasNearby = false
-    for existingPrice in existingPrices
-        if math.abs(number = existingPrice - candidatePrice) <= mergeDistance
-            hasNearby := true
-            break
-    hasNearby
-
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
-// Merges nearby same-side swings, keeps the strongest levels per side, then
-// draws lines from each swing origin plus optional structure labels.
+// Keeps the newest levels per side, unbroken first, then draws lines from each
+// swing origin plus optional structure labels.
 // ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_RENDER = "🏷️ Render"
+const string GROUP_LEVELS = "🎨 Level Lines"
+
+bool showSwingLabels = input.bool(defval = false, title = "Show Labels", tooltip = "Shows the text labels for each visible swing level.", group = GROUP_RENDER)
+int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all swing labels.", group = GROUP_RENDER)
+int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
+int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
+// Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
+// the extend input stays at 400 to keep a safe margin from that limit.
+int renderExtendBars = input.int(defval = 20, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right swing levels extend beyond the current bar.", group = GROUP_RENDER)
+int renderLabelRightBars = input.int(defval = 1, title = "Label Right Bars", minval = 1, maxval = 1000, tooltip = "How far left from the current bar labels should sit.", group = GROUP_RENDER)
+color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by swing labels.", group = GROUP_RENDER)
+
+color unbrokenLevelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Unbroken Color", tooltip = "Line color for swing levels price has not touched yet.", group = GROUP_LEVELS, inline = "unbroken")
+LineStyleMode unbrokenLevelStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", tooltip = "Line style for untouched swing levels.", group = GROUP_LEVELS, inline = "unbroken")
+color sweptLevelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Swept Color", tooltip = "Line color for swing levels whose wick was raided but whose body level still holds.", group = GROUP_LEVELS, inline = "swept")
+LineStyleMode sweptLevelStyle = input.enum(defval = LineStyleMode.SOLID, title = "", tooltip = "Line style for swept swing levels.", group = GROUP_LEVELS, inline = "swept")
+color brokenLevelColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Broken Color", tooltip = "Line color for swing levels price has closed through.", group = GROUP_LEVELS, inline = "broken")
+LineStyleMode brokenLevelStyle = input.enum(defval = LineStyleMode.DASHED, title = "", tooltip = "Line style for broken swing levels.", group = GROUP_LEVELS, inline = "broken")
+bool useWeightBasedWidth = input.bool(defval = true, title = "Strength-Based Line Width", tooltip = "When on, line width (1-3) reflects swing strength: recency plus volume and sweep bonuses. When off, all levels use the fixed width below.", group = GROUP_LEVELS)
+int fixedLineWidth = input.int(defval = 2, title = "Fixed Line Width", minval = 1, maxval = 5, tooltip = "Line width used for all swing levels when Strength-Based Line Width is off.", group = GROUP_LEVELS)
+
+// Rendering rebuilds once per closed bar to keep the live bar static. The
+// `not hasRenderedFrame` escape covers loading a chart while the market is
+// open: there `islastconfirmedhistory` is true only on the bar *before* the
+// realtime bar (where islast is false), so without it nothing would draw
+// until the current bar closes.
+var bool hasRenderedFrame = false
+bool shouldRefreshRender = barstate.islast and (confirmedBar or barstate.islastconfirmedhistory or not hasRenderedFrame)
+
 f_lineStyle(LineStyleMode styleMode) =>
     styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
 
@@ -204,7 +197,7 @@ f_drawSwingLevel(array<line> lines, array<label> labels, float levelPrice, strin
         // Clamp so labels never float left of the swing origin when the swing
         // is younger than the label offset.
         int labelX = math.max(startBar, bar_index - renderLabelRightBars + labelHorizontalAdjustBars)
-        label newLabel = label.new(x = labelX, y = f_labelY(levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = text.align_left)
+        label newLabel = label.new(x = labelX, y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = text.align_left)
         array.push(id = labels, value = newLabel)
 
 var array<line> renderedLines = array.new<line>()
@@ -219,9 +212,6 @@ if shouldRefreshRender
         label.delete(id = labelObj)
     array.clear(id = renderedLabels)
 
-    array<float> renderedHighSwingPrices = array.new<float>()
-    array<float> renderedLowSwingPrices = array.new<float>()
-    float swingMergeDistance = swingMergeMode == DistanceMode.ATR ? sharedAtrValue * swingMergeAtrMult : swingMergeMode == DistanceMode.PERCENT ? close * swingMergePercent * 0.01 : syminfo.mintick * swingMergeTicks
     int renderedHighCount = 0
     int renderedLowCount = 0
     if structuralSwingCount > 0
@@ -241,21 +231,18 @@ if shouldRefreshRender
                 int sideRenderedCount = isHighSwing ? renderedHighCount : renderedLowCount
                 if shouldRenderThisPass and sideRenderedCount < swingLevelsPerSide
                     string swingStructureLabel = swingTypeVal == "HH" or swingTypeVal == "LH" or swingTypeVal == "HL" or swingTypeVal == "LL" ? " " + swingTypeVal : ""
-                    array<float> swingSidePrices = isHighSwing ? renderedHighSwingPrices : renderedLowSwingPrices
-                    if not f_hasNearbySwing(existingPrices = swingSidePrices, candidatePrice = swingPriceVal, mergeDistance = swingMergeDistance)
-                        int swingSequence = array.size(id = swingSidePrices) + 1
-                        int swingBaseWeight = structuralIndex == 0 ? 3 : structuralIndex <= 4 ? 2 : 1
-                        int swingVolumeBonus = not na(swingVolumeBaselineVal) and swingVolumeVal > swingVolumeBaselineVal * 2.0 ? 1 : 0
-                        int swingSweepBonus = swingIsSwept ? 1 : 0
-                        int swingWeight = math.min(swingBaseWeight + swingVolumeBonus + swingSweepBonus, 3)
-                        string swingPrefix = isHighSwing ? "H" : "L"
-                        string swingSweepLabel = swingIsSwept ? " SW" : ""
-                        LineStyleMode swingLineStyle = swingIsBroken ? brokenLevelStyle : swingIsSwept ? sweptLevelStyle : unbrokenLevelStyle
-                        color swingLineColor = swingIsBroken ? brokenLevelColor : swingIsSwept ? sweptLevelColor : unbrokenLevelColor
-                        string swingLabel = swingPrefix + str.tostring(value = swingSequence) + swingStructureLabel + swingSweepLabel
-                        f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = swingPriceVal, labelText = swingLabel, levelColor = swingLineColor, styleMode = swingLineStyle, levelWeight = swingWeight, startBar = swingBarVal)
-                        array.push(id = swingSidePrices, value = swingPriceVal)
-                        if isHighSwing
-                            renderedHighCount += 1
-                        else
-                            renderedLowCount += 1
+                    int swingSequence = sideRenderedCount + 1
+                    int swingBaseWeight = structuralIndex == 0 ? 3 : structuralIndex <= 4 ? 2 : 1
+                    int swingVolumeBonus = not na(swingVolumeBaselineVal) and swingVolumeVal > swingVolumeBaselineVal * 2.0 ? 1 : 0
+                    int swingSweepBonus = swingIsSwept ? 1 : 0
+                    int swingWeight = math.min(swingBaseWeight + swingVolumeBonus + swingSweepBonus, 3)
+                    string swingPrefix = isHighSwing ? "H" : "L"
+                    string swingSweepLabel = swingIsSwept ? " SW" : ""
+                    LineStyleMode swingLineStyle = swingIsBroken ? brokenLevelStyle : swingIsSwept ? sweptLevelStyle : unbrokenLevelStyle
+                    color swingLineColor = swingIsBroken ? brokenLevelColor : swingIsSwept ? sweptLevelColor : unbrokenLevelColor
+                    string swingLabel = swingPrefix + str.tostring(value = swingSequence) + swingStructureLabel + swingSweepLabel
+                    f_drawSwingLevel(lines = renderedLines, labels = renderedLabels, levelPrice = swingPriceVal, labelText = swingLabel, levelColor = swingLineColor, styleMode = swingLineStyle, levelWeight = swingWeight, startBar = swingBarVal)
+                    if isHighSwing
+                        renderedHighCount += 1
+                    else
+                        renderedLowCount += 1

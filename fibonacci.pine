@@ -1,0 +1,216 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Fibonacci - standalone extraction of the Support & Resistance Fibonacci engine
+
+//@version=6
+indicator(title = "Fibonacci", shorttitle = "🌀 Fib", overlay = true, max_lines_count = 100, max_labels_count = 100, calc_bars_count = 5000)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+// Snow Storm
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+// Frost
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧮 SHARED CALCULATIONS
+// Shared helpers and orchestration only.
+// ═════════════════════════════════════════════════════════════════════════════
+bool confirmedBar = barstate.isconfirmed
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🌀 FIBONACCI
+// Builds retracement and extension levels from the latest confirmed impulse leg.
+// Anchors are filtered so weak swings do not constantly reset the map.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_FIB = "🌀 Fibonacci"
+
+int fibStrengthSensitivity = input.int(defval = 5, title = "Strength Sensitivity", minval = 1, maxval = 20, tooltip = "How strong a swing must be before it becomes a Fibonacci anchor. Higher values use more important swing points.", group = GROUP_FIB)
+int fibAtrPeriod = input.int(defval = 10, title = "ATR Period", minval = 1, tooltip = "ATR lookback used to normalize the Fibonacci pivot deviation threshold.", group = GROUP_FIB)
+float fibAtrMultiplier = input.float(defval = 3.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier. Higher values require larger ATR-normalized reversals before a new Fibonacci anchor is confirmed.", group = GROUP_FIB)
+float fibMinLegAtrMultiplier = input.float(defval = 1.5, title = "Minimum Leg ATR", minval = 0.1, step = 0.1, tooltip = "Rejects small swing legs even if they pass the deviation threshold. Higher values keep only cleaner daytrading impulse legs.", group = GROUP_FIB)
+bool fibUseHighAndLow = input.bool(defval = false, title = "Use High And Low", tooltip = "When on, Fibonacci anchors use raw highs and lows. When off, they use close-based pivots for a cleaner structure read.", group = GROUP_FIB)
+
+var array<float> fibLevelPercents = array.from(-100.0, -76.4, -61.8, -50.0, -38.2, -23.6, 0.0, 23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0)
+
+f_fibPercentMove(float referencePrice, float targetPrice) =>
+    math.abs(number = targetPrice - referencePrice) / math.max(math.abs(number = referencePrice), syminfo.mintick) * 100.0
+
+float fibAnchorSourceHigh = fibUseHighAndLow ? high : close
+float fibAnchorSourceLow = fibUseHighAndLow ? low : close
+float fibPivotHighRaw = ta.pivothigh(source = fibAnchorSourceHigh, leftbars = fibStrengthSensitivity, rightbars = fibStrengthSensitivity)
+float fibPivotLowRaw = ta.pivotlow(source = fibAnchorSourceLow, leftbars = fibStrengthSensitivity, rightbars = fibStrengthSensitivity)
+float fibPivotHigh = confirmedBar ? fibPivotHighRaw : na
+float fibPivotLow = confirmedBar ? fibPivotLowRaw : na
+int fibPivotHighBar = not na(fibPivotHigh) ? bar_index - fibStrengthSensitivity : na
+int fibPivotLowBar = not na(fibPivotLow) ? bar_index - fibStrengthSensitivity : na
+float fibAtrValueRaw = ta.atr(length = fibAtrPeriod)
+float fibAtrValue = confirmedBar ? fibAtrValueRaw : na
+float fibDeviationThreshold = fibAtrValue / math.max(math.abs(number = close), syminfo.mintick) * 100.0 * fibAtrMultiplier
+float fibMinMove = fibAtrValue * fibMinLegAtrMultiplier
+
+var float fibPreviousPivotPrice = na
+var int fibPreviousPivotBar = na
+var bool fibPreviousPivotIsHigh = false
+var bool fibHasPreviousPivot = false
+var float fibLastPivotPrice = na
+var int fibLastPivotBar = na
+var bool fibLastPivotIsHigh = false
+var bool fibHasLastPivot = false
+
+if not na(fibPivotHigh)
+    if not fibHasLastPivot
+        fibLastPivotPrice := fibPivotHigh
+        fibLastPivotBar := fibPivotHighBar
+        fibLastPivotIsHigh := true
+        fibHasLastPivot := true
+    else if fibLastPivotIsHigh
+        if fibPivotHigh > fibLastPivotPrice
+            fibLastPivotPrice := fibPivotHigh
+            fibLastPivotBar := fibPivotHighBar
+    else
+        float fibHighPivotDistance = math.abs(number = fibPivotHigh - fibLastPivotPrice)
+        float fibHighPivotPercent = f_fibPercentMove(referencePrice = fibLastPivotPrice, targetPrice = fibPivotHigh)
+        if fibHighPivotDistance >= fibMinMove and fibHighPivotPercent >= fibDeviationThreshold
+            fibPreviousPivotPrice := fibLastPivotPrice
+            fibPreviousPivotBar := fibLastPivotBar
+            fibPreviousPivotIsHigh := fibLastPivotIsHigh
+            fibHasPreviousPivot := true
+            fibLastPivotPrice := fibPivotHigh
+            fibLastPivotBar := fibPivotHighBar
+            fibLastPivotIsHigh := true
+
+if not na(fibPivotLow)
+    if not fibHasLastPivot
+        fibLastPivotPrice := fibPivotLow
+        fibLastPivotBar := fibPivotLowBar
+        fibLastPivotIsHigh := false
+        fibHasLastPivot := true
+    else if not fibLastPivotIsHigh
+        if fibPivotLow < fibLastPivotPrice
+            fibLastPivotPrice := fibPivotLow
+            fibLastPivotBar := fibPivotLowBar
+    else
+        float fibLowPivotDistance = math.abs(number = fibPivotLow - fibLastPivotPrice)
+        float fibLowPivotPercent = f_fibPercentMove(referencePrice = fibLastPivotPrice, targetPrice = fibPivotLow)
+        if fibLowPivotDistance >= fibMinMove and fibLowPivotPercent >= fibDeviationThreshold
+            fibPreviousPivotPrice := fibLastPivotPrice
+            fibPreviousPivotBar := fibLastPivotBar
+            fibPreviousPivotIsHigh := fibLastPivotIsHigh
+            fibHasPreviousPivot := true
+            fibLastPivotPrice := fibPivotLow
+            fibLastPivotBar := fibPivotLowBar
+            fibLastPivotIsHigh := false
+
+bool fibHasAnchors = fibHasPreviousPivot and fibHasLastPivot and fibPreviousPivotIsHigh != fibLastPivotIsHigh
+float fibAnchorHigh = fibHasAnchors ? fibPreviousPivotIsHigh ? fibPreviousPivotPrice : fibLastPivotPrice : na
+float fibAnchorLow = fibHasAnchors ? fibPreviousPivotIsHigh ? fibLastPivotPrice : fibPreviousPivotPrice : na
+bool fibDownSwing = fibHasAnchors ? not fibLastPivotIsHigh : true
+float fibLevelZero = fibHasAnchors ? fibDownSwing ? fibAnchorHigh : fibAnchorLow : na
+float fibLevelHundred = fibHasAnchors ? fibDownSwing ? fibAnchorLow : fibAnchorHigh : na
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 RENDER ENGINE
+// Projects every Fibonacci level to the right of the current bar. Weight drives
+// both the line width and style: key ratios solid, secondary dashed, minor
+// dotted.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_RENDER = "⚙️ Render"
+
+bool renderShowLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each Fibonacci level.", group = GROUP_RENDER)
+int renderLabelSize = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all Fibonacci labels.", group = GROUP_RENDER)
+int renderLabelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
+int renderLabelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
+int renderExtendBars = input.int(defval = 4, title = "Extend Bars (Left)", minval = 0, maxval = 500, tooltip = "How far left from the current bar Fibonacci levels start.", group = GROUP_RENDER)
+// Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
+// the projection input stays at 400 to keep a safe margin from that limit.
+int renderRightBars = input.int(defval = 40, title = "Projection Right Bars", minval = 1, maxval = 400, tooltip = "How far right from the current bar Fibonacci levels project and labels sit.", group = GROUP_RENDER)
+color renderLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Level Color", tooltip = "Line color used by all Fibonacci levels.", group = GROUP_RENDER)
+color renderLabelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by Fibonacci labels.", group = GROUP_RENDER)
+
+// Rendering refreshes once per closed bar to keep the live bar static. The
+// `not hasRenderedFrame` escape covers loading a chart while the market is
+// open: there `islastconfirmedhistory` is true only on the bar *before* the
+// realtime bar (where islast is false), so without it nothing would draw
+// until the current bar closes.
+var bool hasRenderedFrame = false
+bool shouldRefreshRender = barstate.islast and (confirmedBar or barstate.islastconfirmedhistory or not hasRenderedFrame)
+
+f_roundToTick(float rawPrice) =>
+    math.round(number = rawPrice / syminfo.mintick) * syminfo.mintick
+
+// Weight matching uses a tolerance instead of float equality so computed
+// percents cannot miss a tier through floating-point drift.
+var array<float> renderKeyFibPercents = array.from(38.2, 50.0, 61.8, 100.0, 161.8)
+var array<float> renderSecondaryFibPercents = array.from(23.6, 76.4, 123.6, 176.4)
+
+f_fibWeight(float fibPercent) =>
+    int levelWeight = 1
+    for secondaryPercent in renderSecondaryFibPercents
+        if math.abs(number = fibPercent - secondaryPercent) < 0.001
+            levelWeight := 2
+    for keyPercent in renderKeyFibPercents
+        if math.abs(number = fibPercent - keyPercent) < 0.001
+            levelWeight := 3
+    levelWeight
+
+f_levelLineWidth(int levelWeight) =>
+    levelWeight >= 3 ? 3 : levelWeight == 2 ? 2 : 1
+
+f_levelLineStyle(int levelWeight) =>
+    levelWeight >= 3 ? line.style_solid : levelWeight == 2 ? line.style_dashed : line.style_dotted
+
+f_labelY(float levelPrice) =>
+    // Push labels away from price: above resistance levels, below support levels.
+    levelPrice + syminfo.mintick * renderLabelDistanceTicks * (levelPrice >= close ? 1.0 : -1.0)
+
+var array<line> renderedLines = array.new<line>()
+var array<label> renderedLabels = array.new<label>()
+
+// Drawings are created once and then moved in place on every refresh.
+// Color, width, style, and label text never change after creation (inputs and
+// level percents are constant per run), so only coordinates get updated. This
+// avoids delete/recreate churn for all lines and labels on every bar close.
+if shouldRefreshRender and fibHasAnchors
+    hasRenderedFrame := true
+    bool renderNeedsBuild = array.size(id = renderedLines) == 0
+    int renderLeftBar = bar_index - renderExtendBars
+    int renderRightBar = bar_index + renderRightBars
+    int renderLabelBar = renderRightBar + renderLabelHorizontalAdjustBars
+    for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
+        float fibPercent = array.get(id = fibLevelPercents, index = fibIndex)
+        float fibPrice = f_roundToTick(rawPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01)
+        if renderNeedsBuild
+            int fibWeight = f_fibWeight(fibPercent = fibPercent)
+            line newLine = line.new(x1 = renderLeftBar, y1 = fibPrice, x2 = renderRightBar, y2 = fibPrice, xloc = xloc.bar_index, extend = extend.none, color = renderLevelColor, width = f_levelLineWidth(levelWeight = fibWeight), style = f_levelLineStyle(levelWeight = fibWeight))
+            array.push(id = renderedLines, value = newLine)
+            if renderShowLabels
+                string fibLabelText = str.tostring(value = fibPercent, format = "#.##") + "%"
+                label newLabel = label.new(x = renderLabelBar, y = f_labelY(levelPrice = fibPrice), text = fibLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_right)
+                array.push(id = renderedLabels, value = newLabel)
+        else
+            line existingLine = array.get(id = renderedLines, index = fibIndex)
+            line.set_xy1(id = existingLine, x = renderLeftBar, y = fibPrice)
+            line.set_xy2(id = existingLine, x = renderRightBar, y = fibPrice)
+            if renderShowLabels
+                label existingLabel = array.get(id = renderedLabels, index = fibIndex)
+                label.set_xy(id = existingLabel, x = renderLabelBar, y = f_labelY(levelPrice = fibPrice))

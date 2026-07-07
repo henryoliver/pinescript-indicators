@@ -1,10 +1,5 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// MACD & Waves — Top Dog Trading momentum waves (Barry Burns)
-// MOM = MACD line (5/20 EMA), DAD = signal line (30 EMA). Each momentum wave is timed by
-// the cycle indicator (Stochastic 5,2,3); MOM supplies the level. Trend & wave count come
-// from HH/HL (up) vs LL/LH (down) on the registered MOM extremes — not from MACD pivots,
-// zero crosses, or the signal line angle.
 
 //@version=6
 indicator(title = "MACD & Waves", shorttitle = "📉 MACD&W", max_labels_count = 500)
@@ -35,16 +30,16 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Shared trend colors — consumed by both the MACD signal line and the wave labels.
-const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
-const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
-
 // ═════════════════════════════════════════════════════════════════════════════
 // 📈 MACD
-// MOM/DAD engine: MACD line, signal line, histogram, and their plot colors.
-// Signal line color reads the slope (visual only — never used for wave counting).
+// MOM/DAD engine: MACD line, signal line, and their plot colors.
+// Signal line color reads the slope (visual only).
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_MACD = "📈 MACD"
+
+// Signal-line slope colors (same pair as ma-waves' trend colors).
+const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
 macdSource = input.source(defval = close, title = "Source", group = GROUP_MACD)
 macdFastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = GROUP_MACD)
@@ -57,117 +52,209 @@ macdSignalMAType = input.string(defval = "EMA", title = "Signal MA Type", option
 f_ma(float maSource, int maLength, simple string maType) =>
     maType == "EMA" ? ta.ema(source = maSource, length = maLength) : ta.sma(source = maSource, length = maLength)
 
-float macd = f_ma(macdSource, macdFastLength, macdOscMAType) - f_ma(macdSource, macdSlowLength, macdOscMAType)
-float signal = f_ma(macd, macdSignalLength, macdSignalMAType)
-float hist = macd - signal
+float macd = f_ma(maSource = macdSource, maLength = macdFastLength, maType = macdOscMAType) - f_ma(maSource = macdSource, maLength = macdSlowLength, maType = macdOscMAType)
+float signal = f_ma(maSource = macd, maLength = macdSignalLength, maType = macdSignalMAType)
 
-color histColor = hist >= 0 ?
-     (hist > hist[1] ? NORD9 : color.new(color = NORD9, transp = 60)) :
-     (hist > hist[1] ? color.new(color = NORD10, transp = 60) : NORD10)
 color signalColor = signal > signal[1] ? TREND_UP_COLOR : TREND_DOWN_COLOR
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 WAVES
-// Momentum wave counting. MOM high = highest MACD value while %D holds the
-// cycle-high zone (≥ upper band, held through the mid-band); MOM low = lowest
-// MACD while %D holds the cycle-low zone. A wave registers when %D crosses
-// through the band to the opposite zone. Trend is read off the registered
-// extremes: HH → up impulse, HL → up retrace, LL → down impulse, LH → down
-// retrace. The count resets to 1 when an impulse flips the structure; the
-// newest wave is provisional until the next swing confirms it.
+// Cycle engine (same as stochastic/ma-waves): %D 5/2/3 against the 45/55 band.
+// Crossing above 45 starts a high half-cycle, crossing below 55 starts a low
+// half-cycle (plus the band-skip variants). Each half-cycle tracks its extreme
+// MACD value live and exports it, plus its wave number, for the wave labels
+// rendered at the end of this section.
+// Half-cycles partition time at extreme bars, not at %D crosses: a boundary
+// bar still belongs to the ended half-cycle (it can print its deepest MACD),
+// and the new half-cycle seeds from every bar since the ended extreme — the
+// %D cross lags the MACD turn by a varying number of bars, and any of them
+// may hold the new extreme.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_WAVES = "🌊 Waves"
 
-showWaveCount = input.bool(defval = true, title = "Show Wave Count", group = GROUP_WAVES)
-cycleKLength = input.int(defval = 5, title = "Cycle %K Length", minval = 1, group = GROUP_WAVES,
-     tooltip = "Stochastic %K length. Barry's cycle indicator uses 5.")
-cycleKSmoothing = input.int(defval = 2, title = "Cycle %K Smoothing", minval = 1, group = GROUP_WAVES)
-cycleDSmoothing = input.int(defval = 3, title = "Cycle %D Smoothing", minval = 1, group = GROUP_WAVES)
-cycleBandHalfWidth = input.float(defval = 5, title = "Cycle Band (± around 50)", minval = 0, maxval = 25, group = GROUP_WAVES,
-     tooltip = "Barry's 45/55 band = 5. A wave registers when %D crosses through the band to the opposite zone. Set 0 for a single 50 line; widen to reduce whipsaw.")
+// Cycle band (same as ma-waves): %D above 55 = high zone, below 45 = low zone.
+const float CYCLE_LOW_BOUNDARY = 45.0
+const float CYCLE_HIGH_BOUNDARY = 55.0
+// Longest boundary-seed scan back to the ended cycle's extreme bar.
+const int CYCLE_SEED_MAX_LOOKBACK = 200
+
+// Boundary seeding indexes MACD history with a runtime offset — declare the
+// buffer so the auto-sized one (measured on the short early cycles) never
+// overflows on a later, longer half-cycle.
+max_bars_back(macd, CYCLE_SEED_MAX_LOOKBACK)
+
+cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_WAVES)
+cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_WAVES)
+cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_WAVES)
+waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color", group = GROUP_WAVES)
+waveDownColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Down Trend Wave Color", group = GROUP_WAVES)
+waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40, group = GROUP_WAVES)
 
 float cycleD = ta.sma(source = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing), length = cycleDSmoothing)
-float cycleUpperBand = 50 + cycleBandHalfWidth
-float cycleLowerBand = 50 - cycleBandHalfWidth
+bool crossedAbove45 = ta.crossover(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
+bool crossedAbove55 = ta.crossover(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
+bool crossedBelow55 = ta.crossunder(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
+bool crossedBelow45 = ta.crossunder(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
 
-var int cycleZone = 0        // 1 = cycle-high zone, -1 = cycle-low zone, 0 = unseeded
-var int waveTrend = 0        // 1 = up (HH/HL), -1 = down (LL/LH)
-var int waveNumber = 0
-var float waveRunMax = na    // running MOM max during the current high zone
-var int waveRunMaxBar = na
-var float waveRunMin = na    // running MOM min during the current low zone
-var int waveRunMinBar = na
-var float waveLastHigh = na  // last registered MOM high
-var float waveLastLow = na   // last registered MOM low
+var int cycleZone = 0  // 1 = high half-cycle, -1 = low half-cycle, 0 = unseeded
+bool startedHighCycle = crossedAbove45 or (crossedAbove55 and cycleZone == -1)
+bool startedLowCycle = crossedBelow55 or (crossedBelow45 and cycleZone == 1)
+bool cycleStartedThisBar = startedHighCycle or startedLowCycle
 
-// Helper function to draw a wave count label at a registered MOM extreme.
-f_drawWave(int waveBar, float waveValue, int waveIndex, bool isHigh, color waveTextColor) =>
-    if showWaveCount
-        label.new(x = waveBar, y = waveValue, text = str.tostring(waveIndex),
-             style = isHigh ? label.style_label_down : label.style_label_up,
-             color = color.new(color = color.gray, transp = 100),
-             textcolor = waveTextColor, size = 14)
+// Exported for the wave count and labels below: the open half-cycle's extreme
+// MACD value and its bar, plus the just-ended half-cycle's final extreme (na
+// unless a new half-cycle started this bar).
+var float cycleExtreme = na
+var int cycleExtremeBar = na
+float endedCycleExtreme = na
+int endedCycleExtremeBar = na
 
-// The engine runs on every realtime tick so the count moves intrabar. Pine's
-// rollback keeps it honest: var state and intrabar-created labels revert on
-// each update, so intrabar registrations stay provisional until the bar's
-// closing tick commits them.
+// Track the open half-cycle's extreme. This runs before boundary handling on
+// purpose: a boundary bar still belongs to the just-ended half-cycle — the
+// MACD line can print the cycle's deepest value on the very bar whose close
+// lifts %D through the band. Ties stay at the oldest bar (strict >/<).
+if (cycleZone == 1 and macd > cycleExtreme) or (cycleZone == -1 and macd < cycleExtreme)
+    cycleExtreme := macd
+    cycleExtremeBar := bar_index
 
-// Zone with hysteresis: %D must reach a band edge to claim a zone and holds it
-// through the mid-band. The MOM extreme is tracked across the whole zone hold.
-int cycleNewZone = cycleD >= cycleUpperBand ? 1 : cycleD <= cycleLowerBand ? -1 : cycleZone
+if cycleStartedThisBar
+    endedCycleExtreme := cycleExtreme
+    endedCycleExtremeBar := cycleExtremeBar
+    cycleZone := startedHighCycle ? 1 : -1
+    // Seed from every bar since the ended cycle's extreme (that bar included,
+    // so one bar can anchor both sides) — the %D cross lags the MACD turn by
+    // a varying number of bars, and any of them may already hold the new
+    // cycle's extreme. Ties resolve to the oldest bar (>=/<=), matching the
+    // strict in-cycle tie rule above.
+    int cycleSeedLookback = na(endedCycleExtremeBar) ? 1 : math.min(bar_index - endedCycleExtremeBar, CYCLE_SEED_MAX_LOOKBACK)
+    float cycleSeedExtreme = macd
+    int cycleSeedOffset = 0
+    if cycleSeedLookback > 0
+        for barOffset = 1 to cycleSeedLookback
+            float seedCandidate = macd[barOffset]
+            if startedHighCycle ? seedCandidate >= cycleSeedExtreme : seedCandidate <= cycleSeedExtreme
+                cycleSeedExtreme := seedCandidate
+                cycleSeedOffset := barOffset
+    cycleExtreme := cycleSeedExtreme
+    cycleExtremeBar := bar_index - cycleSeedOffset
 
-if cycleNewZone == 1 and (na(waveRunMax) or macd > waveRunMax)
-    waveRunMax := macd
-    waveRunMaxBar := bar_index
-if cycleNewZone == -1 and (na(waveRunMin) or macd < waveRunMin)
-    waveRunMin := macd
-    waveRunMinBar := bar_index
+// Wave count: each confirmed extreme is classified against the previous
+// same-side extreme (higher high/low = bullish, lower/equal = bearish).
+// Extremes agreeing with the running trend keep counting up; a contra-trend
+// extreme flips the trend and restarts the count with canonical parity —
+// wave 1 impulse, wave 2 retrace, always. A breaker on the new trend's
+// impulse side (LL breaking up, HH breaking down) becomes 1; a breaker on the
+// retrace side (LH / HL) becomes 2 and the previous extreme is re-labeled 1
+// (the retro flag exported here drives that in the label rendering below).
+// The open half-cycle's
+// number is recomputed live from its provisional extreme, so a still-extending
+// extreme corrects its own number — and the retro re-label — intrabar.
+var int waveTrend = 0  // 1 = up (HH/HL), -1 = down (LL/LH), 0 = unseeded
+var int waveCount = 0
+var float lastHighExtreme = na
+var float lastLowExtreme = na
 
-// The high zone completes when %D crosses through the band to the low zone —
-// register the MOM high.
-if cycleZone == 1 and cycleNewZone == -1 and not na(waveRunMax)
-    if not na(waveLastHigh)
-        if waveRunMax > waveLastHigh
-            // Higher High — up impulse. Resets the count to 1 on a structure flip.
-            waveNumber := waveTrend == 1 ? waveNumber + 1 : 1
-            waveTrend := 1
-            f_drawWave(waveRunMaxBar, waveRunMax, waveNumber, true, TREND_UP_COLOR)
-        else if waveTrend == -1
-            // Lower High — down retrace, counted only while the trend is down.
-            waveNumber += 1
-            f_drawWave(waveRunMaxBar, waveRunMax, waveNumber, true, TREND_DOWN_COLOR)
-    waveLastHigh := waveRunMax
-    waveRunMax := na
+// Helper function returning an extreme's wave number, whether it breaks the
+// trend as the new trend's first retrace (which re-labels the previous extreme
+// as wave 1), and the trend direction the wave belongs to (drives label color).
+// Impulse-side breakers restart at 1 themselves; unclassifiable extremes just
+// keep counting under the running trend.
+f_waveNumber(float extremeValue, float sameSideExtreme, bool isHighExtreme, int trendDirection, int confirmedCount) =>
+    bool classifiable = not na(sameSideExtreme)
+    int newDirection = classifiable ? extremeValue > sameSideExtreme ? 1 : -1 : trendDirection
+    bool breaksTrend = classifiable and newDirection != trendDirection
+    bool breaksAsRetrace = breaksTrend and isHighExtreme == (newDirection == -1)
+    int waveNumber = breaksTrend ? breaksAsRetrace ? 2 : 1 : confirmedCount + 1
+    [waveNumber, breaksAsRetrace, newDirection]
 
-// The low zone completes when %D crosses through the band to the high zone —
-// register the MOM low.
-if cycleZone == -1 and cycleNewZone == 1 and not na(waveRunMin)
-    if not na(waveLastLow)
-        if waveRunMin < waveLastLow
-            // Lower Low — down impulse. Resets the count to 1 on a structure flip.
-            waveNumber := waveTrend == -1 ? waveNumber + 1 : 1
-            waveTrend := -1
-            f_drawWave(waveRunMinBar, waveRunMin, waveNumber, false, TREND_DOWN_COLOR)
-        else if waveTrend == 1
-            // Higher Low — up retrace, counted only while the trend is up.
-            waveNumber += 1
-            f_drawWave(waveRunMinBar, waveRunMin, waveNumber, false, TREND_UP_COLOR)
-    waveLastLow := waveRunMin
-    waveRunMin := na
+int endedWaveNumber = na
+bool endedWaveRetro = false
+int endedWaveTrend = 0
+if cycleStartedThisBar and not na(endedCycleExtreme)
+    bool endedIsHighExtreme = startedLowCycle  // the ended half-cycle is the new one's opposite
+    float sameSideExtreme = endedIsHighExtreme ? lastHighExtreme : lastLowExtreme
+    [confirmedWaveNumber, confirmedWaveRetro, confirmedWaveTrend] = f_waveNumber(extremeValue = endedCycleExtreme, sameSideExtreme = sameSideExtreme, isHighExtreme = endedIsHighExtreme, trendDirection = waveTrend, confirmedCount = waveCount)
+    endedWaveNumber := confirmedWaveNumber
+    endedWaveRetro := confirmedWaveRetro
+    endedWaveTrend := confirmedWaveTrend
+    waveCount := confirmedWaveNumber
+    waveTrend := confirmedWaveTrend
+    if endedIsHighExtreme
+        lastHighExtreme := endedCycleExtreme
+    else
+        lastLowExtreme := endedCycleExtreme
 
-cycleZone := cycleNewZone
+[liveWaveNumber, liveWaveRetro, liveWaveTrend] = f_waveNumber(extremeValue = cycleExtreme, sameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme, isHighExtreme = cycleZone == 1, trendDirection = waveTrend, confirmedCount = waveCount)
+// Impulse waves (extreme side matches the wave's trend) only plot when their
+// half-cycle ends on the %D cross; retrace waves plot live on the MACD turn.
+bool liveWaveIsRetrace = cycleZone != liveWaveTrend
+
+// Helper function returning the label color for a wave's trend direction.
+f_waveTrendColor(int trendDirection) =>
+    trendDirection == -1 ? waveDownColor : waveUpColor
+
+// Helper function to create the cycle label on first use or move it afterwards.
+// High-cycle labels sit above the extreme, low-cycle labels below it.
+f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, string labelText, color labelTextColor, bool isHighCycle) =>
+    label updatedLabel = existingLabel
+    if na(updatedLabel)
+        updatedLabel := label.new(x = labelBarIndex, y = labelPrice, text = labelText,
+             style = isHighCycle ? label.style_label_down : label.style_label_up,
+             color = color.new(color = color.gray, transp = 100), textcolor = labelTextColor, size = waveLabelSize)
+    else
+        label.set_xy(id = updatedLabel, x = labelBarIndex, y = labelPrice)
+        label.set_text(id = updatedLabel, text = labelText)
+        label.set_textcolor(id = updatedLabel, textcolor = labelTextColor)
+    updatedLabel
+
+// Cycle label — the wave number at the half-cycle's extreme MACD value, colored
+// by the wave's trend. Retrace waves draw live once the MACD line has turned
+// away from the extreme (the extreme bar is no longer the live bar); impulse
+// waves wait for their half-cycle to end on the %D cross. When a half-cycle
+// ends, its label is pinned (or backfilled) at the final extreme. Pine's
+// rollback keeps intrabar draws provisional until the bar's closing tick.
+color liveWaveColor = f_waveTrendColor(trendDirection = liveWaveTrend)
+var label cycleExtremeLabel = na
+var label prevWaveLabel = na
+var int prevWaveNumber = na
+var color prevWaveColor = na
+if cycleStartedThisBar
+    if not na(endedCycleExtreme)
+        color endedWaveColor = f_waveTrendColor(trendDirection = endedWaveTrend)
+        if endedWaveRetro and not na(prevWaveLabel)
+            // Retrace-side breaker: the previous extreme becomes the new trend's impulse.
+            label.set_text(id = prevWaveLabel, text = "1")
+            label.set_textcolor(id = prevWaveLabel, textcolor = endedWaveColor)
+        cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
+             labelBarIndex = endedCycleExtremeBar, labelPrice = endedCycleExtreme,
+             labelText = str.tostring(endedWaveNumber),
+             labelTextColor = endedWaveColor, isHighCycle = cycleZone == -1)
+        prevWaveLabel := cycleExtremeLabel
+        prevWaveNumber := endedWaveNumber
+        prevWaveColor := endedWaveColor
+    cycleExtremeLabel := na  // the next label belongs to the new half-cycle
+bool liveLabelDrawn = not na(cycleExtreme) and cycleExtremeBar != bar_index and liveWaveIsRetrace
+if liveLabelDrawn
+    cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
+         labelBarIndex = cycleExtremeBar, labelPrice = cycleExtreme,
+         labelText = str.tostring(liveWaveNumber),
+         labelTextColor = liveWaveColor, isHighCycle = cycleZone == 1)
+else if not na(cycleExtremeLabel)
+    // The open wave flipped to impulse — its label waits for the %D cross.
+    label.delete(id = cycleExtremeLabel)
+    cycleExtremeLabel := na
+// While the live extreme provisionally breaks the trend as a retrace, the last
+// pinned label previews wave 1 of the new trend; it reverts otherwise.
+if not na(prevWaveLabel)
+    bool previewRetro = liveLabelDrawn and liveWaveRetro
+    label.set_text(id = prevWaveLabel, text = previewRetro ? "1" : str.tostring(prevWaveNumber))
+    label.set_textcolor(id = prevWaveLabel, textcolor = previewRetro ? liveWaveColor : prevWaveColor)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS
-// Final plot, hline, and alert statements only — all series and colors are
-// computed in their owning sections above.
+// Final plot and hline statements only — all series and colors are computed
+// in their owning sections above.
 // ═════════════════════════════════════════════════════════════════════════════
-hline(price = 0, title = "Zero Line", color = color.new(color = NORD3, transp = 50), linestyle = hline.style_dashed)
-plot(series = hist, title = "Histogram", color = histColor, style = plot.style_columns, display = display.none)
+hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed)
 plot(series = macd, title = "MACD", color = NORD3, linewidth = 2)
 plot(series = signal, title = "Signal", color = signalColor, linewidth = 4)
-plot(series = cycleD, title = "Cycle %D", color = NORD9, display = display.data_window)
-
-alertcondition(condition = hist[1] >= 0 and hist < 0, title = "Rising to falling", message = "MACD histogram switched from a rising to falling state")
-alertcondition(condition = hist[1] <= 0 and hist > 0, title = "Falling to rising", message = "MACD histogram switched from a falling to rising state")
