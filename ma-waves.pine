@@ -160,7 +160,8 @@ max_bars_back(close, CYCLE_SEED_MAX_LOOKBACK)
 int trendDirState = trendDir == TrendDir.UP ? 1 : trendDir == TrendDir.DOWN ? -1 : 0
 max_bars_back(trendDirState, CYCLE_SEED_MAX_LOOKBACK)
 
-float cycleD = ta.sma(source = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing), length = cycleDSmoothing)
+float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing)
+float cycleD = ta.sma(source = cycleK, length = cycleDSmoothing)
 bool crossedAbove45 = ta.crossover(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
 bool crossedAbove55 = ta.crossover(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
 bool crossedBelow55 = ta.crossunder(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
@@ -242,10 +243,12 @@ if cycleStartedThisBar
         cycleExtremeTrendDir := trendDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
              trendDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
 
-// Half-cycle turn: the live dot only shows once %D has angled away from the
-// zone's extreme — down in a high half-cycle, up in a low half-cycle. The flag
-// is sticky for the rest of the half-cycle and resets when a new one starts.
-bool cycleTurnedThisBar = cycleZone == 1 ? cycleD < cycleD[1] : cycleZone == -1 ? cycleD > cycleD[1] : false
+// Half-cycle turn: the live label only shows once %K has angled away from the
+// zone's extreme — down in a high half-cycle, up in a low half-cycle. %K is
+// the entry-hook line and turns ahead of %D, so the live label leads the
+// %D-lagged cross that ends the half-cycle. The flag is sticky for the rest
+// of the half-cycle and resets when a new one starts.
+bool cycleTurnedThisBar = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
 var bool cycleHasTurned = false
 cycleHasTurned := (not cycleStartedThisBar and cycleHasTurned) or cycleTurnedThisBar
 
@@ -279,8 +282,10 @@ cycleHasTurned := (not cycleStartedThisBar and cycleHasTurned) or cycleTurnedThi
 // Retrace zone (between confirmed impulses): every cycle consumes a letter in
 // order, and every non-owner cycle shows its letter (Barry: letters mark
 // cycles). Letters restart after every wave point — confirmed AND failed. A
-// lone "a" is meaningless, so it only plots once the very next cycle confirms
-// its "b"; a failed wave, confirmed impulse, or trend reset drops it instead.
+// lone "a" is meaningless, so it only plots once the very next cycle shows its
+// "b" — live: the "a" previews as soon as the live bare-letter "b" draws, and
+// pins with the "b"; a failed wave, confirmed impulse, or trend reset drops it
+// (and its preview) instead.
 // The most extreme completed retrace owns the even number, stacked with its
 // letter once the zone is complex (2+ retraces, live included) and the letter
 // is confirmed — the letter on the candle side, the number at the outer edge. Ownership is provisional — a deeper retrace takes the number
@@ -304,8 +309,9 @@ var int waveZoneBestLetterIndex = -1       // the owner's letter (stacked under 
 var bool waveZoneOwnerAConfirmed = true    // an owner "a" displays only after its "b" confirms
 var bool waveZoneOwnerAPending = false     // owner "a" awaiting the very next cycle's verdict
 
-// A lone letter-"a" pin is held here until the very next cycle pins its "b";
-// a failed wave, confirmed impulse, or trend reset drops it instead.
+// A lone letter-"a" pin is held here until the very next cycle shows its "b"
+// (previewed live, made permanent on the pin); a failed wave, confirmed
+// impulse, or trend reset drops it instead.
 var float wavePendingAPrice = na
 var int wavePendingABar = na
 var bool wavePendingAIsHighSide = false
@@ -570,6 +576,7 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
 // impulse pins are final).
 var label waveNumberLabel = na
 var label waveZoneOwnerLabel = na
+var label wavePendingALabel = na  // the held "a", drawn provisionally while the live "b" shows
 if cycleStartedThisBar
     if waveEndedOwnerDelete and not na(waveZoneOwnerLabel)
         label.delete(id = waveZoneOwnerLabel)  // an owner "a" that never earned its "b"
@@ -587,15 +594,31 @@ if cycleStartedThisBar
     if waveOwnerClear
         waveZoneOwnerLabel := na  // zone closed or structure reset — the label stays, the ref is dropped
     if not na(wavePendingAReleasePrice)
-        // The held "a" earned its "b" — draw it retroactively at its extreme.
-        label releasedALabel = f_upsertWaveLabel(existingLabel = label(na), labelBarIndex = wavePendingAReleaseBar,
+        // The held "a" earned its "b" — make its preview permanent (or draw it
+        // retroactively if the live "b" never showed). Dropping the ref keeps
+        // the preview block below from deleting it.
+        label releasedALabel = f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingAReleaseBar,
              labelPrice = wavePendingAReleasePrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAReleaseIsHighSide)
+        wavePendingALabel := na
 if cycleHasTurned and waveLiveLabelText != "" and not na(cycleExtreme)
     waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
          labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
 else if not na(waveNumberLabel)
     label.delete(id = waveNumberLabel)
     waveNumberLabel := na
+// Held-"a" preview: a lone "a" is meaningless, but once the very next cycle's
+// live bare-letter "b" is drawing, the "a" has meaning — show it now instead
+// of waiting for the %D cross to pin the "b". Provisional like every live
+// label: it deletes if the open cycle upgrades to a number or failed wave
+// (the boundary then drops the held "a" for good).
+bool wavePendingAPreviewed = not na(wavePendingAPrice) and cycleHasTurned and not na(cycleExtreme) and
+     waveCycleLetterIndex >= 0 and waveLiveLabelText == f_waveLetterAt(letterIndex = waveCycleLetterIndex)
+if wavePendingAPreviewed
+    wavePendingALabel := f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingABar,
+         labelPrice = wavePendingAPrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAIsHighSide)
+else if not na(wavePendingALabel)
+    label.delete(id = wavePendingALabel)
+    wavePendingALabel := na
 // Empty owner text is applied too — it blanks an unconfirmed-"a" owner while
 // a live retrace is provisionally deeper (its number is being previewed there).
 if not na(waveZoneOwnerLabel) and waveOwnerHasZone
