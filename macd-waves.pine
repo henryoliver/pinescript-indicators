@@ -41,12 +41,18 @@ const string GROUP_MACD = "📈 MACD"
 const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-macdSource = input.source(defval = close, title = "Source", group = GROUP_MACD)
-macdFastLength = input.int(defval = 5, title = "Fast Length", minval = 1, group = GROUP_MACD)
-macdSlowLength = input.int(defval = 20, title = "Slow Length", minval = 1, group = GROUP_MACD)
-macdSignalLength = input.int(defval = 30, title = "Signal Length", minval = 1, group = GROUP_MACD)
-macdOscMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["EMA", "SMA"], group = GROUP_MACD, display = display.none)
-macdSignalMAType = input.string(defval = "EMA", title = "Signal MA Type", options = ["EMA", "SMA"], group = GROUP_MACD, display = display.none)
+macdSource = input.source(defval = close, title = "Source",
+     tooltip = "Series the MACD is calculated on.", group = GROUP_MACD)
+macdFastLength = input.int(defval = 5, title = "Fast Length", minval = 1,
+     tooltip = "Fast MA length. Defaults are Barry's momentum settings: 5/20/30.", group = GROUP_MACD)
+macdSlowLength = input.int(defval = 20, title = "Slow Length", minval = 1,
+     tooltip = "Slow MA length. The MACD (MOM) line is the fast MA minus the slow MA.", group = GROUP_MACD)
+macdSignalLength = input.int(defval = 30, title = "Signal Length", minval = 1,
+     tooltip = "Smoothing length of the signal (DAD) line over the MACD (MOM) line.", group = GROUP_MACD)
+macdOscMAType = input.string(defval = "EMA", title = "Oscillator MA Type", options = ["EMA", "SMA"],
+     tooltip = "MA type used for the fast and slow averages behind the MACD line.", group = GROUP_MACD, display = display.none)
+macdSignalMAType = input.string(defval = "EMA", title = "Signal MA Type", options = ["EMA", "SMA"],
+     tooltip = "MA type used for the signal line.", group = GROUP_MACD, display = display.none)
 
 // Helper function to calculate an EMA or SMA of a source series.
 f_ma(float maSource, int maLength, simple string maType) =>
@@ -61,34 +67,36 @@ color signalColor = signal > signal[1] ? TREND_UP_COLOR : TREND_DOWN_COLOR
 // 🌊 WAVES
 // Cycle engine (same as stochastic/ma-waves): %D 5/2/3 against the 45/55 band.
 // Crossing above 45 starts a high half-cycle, crossing below 55 starts a low
-// half-cycle (plus the band-skip variants). Each half-cycle tracks its extreme
-// MACD value live and exports it, plus its wave number, for the wave labels
-// rendered at the end of this section.
-// Half-cycles partition time at extreme bars, not at %D crosses: a boundary
-// bar still belongs to the ended half-cycle (it can print its deepest MACD),
-// and the new half-cycle seeds from every bar since the ended extreme — the
-// %D cross lags the MACD turn by a varying number of bars, and any of them
-// may hold the new extreme.
+// half-cycle (plus the band-skip variants). Every half-cycle is a MOM wave
+// (Barry: "every cycle on the cycle indicator is considered a MOM wave" —
+// numbers only, never letters), so boundaries are pure %D events: never
+// delayed, never skipped. Every wave plots INSIDE its own half-cycle zone:
+// each bar belongs to the window matching its own %D state, so the crossing
+// bar is the new half-cycle's first (seed) bar and the ended cycle's extreme
+// freezes on the bar before it — the extreme search never reaches across a
+// boundary in either direction, which is also why two waves can never share
+// a bar. Each half-cycle tracks its extreme MACD value live and exports it,
+// plus its wave number, for the wave labels rendered at the end of this
+// section.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_WAVES = "🌊 Waves"
 
 // Cycle band (same as ma-waves): %D above 55 = high zone, below 45 = low zone.
 const float CYCLE_LOW_BOUNDARY = 45.0
 const float CYCLE_HIGH_BOUNDARY = 55.0
-// Longest boundary-seed scan back to the ended cycle's extreme bar.
-const int CYCLE_SEED_MAX_LOOKBACK = 200
 
-// Boundary seeding indexes MACD history with a runtime offset — declare the
-// buffer so the auto-sized one (measured on the short early cycles) never
-// overflows on a later, longer half-cycle.
-max_bars_back(macd, CYCLE_SEED_MAX_LOOKBACK)
-
-cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_WAVES)
-cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_WAVES)
-cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_WAVES)
-waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color", group = GROUP_WAVES)
-waveDownColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Down Trend Wave Color", group = GROUP_WAVES)
-waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40, group = GROUP_WAVES)
+cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1,
+     tooltip = "Stochastic %K lookback. Defaults are Barry's cycle settings: 5/2/3.", group = GROUP_WAVES)
+cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1,
+     tooltip = "SMA smoothing applied to %K.", group = GROUP_WAVES)
+cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1,
+     tooltip = "SMA smoothing producing %D — the cycle line whose 45/55 crossings open and close the half-cycle wave windows.", group = GROUP_WAVES)
+waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color",
+     tooltip = "Label color for waves counted under an up MOM trend (matches ma-waves' wave colors).", group = GROUP_WAVES)
+waveDownColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Down Trend Wave Color",
+     tooltip = "Label color for waves counted under a down MOM trend.", group = GROUP_WAVES)
+waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40,
+     tooltip = "Text size of the wave number labels.", group = GROUP_WAVES)
 
 float cycleD = ta.sma(source = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing), length = cycleDSmoothing)
 bool crossedAbove45 = ta.crossover(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
@@ -109,11 +117,11 @@ var int cycleExtremeBar = na
 float endedCycleExtreme = na
 int endedCycleExtremeBar = na
 
-// Track the open half-cycle's extreme. This runs before boundary handling on
-// purpose: a boundary bar still belongs to the just-ended half-cycle — the
-// MACD line can print the cycle's deepest value on the very bar whose close
-// lifts %D through the band. Ties stay at the oldest bar (strict >/<).
-if (cycleZone == 1 and macd > cycleExtreme) or (cycleZone == -1 and macd < cycleExtreme)
+// Track the open half-cycle's extreme. Skipped on boundary bars: the crossing
+// bar's %D already reads the other zone, so it belongs to the NEW half-cycle
+// — it becomes that cycle's seed below, never the ended cycle's extreme.
+// Ties stay at the oldest bar (strict >/<).
+if not cycleStartedThisBar and ((cycleZone == 1 and macd > cycleExtreme) or (cycleZone == -1 and macd < cycleExtreme))
     cycleExtreme := macd
     cycleExtremeBar := bar_index
 
@@ -121,22 +129,11 @@ if cycleStartedThisBar
     endedCycleExtreme := cycleExtreme
     endedCycleExtremeBar := cycleExtremeBar
     cycleZone := startedHighCycle ? 1 : -1
-    // Seed from every bar since the ended cycle's extreme (that bar included,
-    // so one bar can anchor both sides) — the %D cross lags the MACD turn by
-    // a varying number of bars, and any of them may already hold the new
-    // cycle's extreme. Ties resolve to the oldest bar (>=/<=), matching the
-    // strict in-cycle tie rule above.
-    int cycleSeedLookback = na(endedCycleExtremeBar) ? 1 : math.min(bar_index - endedCycleExtremeBar, CYCLE_SEED_MAX_LOOKBACK)
-    float cycleSeedExtreme = macd
-    int cycleSeedOffset = 0
-    if cycleSeedLookback > 0
-        for barOffset = 1 to cycleSeedLookback
-            float seedCandidate = macd[barOffset]
-            if startedHighCycle ? seedCandidate >= cycleSeedExtreme : seedCandidate <= cycleSeedExtreme
-                cycleSeedExtreme := seedCandidate
-                cycleSeedOffset := barOffset
-    cycleExtreme := cycleSeedExtreme
-    cycleExtremeBar := bar_index - cycleSeedOffset
+    // Seed the new half-cycle from its first bar — every wave plots inside
+    // its own %D window, so the extreme search never reaches back across the
+    // boundary.
+    cycleExtreme := macd
+    cycleExtremeBar := bar_index
 
 // Wave count: each confirmed extreme is classified against the previous
 // same-side extreme (higher high/low = bullish, lower/equal = bearish).

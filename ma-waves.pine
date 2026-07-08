@@ -133,10 +133,13 @@ color trendColor = switch trendDir
 // price live (highest high / lowest low) plus the extreme bar's open/close and
 // trend state (wave qualification and classification are judged on that bar),
 // and exports them with the just-ended half-cycle's final values and the turn
-// flag, for the WAVES and PLOT layers. Half-cycles partition time at extreme
-// bars, not at %D crosses: a boundary bar still belongs to the ended
-// half-cycle (it can print its deepest extreme), and the new half-cycle seeds
-// from the bars since the ended extreme — the %D cross lags the price turn
+// flag, for the WAVES and PLOT layers. Each bar belongs to the half-cycle
+// matching its own %D state (Barry's window rule), so the boundary bar is the
+// NEW half-cycle's first bar: the ended cycle's extreme freezes on the bar
+// before the cross, and a wave can never pin on a bar of the next half-cycle
+// — a stop-run wick on the crossing bar seeds the new cycle instead of
+// handing the ended cycle a phantom extreme. The new half-cycle still seeds
+// from every bar since the ended extreme — the %D cross lags the price turn
 // by a varying number of bars, and any of them may hold the new extreme.
 // One wave point per bar: a bar that anchored a half-cycle's extreme is
 // consumed, so consecutive wave points (1 then 2, 2 then 3, a then b) never
@@ -185,19 +188,13 @@ float endedCycleExtremeOpen = na
 float endedCycleExtremeClose = na
 TrendDir endedCycleExtremeTrendDir = TrendDir.FLAT
 
-// Track the open half-cycle's extreme. This runs before boundary handling on
-// purpose: a boundary bar still belongs to the just-ended half-cycle — a
-// hammer can print the cycle's deepest low on the very bar whose close lifts
-// %D through the band. Ties go to the most recent bar (>=/<=), so an equal
-// high/low moves the dot forward. An unseeded cycle (its would-be seed bar
-// was consumed by the previous wave point) adopts the first bar that comes.
-if cycleZone != 0 and na(cycleExtreme)
-    cycleExtreme := cycleZone == 1 ? high : low
-    cycleExtremeBar := bar_index
-    cycleExtremeOpen := open
-    cycleExtremeClose := close
-    cycleExtremeTrendDir := trendDir
-else if (cycleZone == 1 and high >= cycleExtreme) or (cycleZone == -1 and low <= cycleExtreme)
+// Track the open half-cycle's extreme. Skipped on boundary bars: the crossing
+// bar's %D already reads the other zone, so the bar belongs to the NEW
+// half-cycle and must never move the ended cycle's extreme — it enters
+// through the new cycle's seed scan below instead. Ties go to the most
+// recent bar (>=/<=), so an equal high/low moves the dot forward.
+if cycleZone != 0 and not cycleStartedThisBar and
+     ((cycleZone == 1 and high >= cycleExtreme) or (cycleZone == -1 and low <= cycleExtreme))
     cycleExtreme := cycleZone == 1 ? high : low
     cycleExtremeBar := bar_index
     cycleExtremeOpen := open
@@ -211,37 +208,28 @@ if cycleStartedThisBar
     endedCycleExtremeClose := cycleExtremeClose
     endedCycleExtremeTrendDir := cycleExtremeTrendDir
     cycleZone := startedHighCycle ? 1 : -1
-    // Seed the new half-cycle. The ended extreme bar is consumed — one wave
-    // point per bar, so consecutive points (1 then 2, 2 then 3, a then b)
-    // never share a bar — and the scan stops one bar short of it. When the
-    // ended extreme IS this boundary bar (fold-in), nothing is eligible yet:
-    // the cycle starts unseeded and the tracker adopts the next bar.
-    if not na(endedCycleExtremeBar) and endedCycleExtremeBar == bar_index
-        cycleExtreme := na
-        cycleExtremeBar := na
-        cycleExtremeOpen := na
-        cycleExtremeClose := na
-        cycleExtremeTrendDir := TrendDir.FLAT
-    else
-        // Scan every eligible bar since the ended extreme — the %D cross lags
-        // the price turn by a varying number of bars, and any of them may
-        // already hold the new cycle's extreme. Ties keep the most recent
-        // bar, like the tracker.
-        int cycleSeedLookback = na(endedCycleExtremeBar) ? 1 : math.min(bar_index - endedCycleExtremeBar - 1, CYCLE_SEED_MAX_LOOKBACK)
-        float cycleSeedExtreme = startedHighCycle ? high : low
-        int cycleSeedOffset = 0
-        if cycleSeedLookback > 0
-            for barOffset = 1 to cycleSeedLookback
-                float seedCandidate = startedHighCycle ? high[barOffset] : low[barOffset]
-                if startedHighCycle ? seedCandidate > cycleSeedExtreme : seedCandidate < cycleSeedExtreme
-                    cycleSeedExtreme := seedCandidate
-                    cycleSeedOffset := barOffset
-        cycleExtreme := cycleSeedExtreme
-        cycleExtremeBar := bar_index - cycleSeedOffset
-        cycleExtremeOpen := open[cycleSeedOffset]
-        cycleExtremeClose := close[cycleSeedOffset]
-        cycleExtremeTrendDir := trendDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
-             trendDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
+    // Seed the new half-cycle: scan every eligible bar since the ended
+    // extreme — the %D cross lags the price turn by a varying number of bars,
+    // and any of them may already hold the new cycle's extreme — plus this
+    // boundary bar itself (offset 0), the new cycle's first bar. The ended
+    // extreme bar is consumed — one wave point per bar, so consecutive points
+    // (1 then 2, 2 then 3, a then b) never share a bar — and the scan stops
+    // one bar short of it. Ties keep the most recent bar, like the tracker.
+    int cycleSeedLookback = na(endedCycleExtremeBar) ? 1 : math.min(bar_index - endedCycleExtremeBar - 1, CYCLE_SEED_MAX_LOOKBACK)
+    float cycleSeedExtreme = startedHighCycle ? high : low
+    int cycleSeedOffset = 0
+    if cycleSeedLookback > 0
+        for barOffset = 1 to cycleSeedLookback
+            float seedCandidate = startedHighCycle ? high[barOffset] : low[barOffset]
+            if startedHighCycle ? seedCandidate > cycleSeedExtreme : seedCandidate < cycleSeedExtreme
+                cycleSeedExtreme := seedCandidate
+                cycleSeedOffset := barOffset
+    cycleExtreme := cycleSeedExtreme
+    cycleExtremeBar := bar_index - cycleSeedOffset
+    cycleExtremeOpen := open[cycleSeedOffset]
+    cycleExtremeClose := close[cycleSeedOffset]
+    cycleExtremeTrendDir := trendDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
+         trendDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
 
 // Half-cycle turn: the live label only shows once %K has angled away from the
 // zone's extreme — down in a high half-cycle, up in a low half-cycle. %K is
@@ -275,9 +263,11 @@ cycleHasTurned := (not cycleStartedThisBar and cycleHasTurned) or cycleTurnedThi
 // past the last CONFIRMED wave extreme — never a failed wave's or a letter
 // cycle's — with the open allowed to touch it and the close required to clear
 // it. An extreme beyond the baseline without that body commit is a failed
-// wave ("F" + number): it pins, but advances nothing. Wave 1 auto-qualifies.
-// Confirmed impulses move the baseline, advance the count by 2, and close the
-// retrace zone.
+// wave ("F" + number, always bare — a cycle is a failed wave OR a lettered
+// retrace cycle, never both; corpus F3s pin inside open zones): it pins,
+// advances nothing, and restarts the letters AND the zone's complexity
+// count. Wave 1 auto-qualifies. Confirmed impulses move the baseline,
+// advance the count by 2, and close the retrace zone.
 //
 // Retrace zone (between confirmed impulses): every cycle consumes a letter in
 // order, and every non-owner cycle shows its letter (Barry: letters mark
@@ -414,10 +404,17 @@ if cycleStartedThisBar
                 waveZoneBestLetterIndex := -1
                 waveOwnerClear := true
             else if endedWickBeyond
-                // Failed wave — wick passed the baseline, no real body did. Advances
-                // nothing, but the letters restart after it just like after a real wave.
+                // Failed wave — wick passed the baseline, no real body did. It
+                // pins bare and advances nothing: a cycle is a failed wave OR
+                // a lettered retrace cycle, never both (corpus F3s pin inside
+                // open zones; F labels always print bare). The letters and the
+                // zone's complexity count restart after it just like after a
+                // real wave. Ownership survives: the even number is still the
+                // extreme between the confirmed impulses ("the 8 goes over
+                // here because it's still looking for a full 9").
                 waveEndedLabelText := "F" + str.tostring(value = waveNextImpulseNumber)
                 waveZoneNextLetterIndex := 0
+                waveZoneRetraceCount := 0
             else if waveCycleLetterIndex >= 0
                 // No break at all — just a lettered cycle inside the open zone.
                 waveEndedLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
@@ -503,6 +500,7 @@ if waveCycleIsImpulseSide and not waveLivePreviewsReset and not na(waveLastImpul
 // failed wave upgrades to its full number in place if a deeper extreme bar
 // commits the body — and downgrades back if a wick-only bar takes the extreme.
 string waveLiveLabelText = ""
+bool waveLiveShowsLetter = false  // the live label is the cycle's bare letter
 if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT
     int waveLiveImpulseNumber = waveLivePreviewsReset ? 1 : waveNextImpulseNumber
     if waveCycleIsImpulseSide
@@ -512,6 +510,7 @@ if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT
             waveLiveLabelText := "F" + str.tostring(value = waveLiveImpulseNumber)
         else if waveCycleLetterIndex >= 0
             waveLiveLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
+            waveLiveShowsLetter := true
     else if not waveLivePreviewsReset and waveNextImpulseNumber > 1
         bool liveTakesOwnership = na(waveZoneBestExtreme) or
              (waveTrendDir == TrendDir.UP ? cycleExtreme < waveZoneBestExtreme : cycleExtreme > waveZoneBestExtreme)
@@ -521,6 +520,7 @@ if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT
             waveLiveLabelText := f_waveRetraceText(retraceNumber = waveNextImpulseNumber - 1, letterIndex = waveCycleLetterIndex == 0 ? -1 : waveCycleLetterIndex, zoneIsComplex = zoneIsComplexLive, isHighSide = waveTrendDir == TrendDir.DOWN)
         else if zoneIsComplexLive and waveCycleLetterIndex >= 1
             waveLiveLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
+            waveLiveShowsLetter := true
 
 // ── Authoritative owner text, recomputed every bar: while a live retrace is
 // provisionally deeper than the owner, the owner previews its letter; it
@@ -572,54 +572,60 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
 // Wave label — live once the half-cycle turns, pinned (or dropped) on the %D
 // cross. The retrace-number owner's label ref is kept so a deeper retrace or
 // a trend reset can downgrade it to its letter, and the authoritative owner
-// text is re-applied every bar (provisional-retrace repaint semantics;
-// impulse pins are final).
+// text is re-applied every confirmed bar (provisional-retrace repaint
+// semantics; impulse pins are final).
 var label waveNumberLabel = na
 var label waveZoneOwnerLabel = na
 var label wavePendingALabel = na  // the held "a", drawn provisionally while the live "b" shows
-if cycleStartedThisBar
-    if waveEndedOwnerDelete and not na(waveZoneOwnerLabel)
-        label.delete(id = waveZoneOwnerLabel)  // an owner "a" that never earned its "b"
-        waveZoneOwnerLabel := na
-    if waveEndedOwnerDowngradeText != "" and not na(waveZoneOwnerLabel)
-        label.set_text(id = waveZoneOwnerLabel, text = waveEndedOwnerDowngradeText)
-    if waveEndedLabelText != ""
-        waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = endedCycleExtremeBar,
-             labelPrice = endedCycleExtreme, labelText = waveEndedLabelText, labelTextColor = waveLabelColor, isHighSide = startedLowCycle)
-        if waveEndedBecomesOwner
-            waveZoneOwnerLabel := waveNumberLabel
+// Close-only gate (same as macd-waves): an intrabar %D cross or %K turn can
+// recede before the close, so touching labels on live ticks flashes pins,
+// owner downgrades, and previews that then vanish. Every label mutation waits
+// for the bar's confirming tick, where the extreme tracking and boundary
+// state above have already seen the bar's final values. Wave STATE is
+// untouched — it still updates every tick and rolls back.
+if barstate.isconfirmed
+    if cycleStartedThisBar
+        if waveEndedOwnerDelete and not na(waveZoneOwnerLabel)
+            label.delete(id = waveZoneOwnerLabel)  // an owner "a" that never earned its "b"
+            waveZoneOwnerLabel := na
+        if waveEndedOwnerDowngradeText != "" and not na(waveZoneOwnerLabel)
+            label.set_text(id = waveZoneOwnerLabel, text = waveEndedOwnerDowngradeText)
+        if waveEndedLabelText != ""
+            waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = endedCycleExtremeBar,
+                 labelPrice = endedCycleExtreme, labelText = waveEndedLabelText, labelTextColor = waveLabelColor, isHighSide = startedLowCycle)
+            if waveEndedBecomesOwner
+                waveZoneOwnerLabel := waveNumberLabel
+        else if not na(waveNumberLabel)
+            label.delete(id = waveNumberLabel)  // the ended cycle earned no pin (unqualified or trend reset)
+        waveNumberLabel := na  // the next label belongs to the new half-cycle
+        if waveOwnerClear
+            waveZoneOwnerLabel := na  // zone closed or structure reset — the label stays, the ref is dropped
+        if not na(wavePendingAReleasePrice)
+            // The held "a" earned its "b" — make its preview permanent (or draw it
+            // retroactively if the live "b" never showed). Dropping the ref keeps
+            // the preview block below from deleting it.
+            label releasedALabel = f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingAReleaseBar,
+                 labelPrice = wavePendingAReleasePrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAReleaseIsHighSide)
+            wavePendingALabel := na
+    if cycleHasTurned and waveLiveLabelText != "" and not na(cycleExtreme)
+        waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
+             labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
     else if not na(waveNumberLabel)
-        label.delete(id = waveNumberLabel)  // the ended cycle earned no pin (unqualified or trend reset)
-    waveNumberLabel := na  // the next label belongs to the new half-cycle
-    if waveOwnerClear
-        waveZoneOwnerLabel := na  // zone closed or structure reset — the label stays, the ref is dropped
-    if not na(wavePendingAReleasePrice)
-        // The held "a" earned its "b" — make its preview permanent (or draw it
-        // retroactively if the live "b" never showed). Dropping the ref keeps
-        // the preview block below from deleting it.
-        label releasedALabel = f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingAReleaseBar,
-             labelPrice = wavePendingAReleasePrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAReleaseIsHighSide)
+        label.delete(id = waveNumberLabel)
+        waveNumberLabel := na
+    // Held-"a" preview: a lone "a" is meaningless, but once the very next cycle's
+    // live bare-letter "b" is drawing, the "a" has meaning — show it now instead
+    // of waiting for the %D cross to pin the "b". Provisional like every live
+    // label: it deletes if the open cycle upgrades to a number or failed wave
+    // (the boundary then drops the held "a" for good).
+    bool wavePendingAPreviewed = not na(wavePendingAPrice) and cycleHasTurned and not na(cycleExtreme) and waveLiveShowsLetter
+    if wavePendingAPreviewed
+        wavePendingALabel := f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingABar,
+             labelPrice = wavePendingAPrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAIsHighSide)
+    else if not na(wavePendingALabel)
+        label.delete(id = wavePendingALabel)
         wavePendingALabel := na
-if cycleHasTurned and waveLiveLabelText != "" and not na(cycleExtreme)
-    waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
-         labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
-else if not na(waveNumberLabel)
-    label.delete(id = waveNumberLabel)
-    waveNumberLabel := na
-// Held-"a" preview: a lone "a" is meaningless, but once the very next cycle's
-// live bare-letter "b" is drawing, the "a" has meaning — show it now instead
-// of waiting for the %D cross to pin the "b". Provisional like every live
-// label: it deletes if the open cycle upgrades to a number or failed wave
-// (the boundary then drops the held "a" for good).
-bool wavePendingAPreviewed = not na(wavePendingAPrice) and cycleHasTurned and not na(cycleExtreme) and
-     waveCycleLetterIndex >= 0 and waveLiveLabelText == f_waveLetterAt(letterIndex = waveCycleLetterIndex)
-if wavePendingAPreviewed
-    wavePendingALabel := f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingABar,
-         labelPrice = wavePendingAPrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAIsHighSide)
-else if not na(wavePendingALabel)
-    label.delete(id = wavePendingALabel)
-    wavePendingALabel := na
-// Empty owner text is applied too — it blanks an unconfirmed-"a" owner while
-// a live retrace is provisionally deeper (its number is being previewed there).
-if not na(waveZoneOwnerLabel) and waveOwnerHasZone
-    label.set_text(id = waveZoneOwnerLabel, text = waveOwnerText)
+    // Empty owner text is applied too — it blanks an unconfirmed-"a" owner while
+    // a live retrace is provisionally deeper (its number is being previewed there).
+    if not na(waveZoneOwnerLabel) and waveOwnerHasZone
+        label.set_text(id = waveZoneOwnerLabel, text = waveOwnerText)
