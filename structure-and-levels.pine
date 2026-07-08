@@ -2,7 +2,14 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Structure & Levels", shorttitle = "🏗️ S&L", overlay = true, max_lines_count = 500, calc_bars_count = 5000)
+// calc_bars_count must be large enough that a 1-minute chart still spans the
+// long-term lookback: request.security can only fetch HTF data covering the
+// chart's own loaded time range, so a short chart history silently truncates
+// the long-term S/R map and makes it shift with the chart timeframe. 20000
+// one-minute RTH bars ≈ 51 trading days — comfortably past the 22-day default.
+// max_lines_count worst case: 2 intraday levels + 1 trend line + 1 zero line +
+// 12 long-term levels (6 per side cap) ≈ 16 lines; 50 leaves ample headroom.
+indicator(title = "Structure & Levels", shorttitle = "🏗️ S&L", overlay = true, max_lines_count = 50, calc_bars_count = 20000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -44,6 +51,10 @@ enum LongTermColorMode
     AUTO_ZERO_AWARE  = "Auto Zero-Aware"
     FORCE_ZERO_AWARE = "Force Zero-Aware"
 
+enum PivotSource
+    HIGH_LOW = "High/Low (candles)"
+    CLOSE    = "Close (line-on-close)"
+
 type TrendSegment
     int x1
     float y1
@@ -68,8 +79,12 @@ type KeyLevel
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ⚙️ GENERAL
-// Shared chart data, session state, and render orchestration state live here.
+// Shared inputs, chart data, session state, and render helpers live here.
 // ═══════════════════════════════════════════════════════════════════════════════
+const string GROUP_GENERAL = "⚙️ General"
+
+PivotSource pivotSource = input.enum(defval = PivotSource.CLOSE, title = "Pivot Source", tooltip = "Price points used to detect pivots for intraday S/R, trend lines, and long-term S/R. Defaults to Close — the source methodology reads the Advance/Decline Line as a line-on-close chart; switch to High/Low for candlestick charts such as the Up/Down Volume Index or price.", group = GROUP_GENERAL)
+
 float chartClose = close
 float chartHigh = high
 float chartLow = low
@@ -85,6 +100,11 @@ chartScaleMin := na(chartScaleMin) ? chartLow : math.min(chartScaleMin, chartLow
 chartScaleMax := na(chartScaleMax) ? chartHigh : math.max(chartScaleMax, chartHigh)
 bool zeroWithinChartScale = not na(chartScaleMin) and not na(chartScaleMax) and chartScaleMin <= 0 and chartScaleMax >= 0
 
+// Pivot source honors the General setting: Close for line-on-close charts
+// (Advance/Decline Line), High/Low for candlestick charts (VOLD, price).
+float pivotHighSource = pivotSource == PivotSource.CLOSE ? chartClose : chartHigh
+float pivotLowSource  = pivotSource == PivotSource.CLOSE ? chartClose : chartLow
+
 var int sessionStartBarIndex = na
 var int latestRegularSessionDayKey = na
 var array<line> renderedLines = array.new<line>()
@@ -95,6 +115,9 @@ f_clearLines(array<line> lines) =>
         for lineIndex = 0 to lineCount - 1
             line.delete(id = array.get(id = lines, index = lineIndex))
     array.clear(id = lines)
+
+f_resolveLineStyle(LineStyle styleInput) =>
+    styleInput == LineStyle.SOLID ? line.style_solid : styleInput == LineStyle.DASHED ? line.style_dashed : line.style_dotted
 
 bool inRegularSession = session.ismarket
 int regularSessionDayKey = year * 10000 + month * 100 + dayofmonth
@@ -107,38 +130,54 @@ if isNewTrackedSession
     sessionStartBarIndex := bar_index
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 🗺️ LONG-TERM S/R
-// Higher-timeframe pivot clustering builds the repeated support/resistance map.
+// ➖ ZERO LINE
+// Optional zero baseline for symbols whose price scale contains zero, such as
+// breadth or cumulative-volume studies. Reads the shared chart-scale export
+// from General to decide whether zero belongs on this chart at all.
 // ═══════════════════════════════════════════════════════════════════════════════
-const string GROUP_GENERAL = "⚙️ General"
+const string GROUP_ZERO_LINE = "➖ Zero Line"
+
+bool showZeroLine = input.bool(defval = true, title = "Show Zero Line", tooltip = "Draws a zero baseline for symbols that oscillate above and below zero, such as cumulative or breadth-style studies. Only ever draws when zero is inside the symbol's own price scale, so it is harmless on ordinary price charts. The source methodology's first read of the day is the index moving above or below 0 at the open.", group = GROUP_ZERO_LINE)
+color zeroLineColor = input.color(defval = NORD3, title = "Zero Line Color", tooltip = "Color used for the optional zero baseline.", group = GROUP_ZERO_LINE)
+int zeroLineWidth = input.int(defval = 2, title = "Zero Line Width", minval = 1, maxval = 4, tooltip = "Line width for the optional zero baseline.", group = GROUP_ZERO_LINE)
+LineStyle zeroLineStyleInput = input.enum(defval = LineStyle.SOLID, title = "Zero Line Style", tooltip = "Style used for the optional zero baseline.", group = GROUP_ZERO_LINE)
+
+// Zero baseline is independent of Long-Term S/R: it draws for ANY symbol whose
+// scale contains zero (breadth, cumulative volume), and never forces zero onto a
+// pure price chart where it would distort the scale.
+f_renderZeroLine(array<line> lines, color lineColor, int lineWidth, LineStyle styleInput) =>
+    string resolvedZeroLineStyle = f_resolveLineStyle(styleInput = styleInput)
+    line zeroLine = line.new(x1 = bar_index - 1, y1 = 0.0, x2 = bar_index, y2 = 0.0, xloc = xloc.bar_index, extend = extend.both, color = lineColor, width = lineWidth, style = resolvedZeroLineStyle)
+    array.push(id = lines, value = zeroLine)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🗺️ LONG-TERM S/R
+// Higher-timeframe pivot clustering builds the strength-ranked support/resistance map.
+// ═══════════════════════════════════════════════════════════════════════════════
 const string GROUP_LONG_TERM = "🗺️ Long-Term Support/Resistance"
 const int LONG_TERM_MAX_BARS = 1200
 const int LONG_TERM_PIVOT_STRENGTH = 5
 // Assumes US equities regular trading hours (09:30–16:00 ET); symbols with a
 // different session length scale the bars-per-day estimate proportionally.
 const int REGULAR_SESSION_MINUTES = 390
+const int LONG_TERM_MIN_LINE_WIDTH = 2
+const int LONG_TERM_MAX_LINE_WIDTH = 4
 const color LONG_TERM_STRUCTURE_COLOR = color.new(color = NORD3, transp = 60)
 
-bool showLongTermZeroLine = input.bool(defval = false, title = "Show Zero Line", tooltip = "Draws a zero baseline for symbols that oscillate above and below zero, such as cumulative or breadth-style studies.", group = GROUP_GENERAL)
-color longTermZeroLineColor = input.color(defval = NORD3, title = "Zero Line Color", tooltip = "Color used for the optional zero baseline.", group = GROUP_GENERAL)
-int longTermZeroLineWidth = input.int(defval = 2, title = "Zero Line Width", minval = 1, maxval = 4, tooltip = "Line width for the optional zero baseline.", group = GROUP_GENERAL)
-LineStyle longTermZeroLineStyleInput = input.enum(defval = LineStyle.SOLID, title = "Zero Line Style", tooltip = "Style used for the optional zero baseline.", group = GROUP_GENERAL)
-
-bool showLongTermStructure = input.bool(defval = true, title = "Show Long-Term S/R", tooltip = "Draws repeated-pivot support/resistance zones from the current chart symbol using a higher timeframe lookback.", group = GROUP_LONG_TERM)
+bool showLongTermStructure = input.bool(defval = true, title = "Show Long-Term S/R", tooltip = "Draws strength-ranked pivot-cluster support/resistance levels from the current chart symbol using a higher timeframe lookback. Repeated pivot clusters rank above single touches and draw with thicker lines.", group = GROUP_LONG_TERM)
 string longTermTimeframe = input.timeframe(defval = "15", title = "Structure Timeframe", tooltip = "Higher timeframe used to build repeated pivot clusters for long-term support and resistance.", group = GROUP_LONG_TERM)
 int longTermLookbackDays = input.int(defval = 22, title = "Lookback (Trading Days)", minval = 10, maxval = 90, tooltip = "How many trading days of higher-timeframe pivots are scanned for repeated levels.", group = GROUP_LONG_TERM)
-int longTermLevelsPerSide = input.int(defval = 4, title = "Levels Above/Below Price", minval = 1, maxval = 6, tooltip = "Maximum long-term levels to keep visible above and below the current price.", group = GROUP_LONG_TERM)
+int longTermLevelsPerSide = input.int(defval = 4, title = "Levels Above/Below", minval = 1, maxval = 6, tooltip = "Exact number of long-term levels drawn per side, strongest first — repeated pivot clusters outrank single touches. Line width is ranked PER SIDE among the drawn levels only, anchored at the top: each side's strongest level always draws at width 4 and the rest rank down toward width 2, so a side with a single line draws at full width. Fewer only draw when the lookback simply has no more pivots on that side. On ordinary symbols the sides split around the current price. In zero-aware mode (breadth/volume indexes) they split around ZERO — the source methodology draws levels above the 0 line and below it.", group = GROUP_LONG_TERM)
 LongTermColorMode longTermColorMode = input.enum(defval = LongTermColorMode.AUTO_ZERO_AWARE, title = "Line Color Mode", tooltip = "Default keeps the existing neutral color. Auto Zero-Aware switches to blue above zero and red below zero only when the symbol trades on both sides of zero. Force Zero-Aware applies that split coloring regardless.", group = GROUP_LONG_TERM)
 
 if showLongTermStructure and timeframe.in_seconds() > timeframe.in_seconds(timeframe = longTermTimeframe)
     runtime.error(message = "Structure & Levels: chart timeframe is above the Long-Term S/R structure timeframe (" + longTermTimeframe + "). Raise the Structure Timeframe or disable Long-Term S/R.")
 
-f_longTermLookbackBars(string structureTimeframe, int tradingDays) =>
+f_longTermBarsPerDay(string structureTimeframe) =>
     int tfSeconds = timeframe.in_seconds(timeframe = structureTimeframe)
-    int barsPerDay = tfSeconds < 86400 ? math.max(1, math.ceil(number = REGULAR_SESSION_MINUTES / math.max(tfSeconds / 60.0, 1.0))) : 1
-    math.min(LONG_TERM_MAX_BARS, barsPerDay * tradingDays)
+    tfSeconds < 86400 ? math.max(1, math.ceil(number = REGULAR_SESSION_MINUTES / math.max(tfSeconds / 60.0, 1.0))) : 1
 
-f_selectRepeatedKeyLevels(array<LongTermPivotCandidate> candidates, series float tolerance) =>
+f_selectKeyLevelsByStrength(array<LongTermPivotCandidate> candidates, series float tolerance) =>
     array<LongTermCluster> clusters = array.new<LongTermCluster>()
     int candidateCount = array.size(id = candidates)
     if candidateCount > 0
@@ -171,87 +210,118 @@ f_selectRepeatedKeyLevels(array<LongTermPivotCandidate> candidates, series float
                 array.set(id = clusters, index = innerIndex + 1, value = array.get(id = clusters, index = innerIndex))
                 innerIndex -= 1
             array.set(id = clusters, index = innerIndex + 1, value = sortCluster)
+    // Every cluster qualifies, single touches included — the list is already
+    // strength-sorted, so repeated clusters still outrank singles and the render
+    // pass can always fill the exact per-side level budget when pivots exist.
     array<KeyLevel> selectedLevels = array.new<KeyLevel>()
     if sortedClusterCount > 0
         for selectedIndex = 0 to sortedClusterCount - 1
             LongTermCluster cluster = array.get(id = clusters, index = selectedIndex)
-            if cluster.count >= 2
-                array.push(id = selectedLevels, value = KeyLevel.new(price = cluster.price, strength = cluster.count))
+            array.push(id = selectedLevels, value = KeyLevel.new(price = cluster.price, strength = cluster.count))
     selectedLevels
 
-f_lineWidthFromStrength(int strength) =>
-    strength >= 5 ? 4 : strength >= 4 ? 3 : strength >= 3 ? 2 : 1
-
-f_longTermIsZeroAware(LongTermColorMode colorMode, float windowHigh, float windowLow) =>
-    colorMode == LongTermColorMode.FORCE_ZERO_AWARE or (colorMode == LongTermColorMode.AUTO_ZERO_AWARE and not na(windowHigh) and not na(windowLow) and windowHigh > 0 and windowLow < 0)
-
-f_longTermLevelColor(bool zeroAwareMode, float levelPrice) =>
-    zeroAwareMode ? color.new(color = levelPrice >= 0 ? NORD8 : NORD11, transp = 80) : LONG_TERM_STRUCTURE_COLOR
-
-f_renderLongTermStructure(array<line> lines, array<KeyLevel> keyLevels, int levelsPerSide, float referencePrice, bool zeroAwareMode, float zeroLevelExclusionDistance) =>
-    int renderedAboveCount = 0
-    int renderedBelowCount = 0
+// Picks the levels that will actually draw on one side of the reference price:
+// the key-level list is already strength-sorted, so the first N eligible levels
+// on the requested side are that side's strongest.
+f_selectLongTermSideLevels(array<KeyLevel> keyLevels, int levelsPerSide, float referencePrice, bool zeroAwareMode, float zeroLevelExclusionDistance, bool selectAbove) =>
+    array<KeyLevel> sideLevels = array.new<KeyLevel>()
     int keyLevelCount = array.size(id = keyLevels)
     if keyLevelCount > 0
         for keyLevelIndex = 0 to keyLevelCount - 1
             KeyLevel keyLevel = array.get(id = keyLevels, index = keyLevelIndex)
             bool isTooCloseToZero = zeroAwareMode and math.abs(number = keyLevel.price) <= zeroLevelExclusionDistance
-            if keyLevel.price >= referencePrice and renderedAboveCount < levelsPerSide and not isTooCloseToZero
-                int aboveWidth = f_lineWidthFromStrength(strength = keyLevel.strength)
-                color aboveColor = f_longTermLevelColor(zeroAwareMode = zeroAwareMode, levelPrice = keyLevel.price)
-                line aboveLine = line.new(x1 = bar_index - 1, y1 = keyLevel.price, x2 = bar_index, y2 = keyLevel.price, xloc = xloc.bar_index, extend = extend.both, color = aboveColor, width = aboveWidth, style = line.style_solid)
-                array.push(id = lines, value = aboveLine)
-                renderedAboveCount += 1
-            if keyLevel.price < referencePrice and renderedBelowCount < levelsPerSide and not isTooCloseToZero
-                int belowWidth = f_lineWidthFromStrength(strength = keyLevel.strength)
-                color belowColor = f_longTermLevelColor(zeroAwareMode = zeroAwareMode, levelPrice = keyLevel.price)
-                line belowLine = line.new(x1 = bar_index - 1, y1 = keyLevel.price, x2 = bar_index, y2 = keyLevel.price, xloc = xloc.bar_index, extend = extend.both, color = belowColor, width = belowWidth, style = line.style_solid)
-                array.push(id = lines, value = belowLine)
-                renderedBelowCount += 1
+            bool onRequestedSide = selectAbove ? keyLevel.price >= referencePrice : keyLevel.price < referencePrice
+            if onRequestedSide and not isTooCloseToZero and array.size(id = sideLevels) < levelsPerSide
+                array.push(id = sideLevels, value = keyLevel)
+    sideLevels
 
-int longTermLookbackBars = f_longTermLookbackBars(structureTimeframe = longTermTimeframe, tradingDays = longTermLookbackDays)
+// Auto mode keys off the chart symbol's own running scale (already tracked for
+// the zero line) instead of the HTF request's window extremes — the request
+// fields carried a multi-hundred-bar warmup that made zero detection, and the
+// whole candidate pipeline, dependent on the chart timeframe's loaded span.
+f_longTermIsZeroAware(LongTermColorMode colorMode, bool zeroInScale) =>
+    colorMode == LongTermColorMode.FORCE_ZERO_AWARE or (colorMode == LongTermColorMode.AUTO_ZERO_AWARE and zeroInScale)
+
+f_longTermLevelColor(bool zeroAwareMode, float levelPrice) =>
+    zeroAwareMode ? color.new(color = levelPrice >= 0 ? NORD8 : NORD11, transp = 80) : LONG_TERM_STRUCTURE_COLOR
+
+// Width is RELATIVE per side and anchored at the TOP: each side's drawn levels
+// are scored only against each other — above-reference levels form one strength
+// scale, below-reference levels another. The strongest drawn level on a side
+// always gets the maximum width and the rest rank down toward the minimum, so a
+// side with a single line (or all-equal strengths) draws at full width.
+f_renderLongTermSideLevels(array<line> lines, array<KeyLevel> sideLevels, bool zeroAwareMode) =>
+    int sideLevelCount = array.size(id = sideLevels)
+    if sideLevelCount > 0
+        int sideMinStrength = na
+        int sideMaxStrength = na
+        for sideLevel in sideLevels
+            sideMinStrength := na(sideMinStrength) ? sideLevel.strength : math.min(sideMinStrength, sideLevel.strength)
+            sideMaxStrength := na(sideMaxStrength) ? sideLevel.strength : math.max(sideMaxStrength, sideLevel.strength)
+        for sideLevel in sideLevels
+            int sideLevelWidth = LONG_TERM_MAX_LINE_WIDTH
+            if sideMaxStrength > sideMinStrength
+                float sideStrengthRatio = (sideMaxStrength - sideLevel.strength) / float(sideMaxStrength - sideMinStrength)
+                sideLevelWidth := LONG_TERM_MAX_LINE_WIDTH - math.round(number = sideStrengthRatio * (LONG_TERM_MAX_LINE_WIDTH - LONG_TERM_MIN_LINE_WIDTH))
+            color sideLevelColor = f_longTermLevelColor(zeroAwareMode = zeroAwareMode, levelPrice = sideLevel.price)
+            line sideLevelLine = line.new(x1 = bar_index - 1, y1 = sideLevel.price, x2 = bar_index, y2 = sideLevel.price, xloc = xloc.bar_index, extend = extend.both, color = sideLevelColor, width = sideLevelWidth, style = line.style_solid)
+            array.push(id = lines, value = sideLevelLine)
+
+f_renderLongTermStructure(array<line> lines, array<KeyLevel> keyLevels, int levelsPerSide, float referencePrice, bool zeroAwareMode, float zeroLevelExclusionDistance) =>
+    array<KeyLevel> longTermAboveLevels = f_selectLongTermSideLevels(keyLevels = keyLevels, levelsPerSide = levelsPerSide, referencePrice = referencePrice, zeroAwareMode = zeroAwareMode, zeroLevelExclusionDistance = zeroLevelExclusionDistance, selectAbove = true)
+    array<KeyLevel> longTermBelowLevels = f_selectLongTermSideLevels(keyLevels = keyLevels, levelsPerSide = levelsPerSide, referencePrice = referencePrice, zeroAwareMode = zeroAwareMode, zeroLevelExclusionDistance = zeroLevelExclusionDistance, selectAbove = false)
+    f_renderLongTermSideLevels(lines = lines, sideLevels = longTermAboveLevels, zeroAwareMode = zeroAwareMode)
+    f_renderLongTermSideLevels(lines = lines, sideLevels = longTermBelowLevels, zeroAwareMode = zeroAwareMode)
+
+int longTermBarsPerDay = f_longTermBarsPerDay(structureTimeframe = longTermTimeframe)
+int longTermLookbackBars = math.min(LONG_TERM_MAX_BARS, longTermBarsPerDay * longTermLookbackDays)
 bool newLongTermBar = showLongTermStructure ? ta.change(source = time(timeframe = longTermTimeframe)) != 0 : false
 float longTermConfirmedPivotHigh = na
 float longTermConfirmedPivotLow = na
-float longTermWindowHigh = na
-float longTermWindowLow = na
 float longTermClose = na
 var string longTermRegularTicker = ticker.modify(tickerid = syminfo.tickerid, session = session.regular)
-[requestedLongTermConfirmedPivotHigh, requestedLongTermConfirmedPivotLow, requestedLongTermWindowHigh, requestedLongTermWindowLow, requestedLongTermClose] = request.security(
+[requestedLongTermConfirmedPivotHigh, requestedLongTermConfirmedPivotLow, requestedLongTermClose] = request.security(
      symbol = longTermRegularTicker,
      timeframe = longTermTimeframe,
-     expression = [ta.pivothigh(source = high, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), ta.pivotlow(source = low, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), ta.highest(source = high, length = longTermLookbackBars), ta.lowest(source = low, length = longTermLookbackBars), close],
+     expression = [ta.pivothigh(source = pivotSource == PivotSource.CLOSE ? close : high, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), ta.pivotlow(source = pivotSource == PivotSource.CLOSE ? close : low, leftbars = LONG_TERM_PIVOT_STRENGTH, rightbars = LONG_TERM_PIVOT_STRENGTH), close],
      lookahead = barmerge.lookahead_off,
      gaps = barmerge.gaps_off,
      ignore_invalid_symbol = true
  )
 longTermConfirmedPivotHigh := requestedLongTermConfirmedPivotHigh
 longTermConfirmedPivotLow := requestedLongTermConfirmedPivotLow
-longTermWindowHigh := requestedLongTermWindowHigh
-longTermWindowLow := requestedLongTermWindowLow
 longTermClose := requestedLongTermClose
 
 var array<LongTermPivotCandidate> longTermPivotCandidates = array.new<LongTermPivotCandidate>()
+// Snapshot of the candidate set at the last eligible rebuild point (last HTF bar
+// outside the current trading day). Clustering reads this, never the live array,
+// so the rendered map keeps the intraday freeze semantics.
+var array<LongTermPivotCandidate> longTermFrozenCandidates = array.new<LongTermPivotCandidate>()
 var array<KeyLevel> longTermKeyLevels = array.new<KeyLevel>()
 var int longTermHTFBarCount = 0
 var bool longTermKeysDirty = false
+var bool longTermSnapshotDirty = false
 var float longTermClusterTolerance = na
 
 if not showLongTermStructure
     array.clear(id = longTermPivotCandidates)
+    array.clear(id = longTermFrozenCandidates)
     array.clear(id = longTermKeyLevels)
     longTermHTFBarCount := 0
     longTermKeysDirty := false
+    longTermSnapshotDirty := false
     longTermClusterTolerance := na
 
 // Candidates accumulate on every confirmed HTF bar — including the current trading
 // day, so nothing is lost when the chart stays open across a day boundary. Only the
-// key-level rebuild is frozen during the live session; the first eligible HTF bar of
-// the next day rebuilds the map from the complete candidate set. The window-ready
-// guard skips the HTF warmup where ta.highest/ta.lowest are still na and the cluster
-// tolerance would degenerate into a single mega-cluster.
-bool longTermWindowReady = not na(longTermWindowHigh) and not na(longTermWindowLow)
-if showLongTermStructure and newLongTermBar and not na(longTermClose[1]) and longTermWindowReady
+// key-level snapshot is frozen during the live session; the first eligible HTF bar
+// of the next day re-snapshots the complete candidate set. There is
+// deliberately NO warmup gate here: the previous ta.highest(lookback) readiness
+// check silently discarded the first ~lookback HTF bars of whatever span the chart
+// happened to load, which made the level map depend on the chart timeframe. Pivots
+// need only their own 5+5-bar confirmation; cluster tolerance is derived from the
+// candidate set itself at rebuild time.
+if showLongTermStructure and newLongTermBar and not na(longTermClose[1])
     longTermHTFBarCount += 1
     int oldestAllowedPivotBar = math.max(1, longTermHTFBarCount - longTermLookbackBars + 1)
 
@@ -271,15 +341,65 @@ if showLongTermStructure and newLongTermBar and not na(longTermClose[1]) and lon
         else
             break
 
+    // Snapshot instead of rebuild — same trigger the full re-cluster used to run
+    // on, but reduced to one native array copy. The expensive sort/cluster pass is
+    // deferred to the last bar below: every historical rebuild's result was being
+    // overwritten by the next eligible HTF bar, so only the final one matters.
     if longTermKeysDirty and not isCurrentTradingDay
-        if array.size(id = longTermPivotCandidates) > 0
-            float longTermRange = math.max(longTermWindowHigh - longTermWindowLow, syminfo.mintick)
-            longTermClusterTolerance := math.max(syminfo.mintick * 2.0, longTermRange * 0.025)
-            longTermKeyLevels := f_selectRepeatedKeyLevels(candidates = longTermPivotCandidates, tolerance = longTermClusterTolerance)
-        else
-            array.clear(id = longTermKeyLevels)
-            longTermClusterTolerance := na
+        longTermFrozenCandidates := array.copy(id = longTermPivotCandidates)
+        longTermSnapshotDirty := true
         longTermKeysDirty := false
+
+// Lazy key-level rebuild — clustering only matters at render time, so it runs on
+// the rendering bar(s) once per snapshot change instead of once per eligible HTF
+// bar across the whole history.
+if (barstate.islastconfirmedhistory or barstate.islast) and longTermSnapshotDirty
+    if array.size(id = longTermFrozenCandidates) > 0
+        // Tolerance from the candidate set's own range — self-contained, so the
+        // clustering no longer depends on a full-lookback ta.highest warmup.
+        float candidateMin = na
+        float candidateMax = na
+        for frozenCandidate in longTermFrozenCandidates
+            candidateMin := na(candidateMin) ? frozenCandidate.price : math.min(candidateMin, frozenCandidate.price)
+            candidateMax := na(candidateMax) ? frozenCandidate.price : math.max(candidateMax, frozenCandidate.price)
+        float longTermRange = math.max(candidateMax - candidateMin, syminfo.mintick)
+        longTermClusterTolerance := math.max(syminfo.mintick * 2.0, longTermRange * 0.025)
+        longTermKeyLevels := f_selectKeyLevelsByStrength(candidates = longTermFrozenCandidates, tolerance = longTermClusterTolerance)
+    else
+        array.clear(id = longTermKeyLevels)
+        longTermClusterTolerance := na
+    longTermSnapshotDirty := false
+
+// Exported render-prep values — computed here so the render engine only
+// orchestrates and never holds long-term-specific logic.
+bool longTermZeroAwareMode = f_longTermIsZeroAware(colorMode = longTermColorMode, zeroInScale = zeroWithinChartScale)
+// Reuses the tolerance captured at rebuild time so exclusion and clustering are
+// measured against the same window snapshot.
+float longTermZeroLevelExclusionDistance = longTermZeroAwareMode ? nz(source = longTermClusterTolerance) : 0.0
+// Zero-aware symbols (breadth/volume indexes) split the level budget around
+// ZERO, matching "2-3 long-term S/R levels above the 0 line and another 2-3
+// below" — not around the live reading, which would drop the far-polarity map
+// whenever the index runs hard one way. Ordinary symbols keep the price anchor.
+float longTermReferencePrice = longTermZeroAwareMode ? 0.0 : chartClose
+
+var table longTermCoverageTable = table.new(position = position.bottom_left, columns = 1, rows = 1)
+
+// Coverage guard — the long-term map is only as deep as the HTF data the chart's
+// loaded history spans. When the effective coverage falls short of the requested
+// lookback (short chart history, tick chart, or the LONG_TERM_MAX_BARS cap),
+// say so instead of letting the level map silently vary with the chart timeframe.
+f_renderLongTermCoverage(table coverageTable, bool structureVisible, int htfBarCount, int lookbackBars, int barsPerDay, int lookbackDays, string structureTimeframe) =>
+    int coverageEffectiveBars = math.min(htfBarCount, lookbackBars)
+    int coverageCoveredDays = math.floor(number = coverageEffectiveBars / math.max(1, barsPerDay))
+    if structureVisible and coverageCoveredDays < lookbackDays
+        table.cell(table_id = coverageTable, column = 0, row = 0,
+             text = str.format("⚠ Long-term S/R: {0}/{1} trading days of TF-{2} history — extend chart history or raise the structure timeframe", coverageCoveredDays, lookbackDays, structureTimeframe),
+             text_color = color.new(color = NORD12, transp = 0),
+             text_halign = text.align_left,
+             text_size = size.small,
+             bgcolor = color.new(color = NORD0, transp = 30))
+    else
+        table.clear(table_id = coverageTable, start_column = 0, start_row = 0)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 📍 INTRADAY S/R
@@ -290,9 +410,9 @@ const int INTRADAY_MAX_LEVELS = 80
 const int INTRADAY_DEFAULT_LINE_WIDTH = 2
 const color INTRADAY_STRUCTURE_COLOR = NORD3
 
-bool showIntradayStructure = input.bool(defval = true, title = "Show Intraday S/R", tooltip = "Draws intraday support/resistance from confirmed body pivots in the current session.", group = GROUP_INTRADAY_SR)
+bool showIntradayStructure = input.bool(defval = true, title = "Show Intraday S/R", tooltip = "Draws intraday support/resistance from confirmed pivots in the current session. Only the two most important levels render: the nearest confirmed resistance above and the nearest confirmed support below the current reading. All session pivots stay stored, so the displayed pair rotates as price works through the ladder.", group = GROUP_INTRADAY_SR)
 int intradaySRPivotStrength = input.int(defval = 3, title = "Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm an intraday pivot. Higher values reduce noise but react later.", group = GROUP_INTRADAY_SR)
-int intradaySRMaxLevels = input.int(defval = 20, title = "Stored Levels", minval = 5, maxval = INTRADAY_MAX_LEVELS, tooltip = "Maximum confirmed intraday pivots kept in memory before selecting the nearest active support and resistance.", group = GROUP_INTRADAY_SR)
+int intradaySRMaxLevels = input.int(defval = 20, title = "Stored Levels", minval = 5, maxval = INTRADAY_MAX_LEVELS, tooltip = "Maximum confirmed intraday pivots kept per side (highs and lows separately). Only the nearest level per side draws; the rest stay stored so the displayed pair can rotate as price moves. When the cap is hit the oldest pivots drop first.", group = GROUP_INTRADAY_SR)
 int intradaySRForwardBars = input.int(defval = 60, title = "Forward Bars", minval = 1, maxval = 200, tooltip = "Single control for how far each intraday support/resistance line extends forward from its pivot bar. Lines always reach at least the current bar.", group = GROUP_INTRADAY_SR)
 int intradaySRLineWidth = input.int(defval = INTRADAY_DEFAULT_LINE_WIDTH, title = "Line Width", minval = 1, maxval = 4, tooltip = "Line width for the nearest intraday support and resistance levels.", group = GROUP_INTRADAY_SR)
 
@@ -300,54 +420,36 @@ f_trimIntradayLevels(array<IntradayLevel> levels, int maxSize) =>
     while array.size(id = levels) > maxSize
         array.shift(id = levels)
 
-f_selectVisibleIntradayLevels(array<IntradayLevel> levels, float referencePrice, int visiblePerSide, bool isResistance) =>
-    array<IntradayLevel> visibleLevels = array.new<IntradayLevel>()
+// Only the two most important intraday levels draw: the nearest confirmed
+// resistance above and the nearest confirmed support below the current reading.
+// The full pivot ladder stays stored so the displayed pair rotates as price
+// works through it.
+f_nearestIntradayLevel(array<IntradayLevel> levels, int sessionStartBar, float referencePrice, bool searchAbove) =>
+    IntradayLevel nearestLevel = na
     int levelCount = array.size(id = levels)
     if levelCount > 0
         for levelIndex = 0 to levelCount - 1
-            IntradayLevel candidateLevel = array.get(id = levels, index = levelIndex)
-            bool isOnCorrectSide = isResistance ? candidateLevel.price > referencePrice : candidateLevel.price < referencePrice
-            if isOnCorrectSide
-                float candidateDistance = math.abs(number = candidateLevel.price - referencePrice)
-                int insertIndex = array.size(id = visibleLevels)
-                int visibleCount = array.size(id = visibleLevels)
-                if visibleCount > 0
-                    for visibleIndex = 0 to visibleCount - 1
-                        IntradayLevel visibleLevel = array.get(id = visibleLevels, index = visibleIndex)
-                        float visibleDistance = math.abs(number = visibleLevel.price - referencePrice)
-                        if candidateDistance < visibleDistance
-                            insertIndex := visibleIndex
-                            break
-                if insertIndex < visiblePerSide
-                    array.insert(id = visibleLevels, index = insertIndex, value = candidateLevel)
-                    if array.size(id = visibleLevels) > visiblePerSide
-                        array.pop(id = visibleLevels)
-    visibleLevels
+            IntradayLevel intradayLevel = array.get(id = levels, index = levelIndex)
+            bool inSession = intradayLevel.barIndex >= sessionStartBar
+            bool onRequestedSide = searchAbove ? intradayLevel.price >= referencePrice : intradayLevel.price <= referencePrice
+            if inSession and onRequestedSide and (na(nearestLevel) or math.abs(number = intradayLevel.price - referencePrice) < math.abs(number = nearestLevel.price - referencePrice))
+                nearestLevel := intradayLevel
+    nearestLevel
+
+f_renderIntradayLevelLine(array<line> lines, IntradayLevel intradayLevel, int forwardBars, int lineWidth) =>
+    if not na(intradayLevel)
+        int levelEndBar = math.max(intradayLevel.barIndex + forwardBars, bar_index)
+        line levelLine = line.new(x1 = intradayLevel.barIndex, y1 = intradayLevel.price, x2 = levelEndBar, y2 = intradayLevel.price, xloc = xloc.bar_index, extend = extend.none, color = INTRADAY_STRUCTURE_COLOR, width = lineWidth, style = line.style_solid)
+        array.push(id = lines, value = levelLine)
 
 f_renderIntradayStructure(array<line> lines, array<IntradayLevel> resistanceLevels, array<IntradayLevel> supportLevels, int sessionStartBar, int forwardBars, int lineWidth, float referencePrice) =>
-    array<IntradayLevel> visibleResistanceLevels = f_selectVisibleIntradayLevels(levels = resistanceLevels, referencePrice = referencePrice, visiblePerSide = 1, isResistance = true)
-    array<IntradayLevel> visibleSupportLevels = f_selectVisibleIntradayLevels(levels = supportLevels, referencePrice = referencePrice, visiblePerSide = 1, isResistance = false)
+    IntradayLevel nearestResistance = f_nearestIntradayLevel(levels = resistanceLevels, sessionStartBar = sessionStartBar, referencePrice = referencePrice, searchAbove = true)
+    IntradayLevel nearestSupport = f_nearestIntradayLevel(levels = supportLevels, sessionStartBar = sessionStartBar, referencePrice = referencePrice, searchAbove = false)
+    f_renderIntradayLevelLine(lines = lines, intradayLevel = nearestResistance, forwardBars = forwardBars, lineWidth = lineWidth)
+    f_renderIntradayLevelLine(lines = lines, intradayLevel = nearestSupport, forwardBars = forwardBars, lineWidth = lineWidth)
 
-    int resistanceCount = array.size(id = visibleResistanceLevels)
-    if resistanceCount > 0
-        for resistanceIndex = 0 to resistanceCount - 1
-            IntradayLevel resistanceLevel = array.get(id = visibleResistanceLevels, index = resistanceIndex)
-            if resistanceLevel.barIndex >= sessionStartBar
-                int resistanceEndBar = math.max(resistanceLevel.barIndex + forwardBars, bar_index)
-                line resistanceLine = line.new(x1 = resistanceLevel.barIndex, y1 = resistanceLevel.price, x2 = resistanceEndBar, y2 = resistanceLevel.price, xloc = xloc.bar_index, extend = extend.none, color = INTRADAY_STRUCTURE_COLOR, width = lineWidth, style = line.style_solid)
-                array.push(id = lines, value = resistanceLine)
-
-    int supportCount = array.size(id = visibleSupportLevels)
-    if supportCount > 0
-        for supportIndex = 0 to supportCount - 1
-            IntradayLevel supportLevel = array.get(id = visibleSupportLevels, index = supportIndex)
-            if supportLevel.barIndex >= sessionStartBar
-                int supportEndBar = math.max(supportLevel.barIndex + forwardBars, bar_index)
-                line supportLine = line.new(x1 = supportLevel.barIndex, y1 = supportLevel.price, x2 = supportEndBar, y2 = supportLevel.price, xloc = xloc.bar_index, extend = extend.none, color = INTRADAY_STRUCTURE_COLOR, width = lineWidth, style = line.style_solid)
-                array.push(id = lines, value = supportLine)
-
-float intradaySRPivotHigh = showIntradayStructure ? ta.pivothigh(source = chartHigh, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
-float intradaySRPivotLow = showIntradayStructure ? ta.pivotlow(source = chartLow, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
+float intradaySRPivotHigh = showIntradayStructure ? ta.pivothigh(source = pivotHighSource, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
+float intradaySRPivotLow = showIntradayStructure ? ta.pivotlow(source = pivotLowSource, leftbars = intradaySRPivotStrength, rightbars = intradaySRPivotStrength) : na
 int intradaySRPivotHighBar = not na(intradaySRPivotHigh) ? bar_index - intradaySRPivotStrength : na
 int intradaySRPivotLowBar = not na(intradaySRPivotLow) ? bar_index - intradaySRPivotStrength : na
 
@@ -373,21 +475,19 @@ if showIntradayStructure and inRegularSession and isCurrentTradingDay and barsta
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 📐 INTRADAY TREND LINES
-// Confirmed session pivots define the higher-low and lower-high trend segments; a
-// close through a segment retires it.
+// Confirmed session pivots define one current trend line — higher lows (up) or
+// lower highs (down). The line retires only when its break is CONFIRMED by a
+// close through the last swing high/low.
 // ═══════════════════════════════════════════════════════════════════════════════
 const string GROUP_TREND = "📐 Intraday Trend Lines"
 const int TREND_DEFAULT_LINE_WIDTH = 2
 
-bool showTrendLines = input.bool(defval = true, title = "Show Trend Lines", tooltip = "Draws intraday trend lines from confirmed higher-lows / lower-highs in the current session. Up and down lines can show together as a channel; a line is removed once price closes through it.", group = GROUP_TREND)
+bool showTrendLines = input.bool(defval = true, title = "Show Trend Lines", tooltip = "Draws ONE intraday trend line for the current trend — an up line while higher lows hold, a down line while lower highs hold. The line survives a plain close through it (only a potential signal) and is removed once the break is CONFIRMED by a close through the last swing high/low; only then can the opposite trend line start. Source methodology note: trend lines belong on the Advance/Decline Line chart — the Up/Down Volume Index is read with horizontal highs/lows only ('I also draw trend lines, something I don't do with the Up/Down Volume Index'). Disable this when charting VOLD.", group = GROUP_TREND)
 int trendLinePivotStrength = input.int(defval = 3, title = "Pivot Strength", minval = 1, maxval = 10, tooltip = "Bars required on each side to confirm a trend pivot. Higher values create fewer, stronger trend lines.", group = GROUP_TREND)
 int trendLineWidth = input.int(defval = TREND_DEFAULT_LINE_WIDTH, title = "Line Width", minval = 1, maxval = 4, tooltip = "Line width for the intraday trend lines.", group = GROUP_TREND)
 int trendLineLookbackBars = input.int(defval = 60, title = "Lookback (Bars)", minval = 10, maxval = 200, tooltip = "Only trend segments anchored inside this recent window are eligible for display.", group = GROUP_TREND)
 int trendLineProjectionBars = input.int(defval = 60, title = "Projection (Bars)", minval = 1, maxval = 200, tooltip = "How far each trend line projects forward.", group = GROUP_TREND)
 LineStyle trendLineStyleInput = input.enum(defval = LineStyle.DOTTED, title = "Style", tooltip = "Line style for the intraday trend lines.", group = GROUP_TREND)
-
-f_trendLineStyle(LineStyle styleInput) =>
-    styleInput == LineStyle.SOLID ? line.style_solid : styleInput == LineStyle.DASHED ? line.style_dashed : line.style_dotted
 
 f_lineValueAtBar(int x1, float y1, int x2, float y2, int targetBar) =>
     x2 == x1 ? y2 : y1 + (y2 - y1) * (targetBar - x1) / (x2 - x1)
@@ -405,21 +505,16 @@ f_renderTrendSegment(array<line> lines, TrendSegment segment, int visibleWindowS
         line trendLine = line.new(x1 = trendVisibleStart, y1 = trendVisibleStartY, x2 = trendEndBar, y2 = trendVisibleEndY, xloc = xloc.bar_index, extend = extend.none, color = NORD3, width = lineWidth, style = trendStyle)
         array.push(id = lines, value = trendLine)
 
-f_renderTrendLines(array<line> lines, TrendSegment upTrendSegment, TrendSegment downTrendSegment, int sessionStartBar, int lookbackBars, int projectionBars, int lineWidth, LineStyle styleInput, float referencePrice, float recentRange) =>
-    string resolvedTrendStyle = f_trendLineStyle(styleInput = styleInput)
+f_renderTrendLine(array<line> lines, TrendSegment trendSegment, int sessionStartBar, int lookbackBars, int projectionBars, int lineWidth, LineStyle styleInput, float referencePrice, float recentRange) =>
+    string resolvedTrendStyle = f_resolveLineStyle(styleInput = styleInput)
     int trendVisibleWindowStart = math.max(0, bar_index - lookbackBars + 1)
+    bool hasTrend = not na(trendSegment) and trendSegment.x1 >= sessionStartBar and trendSegment.x2 >= trendVisibleWindowStart and f_isTrendSegmentRelevant(segment = trendSegment, referencePrice = referencePrice, recentRange = recentRange)
+    if hasTrend
+        f_renderTrendSegment(lines = lines, segment = trendSegment, visibleWindowStart = trendVisibleWindowStart, projectionBars = projectionBars, lineWidth = lineWidth, trendStyle = resolvedTrendStyle)
 
-    bool hasDownTrend = not na(downTrendSegment) and downTrendSegment.x1 >= sessionStartBar and downTrendSegment.x2 >= trendVisibleWindowStart and f_isTrendSegmentRelevant(segment = downTrendSegment, referencePrice = referencePrice, recentRange = recentRange)
-    bool hasUpTrend = not na(upTrendSegment) and upTrendSegment.x1 >= sessionStartBar and upTrendSegment.x2 >= trendVisibleWindowStart and f_isTrendSegmentRelevant(segment = upTrendSegment, referencePrice = referencePrice, recentRange = recentRange)
-
-    if hasDownTrend
-        f_renderTrendSegment(lines = lines, segment = downTrendSegment, visibleWindowStart = trendVisibleWindowStart, projectionBars = projectionBars, lineWidth = lineWidth, trendStyle = resolvedTrendStyle)
-    if hasUpTrend
-        f_renderTrendSegment(lines = lines, segment = upTrendSegment, visibleWindowStart = trendVisibleWindowStart, projectionBars = projectionBars, lineWidth = lineWidth, trendStyle = resolvedTrendStyle)
-
-float trendPivotHigh = showTrendLines ? ta.pivothigh(source = chartHigh, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
-float trendPivotLow = showTrendLines ? ta.pivotlow(source = chartLow, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
-float trendRecentRange = showTrendLines ? math.max(ta.highest(source = high, length = trendLineLookbackBars) - ta.lowest(source = low, length = trendLineLookbackBars), syminfo.mintick * 20.0) : na
+float trendPivotHigh = showTrendLines ? ta.pivothigh(source = pivotHighSource, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
+float trendPivotLow = showTrendLines ? ta.pivotlow(source = pivotLowSource, leftbars = trendLinePivotStrength, rightbars = trendLinePivotStrength) : na
+float trendRecentRange = showTrendLines ? math.max(ta.highest(source = pivotHighSource, length = trendLineLookbackBars) - ta.lowest(source = pivotLowSource, length = trendLineLookbackBars), syminfo.mintick * 20.0) : na
 int trendPivotHighBar = not na(trendPivotHigh) ? bar_index - trendLinePivotStrength : na
 int trendPivotLowBar = not na(trendPivotLow) ? bar_index - trendLinePivotStrength : na
 
@@ -427,45 +522,93 @@ var float previousTrendHighLevel = na
 var int previousTrendHighBar = na
 var float previousTrendLowLevel = na
 var int previousTrendLowBar = na
-var TrendSegment activeUpTrend = na
-var TrendSegment activeDownTrend = na
+// Single current trend line: direction is +1 while higher lows hold, -1 while
+// lower highs hold, 0 when no trend is established. The opposite-direction line
+// can only start once the current trend's break is confirmed.
+var TrendSegment activeTrend = na
+var int activeTrendDirection = 0
+// Two-step break confirmation. A trend-line break is only a POTENTIAL leading
+// signal; the confirmation is a close through the horizontal line marking the
+// last swing high/low, frozen at the moment the trend line broke. The line keeps
+// drawing until that confirmation lands. The failure mode this guards: "The
+// Advance/Decline Line may break the trend line but not the last high/low, thus
+// giving a false 'leading' indication."
+var float pendingConfirmLastLow = na
+var float pendingConfirmLastHigh = na
 
 if isNewTrackedSession
     previousTrendHighLevel := na
     previousTrendHighBar := na
     previousTrendLowLevel := na
     previousTrendLowBar := na
-    activeUpTrend := na
-    activeDownTrend := na
+    activeTrend := na
+    activeTrendDirection := 0
+    pendingConfirmLastLow := na
+    pendingConfirmLastHigh := na
 
 if not showTrendLines
     previousTrendHighLevel := na
     previousTrendHighBar := na
     previousTrendLowLevel := na
     previousTrendLowBar := na
-    activeUpTrend := na
-    activeDownTrend := na
+    activeTrend := na
+    activeTrendDirection := 0
+    pendingConfirmLastLow := na
+    pendingConfirmLastHigh := na
+
+bool upTrendLineBroken = false
+bool downTrendLineBroken = false
+bool bearishBreakConfirmed = false
+bool bullishBreakConfirmed = false
 
 if showTrendLines and inRegularSession and isCurrentTradingDay and barstate.isconfirmed and not na(sessionStartBarIndex)
     if not na(trendPivotHigh) and trendPivotHighBar >= sessionStartBarIndex
-        if not na(previousTrendHighLevel) and trendPivotHigh < previousTrendHighLevel
-            activeDownTrend := TrendSegment.new(x1 = previousTrendHighBar, y1 = previousTrendHighLevel, x2 = trendPivotHighBar, y2 = trendPivotHigh)
+        if not na(previousTrendHighLevel) and trendPivotHigh < previousTrendHighLevel and activeTrendDirection != 1
+            activeTrend := TrendSegment.new(x1 = previousTrendHighBar, y1 = previousTrendHighLevel, x2 = trendPivotHighBar, y2 = trendPivotHigh)
+            activeTrendDirection := -1
+            // Lower highs resuming: any outstanding bullish confirmation watch is stale.
+            pendingConfirmLastHigh := na
         previousTrendHighLevel := trendPivotHigh
         previousTrendHighBar := trendPivotHighBar
 
     if not na(trendPivotLow) and trendPivotLowBar >= sessionStartBarIndex
-        if not na(previousTrendLowLevel) and trendPivotLow > previousTrendLowLevel
-            activeUpTrend := TrendSegment.new(x1 = previousTrendLowBar, y1 = previousTrendLowLevel, x2 = trendPivotLowBar, y2 = trendPivotLow)
+        if not na(previousTrendLowLevel) and trendPivotLow > previousTrendLowLevel and activeTrendDirection != -1
+            activeTrend := TrendSegment.new(x1 = previousTrendLowBar, y1 = previousTrendLowLevel, x2 = trendPivotLowBar, y2 = trendPivotLow)
+            activeTrendDirection := 1
+            // Higher lows resuming: any outstanding bearish confirmation watch is stale.
+            pendingConfirmLastLow := na
         previousTrendLowLevel := trendPivotLow
         previousTrendLowBar := trendPivotLowBar
 
-    // Break invalidation: a segment stops being structure once price closes through
-    // its projection at the current bar.
-    if not na(activeUpTrend) and chartClose < f_lineValueAtBar(x1 = activeUpTrend.x1, y1 = activeUpTrend.y1, x2 = activeUpTrend.x2, y2 = activeUpTrend.y2, targetBar = bar_index)
-        activeUpTrend := na
+    // Potential break: a close through the current trend line arms the
+    // confirmation watch on the last swing low/high known at that moment. The
+    // line itself stays on the chart — it only retires on confirmation.
+    if activeTrendDirection == 1 and na(pendingConfirmLastLow) and chartClose < f_lineValueAtBar(x1 = activeTrend.x1, y1 = activeTrend.y1, x2 = activeTrend.x2, y2 = activeTrend.y2, targetBar = bar_index)
+        upTrendLineBroken := true
+        pendingConfirmLastLow := previousTrendLowLevel
 
-    if not na(activeDownTrend) and chartClose > f_lineValueAtBar(x1 = activeDownTrend.x1, y1 = activeDownTrend.y1, x2 = activeDownTrend.x2, y2 = activeDownTrend.y2, targetBar = bar_index)
-        activeDownTrend := na
+    if activeTrendDirection == -1 and na(pendingConfirmLastHigh) and chartClose > f_lineValueAtBar(x1 = activeTrend.x1, y1 = activeTrend.y1, x2 = activeTrend.x2, y2 = activeTrend.y2, targetBar = bar_index)
+        downTrendLineBroken := true
+        pendingConfirmLastHigh := previousTrendHighLevel
+
+    // Confirmation: close through the frozen last high/low completes the two-step
+    // signal and retires the trend line (may land on the same bar as the break).
+    if not na(pendingConfirmLastLow) and chartClose < pendingConfirmLastLow
+        bearishBreakConfirmed := true
+        pendingConfirmLastLow := na
+        activeTrend := na
+        activeTrendDirection := 0
+
+    if not na(pendingConfirmLastHigh) and chartClose > pendingConfirmLastHigh
+        bullishBreakConfirmed := true
+        pendingConfirmLastHigh := na
+        activeTrend := na
+        activeTrendDirection := 0
+
+alertcondition(condition = upTrendLineBroken, title = "Up trend line broken (potential)", message = "S&L: up trend line broken — potential change of direction, awaiting break of the last swing low.")
+alertcondition(condition = downTrendLineBroken, title = "Down trend line broken (potential)", message = "S&L: down trend line broken — potential change of direction, awaiting break of the last swing high.")
+alertcondition(condition = bearishBreakConfirmed, title = "Bearish break confirmed (last low broken)", message = "S&L: trend-line break CONFIRMED by a close below the last swing low.")
+alertcondition(condition = bullishBreakConfirmed, title = "Bullish break confirmed (last high broken)", message = "S&L: trend-line break CONFIRMED by a close above the last swing high.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
@@ -474,24 +617,17 @@ if showTrendLines and inRegularSession and isCurrentTradingDay and barstate.isco
 if barstate.islastconfirmedhistory or barstate.islast
     f_clearLines(lines = renderedLines)
     bool showCurrentSessionIntraday = latestRegularSessionDayKey == currentTradingDayKey and not na(sessionStartBarIndex)
-    bool longTermZeroAwareMode = f_longTermIsZeroAware(colorMode = longTermColorMode, windowHigh = longTermWindowHigh, windowLow = longTermWindowLow)
-    // Reuses the tolerance captured at rebuild time so exclusion and clustering are
-    // measured against the same window snapshot.
-    float longTermZeroLevelExclusionDistance = longTermZeroAwareMode ? nz(longTermClusterTolerance) : 0.0
 
     if showIntradayStructure and showCurrentSessionIntraday
         f_renderIntradayStructure(lines = renderedLines, resistanceLevels = intradayResistanceLevels, supportLevels = intradaySupportLevels, sessionStartBar = sessionStartBarIndex, forwardBars = intradaySRForwardBars, lineWidth = intradaySRLineWidth, referencePrice = chartClose)
 
     if showTrendLines and showCurrentSessionIntraday
-        f_renderTrendLines(lines = renderedLines, upTrendSegment = activeUpTrend, downTrendSegment = activeDownTrend, sessionStartBar = sessionStartBarIndex, lookbackBars = trendLineLookbackBars, projectionBars = trendLineProjectionBars, lineWidth = trendLineWidth, styleInput = trendLineStyleInput, referencePrice = chartClose, recentRange = trendRecentRange)
+        f_renderTrendLine(lines = renderedLines, trendSegment = activeTrend, sessionStartBar = sessionStartBarIndex, lookbackBars = trendLineLookbackBars, projectionBars = trendLineProjectionBars, lineWidth = trendLineWidth, styleInput = trendLineStyleInput, referencePrice = chartClose, recentRange = trendRecentRange)
 
-    // Zero baseline is independent of Long-Term S/R: it draws for ANY symbol whose
-    // scale contains zero (breadth, cumulative volume), and never forces zero onto a
-    // pure price chart where it would distort the scale.
-    if showLongTermZeroLine and zeroWithinChartScale
-        string resolvedZeroLineStyle = f_trendLineStyle(styleInput = longTermZeroLineStyleInput)
-        line zeroLine = line.new(x1 = bar_index - 1, y1 = 0.0, x2 = bar_index, y2 = 0.0, xloc = xloc.bar_index, extend = extend.both, color = longTermZeroLineColor, width = longTermZeroLineWidth, style = resolvedZeroLineStyle)
-        array.push(id = renderedLines, value = zeroLine)
+    if showZeroLine and zeroWithinChartScale
+        f_renderZeroLine(lines = renderedLines, lineColor = zeroLineColor, lineWidth = zeroLineWidth, styleInput = zeroLineStyleInput)
 
     if showLongTermStructure
-        f_renderLongTermStructure(lines = renderedLines, keyLevels = longTermKeyLevels, levelsPerSide = longTermLevelsPerSide, referencePrice = chartClose, zeroAwareMode = longTermZeroAwareMode, zeroLevelExclusionDistance = longTermZeroLevelExclusionDistance)
+        f_renderLongTermStructure(lines = renderedLines, keyLevels = longTermKeyLevels, levelsPerSide = longTermLevelsPerSide, referencePrice = longTermReferencePrice, zeroAwareMode = longTermZeroAwareMode, zeroLevelExclusionDistance = longTermZeroLevelExclusionDistance)
+
+    f_renderLongTermCoverage(coverageTable = longTermCoverageTable, structureVisible = showLongTermStructure, htfBarCount = longTermHTFBarCount, lookbackBars = longTermLookbackBars, barsPerDay = longTermBarsPerDay, lookbackDays = longTermLookbackDays, structureTimeframe = longTermTimeframe)

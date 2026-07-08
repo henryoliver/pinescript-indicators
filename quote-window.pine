@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Quote Window", shorttitle = "🪟 QW", overlay = false)
+indicator(title = "Quote Window", shorttitle = "🪟 QW", overlay = true)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -31,21 +31,27 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Commitment thresholds — derived from the source methodology:
-//   |%| < 0.2 = noise (treat as neutral)
-//   0.2–0.5  = drift, not committed
-//   ≥ 0.5    = committed
+// Commitment tiers — the source methodology has three levels beyond noise:
+//   |%| < 0.2 = noise ("not convincing" — treat as neutral)
+//   0.2–0.5  = drift; the color starts to count, conviction doesn't
+//   ≥ 0.5    = serious ("I take their color more seriously")
+//   ≥ 1.0    = committed ("committed to its bullish/bearish posture")
 const float QW_NOISE_THRESHOLD       = 0.2
-const float QW_COMMITMENT_THRESHOLD  = 0.5
-// Regime fractions: ≥75 % sectors agreeing = committed regime, 50–75 % = mild.
+const float QW_SERIOUS_THRESHOLD     = 0.5
+const float QW_COMMITTED_THRESHOLD   = 1.0
+// Regime fractions, applied to SERIOUS sector counts (source: "look for the
+// ones that are over point five and then compare the number of green and
+// reds there"): ≥75 % one-sided = committed regime, 50–75 % = mild.
 const float QW_COMMITTED_FRACTION    = 0.75
 const float QW_MILD_FRACTION         = 0.50
-// Bifurcation minority gate — applied uniformly to cash, futures, and sectors.
-// Bifurcated requires both sides committed (≥ COMMITMENT_THRESHOLD) AND the
-// minority side crosses this fraction of counted symbols. Methodology source:
-// "if the market is bullish but more than 25 % of sectors are red, I'm
-// concerned." For 4-element groups (cash, futures), > 0.25 means the minority
-// must be ≥ 2 of 4 — a real split, not one outlier.
+// Bifurcation minority gate — SECTORS ONLY. Source: "the most mixture I'll
+// tolerate is for 25% to be one color and 75% to be another color." Counted
+// against COLORS beyond the noise floor, not serious/committed counts — a
+// sector at −0.4% is red for this rule. Cash and futures indexes get NO
+// tolerance: "if they are any mix of red and green, then I consider it a
+// bifurcated market. It's that simple." Index bifurcation therefore uses the
+// noise threshold with a zero minority gate — one off-color index beyond
+// ±0.2% is enough.
 const float QW_MINORITY_FRACTION     = 0.25
 // Partial-data gap — if an enabled group returns less than this fraction of
 // its expected symbols, treat as DATA GAP. Catches degraded feeds where the
@@ -57,16 +63,19 @@ const float QW_PARTIAL_GAP_FRACTION  = 0.5
 // Compact records used to keep the three symbol groups (cash / futures /
 // sectors) iterable from a single rendering loop.
 // ═════════════════════════════════════════════════════════════════════════════
-// pctChange uses the user-selected baseline (today's open OR yesterday's
-// close); pctChangeVsClose is always vs prior daily close. The second exists
-// because cash ETFs and CME futures have non-comparable "today's open"
-// values — cash opens at 09:30 ET, CME futures' daily bar opens at globex
-// (~18:00 ET prior day). Any cross-group check (cash↔futures misalignment)
-// must use pctChangeVsClose to stay apples-to-apples; same-group checks use
-// pctChange because every symbol in a group shares the same daily open.
+// pctChange is the PRIMARY read used by all verdict math and single-baseline
+// display: vs prior daily close by default (source: "amateurs watch the open
+// and pros watch the close"), vs today's open only when the user selects that
+// baseline. In "Both" display mode the primary stays vs-close. pctChangeVsOpen
+// and pctChangeVsClose are always populated so the two-column "Both" view is
+// free. Cross-group checks (cash↔futures misalignment) must always use
+// pctChangeVsClose: cash ETFs open at 09:30 ET but CME futures' daily bar
+// opens at globex (~18:00 ET prior day), so vs-open values aren't comparable
+// across those groups.
 type QwReading
     string label
     float  pctChange
+    float  pctChangeVsOpen
     float  pctChangeVsClose
     bool   isCommodity
 
@@ -93,10 +102,10 @@ const string GROUP_QW_SECTORS = "🏛️ Sectors"
 const string GROUP_QW_REGIME  = "🧭 Regime"
 
 string qwBaselineMode = input.string(
-     defval = "Today's Open",
+     defval = "Yesterday's Close",
      title = "% Change Baseline",
-     options = ["Yesterday's Close", "Today's Open"],
-     tooltip = "Default 'Today's Open' is a clean intraday read for cash and sector ETFs (which open at 09:30 ET). CAVEAT for futures: each CME contract's daily bar opens at globex (~18:00 ET prior day), so 'Today's Open' on the FUTURES rows still includes overnight. The internal cash↔futures misalignment check uses prior-close baseline regardless of this setting to keep cross-group comparisons apples-to-apples. Switch to 'Yesterday's Close' to display every group against prior daily close (source methodology: amateurs watch the open, pros watch the close).",
+     options = ["Yesterday's Close", "Today's Open", "Both"],
+     tooltip = "Default 'Yesterday's Close' matches the source methodology (amateurs watch the open, pros watch the close). 'Today's Open' is a clean pure-intraday read for cash and sector ETFs (which open at 09:30 ET) — CAVEAT: each CME contract's daily bar opens at globex (~18:00 ET prior day), so 'Today's Open' on the FUTURES rows still includes overnight. 'Both' shows the two baselines side by side, the way the source quote window keeps both columns up; verdict math then runs on the vs-close numbers. The internal cash↔futures misalignment check uses prior-close baseline regardless of this setting to keep cross-group comparisons apples-to-apples.",
      group = GROUP_QW_GENERAL
  )
 
@@ -104,14 +113,16 @@ string qwTablePosition = input.string(
      defval = position.top_right,
      title = "Position",
      options = [position.top_left, position.top_center, position.top_right, position.middle_left, position.middle_right, position.bottom_left, position.bottom_center, position.bottom_right],
-     tooltip = "Where the table anchors inside its pane. Default top-right to sit alongside CBI when the two indicators share a pane.",
+     tooltip = "Where the table anchors on the chart. Default top-right keeps it out of the price action's way.",
      group = GROUP_QW_TABLE
  )
 
-string qwTextSizeInput = input.string(
-     defval = "Small",
+int qwTextSize = input.int(
+     defval = 10,
      title = "Text Size",
-     options = ["Tiny", "Small", "Normal", "Large"],
+     minval = 0,
+     maxval = 36,
+     tooltip = "Font size in typographic points; 0 = auto. Equivalents of the old presets: Tiny = 8, Small = 10, Normal = 14, Large = 20.",
      group = GROUP_QW_TABLE
  )
 
@@ -188,15 +199,8 @@ bool qwShowRegime = input.bool(
      group = GROUP_QW_REGIME
  )
 
-// Map text-size input to size constant.
-string qwTextSize = switch qwTextSizeInput
-    "Tiny"   => size.tiny
-    "Small"  => size.small
-    "Normal" => size.normal
-    "Large"  => size.large
-    => size.small
-
 bool qwUseTodayOpenBaseline = qwBaselineMode == "Today's Open"
+bool qwBothBaselines        = qwBaselineMode == "Both"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -207,9 +211,8 @@ bool qwUseTodayOpenBaseline = qwBaselineMode == "Today's Open"
 // snapshot is gated separately so that leak can't poison var state.
 // Single request.security per symbol returns {today's close, yesterday's
 // close, today's open}; the helper builds the full QwReading from there.
-// Computes BOTH the user-baseline pct change (display + same-group math) AND
-// the vs-prev-close pct change (cross-group comparison, where the user
-// baseline isn't directly comparable — see the QwReading type comment).
+// Computes BOTH baselines every time (vs-open and vs-close) and selects the
+// primary per the baseline mode — see the QwReading type comment.
 // The prior layout dispatched between two FromOpen/FromClose helpers via a
 // ternary, but Pine evaluates BOTH branches of a ternary containing a
 // request.security, so every symbol was firing two security calls. A single
@@ -224,12 +227,12 @@ f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTod
          lookahead = barmerge.lookahead_on,
          ignore_invalid_symbol = true
      )
-    float baseline   = useTodayOpenBaseline ? todayOpen : prevClose
-    float displayPct = not na(todayClose) and not na(baseline)  and baseline  != 0.0 ?
-         (todayClose - baseline)  / baseline  * 100.0 : na
+    float vsOpenPct  = not na(todayClose) and not na(todayOpen) and todayOpen != 0.0 ?
+         (todayClose - todayOpen)  / todayOpen  * 100.0 : na
     float vsClosePct = not na(todayClose) and not na(prevClose) and prevClose != 0.0 ?
          (todayClose - prevClose) / prevClose * 100.0 : na
-    QwReading.new(label = label, pctChange = displayPct, pctChangeVsClose = vsClosePct, isCommodity = isCommodity)
+    float primaryPct = useTodayOpenBaseline ? vsOpenPct : vsClosePct
+    QwReading.new(label = label, pctChange = primaryPct, pctChangeVsOpen = vsOpenPct, pctChangeVsClose = vsClosePct, isCommodity = isCommodity)
 
 f_qwCellTextColor(float pctChange) =>
     na(pctChange) ? color.new(color = NORD4, transp = 40) : color.new(color = NORD4, transp = 0)
@@ -237,10 +240,12 @@ f_qwCellTextColor(float pctChange) =>
 f_qwPctTextColor(float pctChange) =>
     color pctTextColor = color.new(color = NORD4, transp = 40)
     if not na(pctChange)
-        if math.abs(pctChange) >= QW_COMMITMENT_THRESHOLD
+        if math.abs(pctChange) >= QW_COMMITTED_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD8 : NORD11, transp = 0)
-        else if math.abs(pctChange) >= QW_NOISE_THRESHOLD
+        else if math.abs(pctChange) >= QW_SERIOUS_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 0)
+        else if math.abs(pctChange) >= QW_NOISE_THRESHOLD
+            pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 45)
         else
             pctTextColor := color.new(color = NORD3, transp = 0)
     pctTextColor
@@ -249,10 +254,10 @@ f_qwFormatPct(float pctChange) =>
     na(pctChange) ? "—" : str.format("{0,number,+0.00;-0.00}%", pctChange)
 
 // Threshold comparisons are inclusive (>= and <=), matching the methodology
-// boundaries: |%| < 0.2 = noise (strict <), >= 0.2 = drift, >= 0.5 =
-// committed. A value exactly at a boundary belongs to the higher tier — and
-// display coloring uses the same inclusive cutoffs, so counting and coloring
-// always agree.
+// boundaries: |%| < 0.2 = noise (strict <), >= 0.2 = drift, >= 0.5 = serious,
+// >= 1.0 = committed. A value exactly at a boundary belongs to the higher
+// tier — and display coloring uses the same inclusive cutoffs, so counting
+// and coloring always agree.
 f_qwCountAboveThreshold(array<QwReading> readings, float threshold, bool wantPositive, bool excludeCommodity) =>
     int total = 0
     for reading in readings
@@ -284,18 +289,18 @@ f_qwIsBifurcated(array<QwReading> readings, float threshold, float minorityFract
     greenCount > 0 and redCount > 0 and total > 0 and
          math.min(greenCount, redCount) / float(total) > minorityFraction
 
-f_qwNetMean(array<QwReading> readings) =>
+// Group net means for the header rows. Pine has no field selectors, hence the
+// twin helpers; the primary (displayed) net is picked from these two per the
+// baseline mode.
+f_qwNetMeanVsOpen(array<QwReading> readings) =>
     float pctSum = 0.0
     int total = 0
     for reading in readings
-        if not na(reading.pctChange)
-            pctSum += reading.pctChange
+        if not na(reading.pctChangeVsOpen)
+            pctSum += reading.pctChangeVsOpen
             total += 1
     total > 0 ? pctSum / total : na
 
-// Same as f_qwNetMean but reads pctChangeVsClose. Used for cross-group
-// comparison (cash↔futures misalignment) where the user baseline isn't
-// comparable across groups — see the QwReading type comment.
 f_qwNetMeanVsClose(array<QwReading> readings) =>
     float pctSum = 0.0
     int total = 0
@@ -343,45 +348,63 @@ array<QwReading> qwSectorReadings = array.from(
 // Every regime check (bifurcation, misalignment, dominant fraction, data gap)
 // runs against the full universe of cash + futures + sectors, regardless of
 // which groups the user has elected to display. Show* toggles affect table
-// rendering only. Bifurcation thresholds are uniform across groups — committed
-// (≥ COMMITMENT_THRESHOLD) on both sides AND minority above QW_MINORITY_FRACTION
-// of counted symbols — so cash, futures, and sectors no longer use mismatched
-// sensitivity (previously cash/futures triggered on any noise-level mixed
-// signal while sectors required commitment + minority).
+// rendering only. Sensitivity is intentionally ASYMMETRIC, per the source
+// methodology:
+//   • Indexes (cash, futures): ANY mix of red and green beyond the noise
+//     floor = bifurcated. Zero tolerance — "It's that simple."
+//   • Sectors: mixture is tolerated up to a 25% minority of colors beyond
+//     the noise floor.
 // ─────────────────────────────────────────────────────────────────────────────
-bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
-bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = false)
+bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_NOISE_THRESHOLD, minorityFraction = 0.0, excludeCommodity = false)
+bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_NOISE_THRESHOLD, minorityFraction = 0.0, excludeCommodity = false)
 
-float qwCashNet    = f_qwNetMean(readings = qwCashReadings)
-float qwFuturesNet = f_qwNetMean(readings = qwFuturesReadings)
-// Misalignment compares cash vs futures on the SAME baseline (prior daily
-// close), not the user-selected display baseline. Cash ETFs open at 09:30 ET
-// but CME futures' daily bar opens at globex (~18:00 ET prior day), so the
-// user-baseline values aren't directly comparable across these groups —
-// comparing them in "Today's Open" mode would flag a phantom misalignment
-// any time the overnight gap was meaningful.
+// Group nets for the header rows. The primary follows the baseline mode; the
+// "Both" view renders the vs-open and vs-close nets side by side.
+float qwCashNetVsOpen     = f_qwNetMeanVsOpen(readings  = qwCashReadings)
 float qwCashNetVsClose    = f_qwNetMeanVsClose(readings = qwCashReadings)
+float qwFuturesNetVsOpen  = f_qwNetMeanVsOpen(readings  = qwFuturesReadings)
 float qwFuturesNetVsClose = f_qwNetMeanVsClose(readings = qwFuturesReadings)
-bool qwCashFuturesMisaligned = not na(qwCashNetVsClose) and not na(qwFuturesNetVsClose) and
-     math.abs(qwCashNetVsClose) >= QW_NOISE_THRESHOLD and math.abs(qwFuturesNetVsClose) >= QW_NOISE_THRESHOLD and
-     ((qwCashNetVsClose > 0.0) != (qwFuturesNetVsClose > 0.0))
+float qwCashNet    = qwUseTodayOpenBaseline ? qwCashNetVsOpen    : qwCashNetVsClose
+float qwFuturesNet = qwUseTodayOpenBaseline ? qwFuturesNetVsOpen : qwFuturesNetVsClose
 
-int qwSectorTotal       = f_qwGroupSize(readings = qwSectorReadings, excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorGreensRaw   = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,      wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorRedsRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,      wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorGreensComm  = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorRedsComm    = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
+// Cash↔futures misalignment is PER-PAIR, not group-mean — "the S&P is a
+// little green, but the ES is a little red … probably a good time to not
+// trade that market." Group means can wash out a single split pair (SPY +0.5%
+// vs ES −0.3% while the other three pairs align). Pairing relies on the two
+// arrays sharing index order: SPY↔ES, QQQ↔NQ, DIA↔YM, IWM↔RTY. Always
+// compared on prior-close baseline: cash ETFs open at 09:30 ET but CME
+// futures' daily bar opens at globex (~18:00 ET prior day), so vs-open values
+// aren't comparable across the pair — comparing them in "Today's Open" mode
+// would flag a phantom misalignment any time the overnight gap was meaningful.
+bool qwCashFuturesMisaligned = false
+for qwPairIndex = 0 to math.min(array.size(qwCashReadings), array.size(qwFuturesReadings)) - 1
+    QwReading qwPairCash    = array.get(qwCashReadings,    qwPairIndex)
+    QwReading qwPairFutures = array.get(qwFuturesReadings, qwPairIndex)
+    if not na(qwPairCash.pctChangeVsClose) and not na(qwPairFutures.pctChangeVsClose) and
+         math.abs(qwPairCash.pctChangeVsClose)    >= QW_NOISE_THRESHOLD and
+         math.abs(qwPairFutures.pctChangeVsClose) >= QW_NOISE_THRESHOLD and
+         ((qwPairCash.pctChangeVsClose > 0.0) != (qwPairFutures.pctChangeVsClose > 0.0))
+        qwCashFuturesMisaligned := true
 
-float qwDominantCommitFraction = qwSectorTotal > 0 ?
-     math.max(qwSectorGreensComm, qwSectorRedsComm) / float(qwSectorTotal) : 0.0
-// Lean uses committed counts; strict > means an exact tie (e.g. 0 vs 0
-// committed) resolves false rather than silently biasing green. A tie at any
-// meaningful committed count (≥ 1 each) trips the bifurcation branch first
-// (minority/total ≥ 0.5 > QW_MINORITY_FRACTION), so the arrow direction here
-// is only consulted when one side is genuinely dominant.
-bool qwSectorsLeanGreen = qwSectorGreensComm > qwSectorRedsComm
+int qwSectorTotal         = f_qwGroupSize(readings = qwSectorReadings, excludeCommodity = qwIgnoreCommoditySectors)
+int qwSectorGreensRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
+int qwSectorRedsRaw       = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
+int qwSectorGreensSerious = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
+int qwSectorRedsSerious   = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
 
-bool qwSectorsBifurcated = f_qwIsBifurcated(readings = qwSectorReadings, threshold = QW_COMMITMENT_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = qwIgnoreCommoditySectors)
+float qwDominantSeriousFraction = qwSectorTotal > 0 ?
+     math.max(qwSectorGreensSerious, qwSectorRedsSerious) / float(qwSectorTotal) : 0.0
+// Lean uses serious counts; strict > means an exact tie resolves false rather
+// than silently biasing green. A tie large enough to reach the MILD fraction
+// necessarily trips the sector bifurcation gate first (raw color counts are a
+// superset of serious counts, so minority/total ≥ 0.5 > QW_MINORITY_FRACTION),
+// meaning the arrow direction here is only consulted when one side is
+// genuinely dominant.
+bool qwSectorsLeanGreen = qwSectorGreensSerious > qwSectorRedsSerious
+
+// Sector split runs on COLORS beyond noise (raw counts), not serious counts —
+// "more than 25% of the sectors are red" counts a −0.4% sector as red.
+bool qwSectorsBifurcated = f_qwIsBifurcated(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD, minorityFraction = QW_MINORITY_FRACTION, excludeCommodity = qwIgnoreCommoditySectors)
 
 // Data availability — an enabled group must return at least
 // QW_PARTIAL_GAP_FRACTION of its expected symbols; otherwise the feed is
@@ -428,7 +451,7 @@ var int qwRedsAtOpen   = na
 // FX, crypto) trip the reset at ~midnight, and stock-only charts trip it on
 // the first bar of the new RTH session (which is the 09:30 bar itself — the
 // reset runs before the snapshot assignment below).
-int qwNyDayKey = year(time, "America/New_York") * 10000 + month(time, "America/New_York") * 100 + dayofmonth(time, "America/New_York")
+int qwNyDayKey = year(time = time, timezone = "America/New_York") * 10000 + month(time = time, timezone = "America/New_York") * 100 + dayofmonth(time = time, timezone = "America/New_York")
 if qwNyDayKey != qwNyDayKey[1]
     qwGreensAtOpen := na
     qwRedsAtOpen   := na
@@ -452,7 +475,7 @@ int qwRedsDelta   = na(qwRedsAtOpen)   or qwSectorTotal == 0 ? na : qwSectorReds
 // ─────────────────────────────────────────────────────────────────────────────
 // Regime verdict synthesis.
 // ─────────────────────────────────────────────────────────────────────────────
-int qwCommitTransp = 80 - int(math.min(1.0, qwDominantCommitFraction) * 55.0)
+int qwCommitTransp = 80 - int(math.min(1.0, qwDominantSeriousFraction) * 55.0)
 string qwRegimeText = "· LOW CONV"
 color qwRegimeColor = color.new(color = NORD3, transp = qwCommitTransp)
 // DATA GAP overrides everything else — never promote partial data to a verdict.
@@ -462,10 +485,10 @@ if qwDataGap
 else if qwCashBifurcated or qwFuturesBifurcated or qwSectorsBifurcated or qwCashFuturesMisaligned
     qwRegimeText  := "÷ BIFURCATED"
     qwRegimeColor := color.new(color = NORD13, transp = 45)
-else if qwDominantCommitFraction >= QW_COMMITTED_FRACTION
+else if qwDominantSeriousFraction >= QW_COMMITTED_FRACTION
     qwRegimeText  := qwSectorsLeanGreen ? "+ COMMITTED ↑" : "+ COMMITTED ↓"
     qwRegimeColor := qwSectorsLeanGreen ? color.new(color = NORD8, transp = qwCommitTransp) : color.new(color = NORD11, transp = qwCommitTransp)
-else if qwDominantCommitFraction >= QW_MILD_FRACTION
+else if qwDominantSeriousFraction >= QW_MILD_FRACTION
     qwRegimeText  := qwSectorsLeanGreen ? "~ MILD ↑" : "~ MILD ↓"
     qwRegimeColor := qwSectorsLeanGreen ? color.new(color = NORD7, transp = qwCommitTransp) : color.new(color = NORD12, transp = qwCommitTransp)
 
@@ -476,9 +499,13 @@ else if qwDominantCommitFraction >= QW_MILD_FRACTION
 // ─────────────────────────────────────────────────────────────────────────────
 var table qwTable = na
 var int qwTableRows = na
+var int qwTableColumnsState = na
 var string qwTablePositionState = ""
 
-f_qwHeaderRow(table tableId, int rowIndex, string headerLabel, string headerValue) =>
+// bothColumns renders a third cell (vs-close) so the "Both" baseline mode can
+// show the two % columns side by side, the way the source quote window keeps
+// both up. In that mode headerValue carries vs-open, headerValue2 vs-close.
+f_qwHeaderRow(table tableId, int rowIndex, string headerLabel, string headerValue, bool bothColumns = false, string headerValue2 = "") =>
     table.cell(table_id = tableId, column = 0, row = rowIndex, text = headerLabel,
          text_color = color.new(color = NORD9, transp = 0),
          text_halign = text.align_left,
@@ -491,43 +518,66 @@ f_qwHeaderRow(table tableId, int rowIndex, string headerLabel, string headerValu
          text_valign = text.align_center,
          text_size = qwTextSize,
          bgcolor = color.new(color = NORD1, transp = 25))
+    if bothColumns
+        table.cell(table_id = tableId, column = 2, row = rowIndex, text = headerValue2,
+             text_color = color.new(color = NORD4, transp = 30),
+             text_halign = text.align_right,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = color.new(color = NORD1, transp = 25))
 
-f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed) =>
+f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed, bool bothColumns = false) =>
     color rowBg = color.new(color = NORD0, transp = 100)
     color dimColor = color.new(color = NORD3, transp = 0)
     color rowText = isDimmed ? dimColor : f_qwCellTextColor(pctChange = reading.pctChange)
-    color pctText = isDimmed ? dimColor : f_qwPctTextColor(pctChange = reading.pctChange)
     table.cell(table_id = tableId, column = 0, row = rowIndex, text = reading.label,
          text_color = rowText,
          text_halign = text.align_left,
          text_valign = text.align_center,
          text_size = qwTextSize,
          bgcolor = rowBg)
-    table.cell(table_id = tableId, column = 1, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChange),
-         text_color = pctText,
-         text_halign = text.align_right,
-         text_valign = text.align_center,
-         text_size = qwTextSize,
-         bgcolor = rowBg)
+    if bothColumns
+        color openText  = isDimmed ? dimColor : f_qwPctTextColor(pctChange = reading.pctChangeVsOpen)
+        color closeText = isDimmed ? dimColor : f_qwPctTextColor(pctChange = reading.pctChangeVsClose)
+        table.cell(table_id = tableId, column = 1, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChangeVsOpen),
+             text_color = openText,
+             text_halign = text.align_right,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = rowBg)
+        table.cell(table_id = tableId, column = 2, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChangeVsClose),
+             text_color = closeText,
+             text_halign = text.align_right,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = rowBg)
+    else
+        color pctText = isDimmed ? dimColor : f_qwPctTextColor(pctChange = reading.pctChange)
+        table.cell(table_id = tableId, column = 1, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChange),
+             text_color = pctText,
+             text_halign = text.align_right,
+             text_valign = text.align_center,
+             text_size = qwTextSize,
+             bgcolor = rowBg)
 
 string qwRegimeTooltip =
      "🧭 REGIME GUIDE\n" +
      "\n" +
      "+ COMMITTED\n" +
-     "Cash and futures are aligned, and at least 75% of counted sectors are moving with commitment.\n" +
+     "No index split anywhere, and at least 75% of counted sectors are moving seriously (0.5%+) in one direction.\n" +
      "This is the cleanest trend environment.\n" +
      "\n" +
      "~ MILD\n" +
-     "Cash and futures are not fighting each other, but only 50-75% of sectors are truly committed.\n" +
+     "No index split, but only 50-75% of sectors are moving seriously.\n" +
      "There is participation, but not broad enough to treat as a fully confident regime.\n" +
      "\n" +
      "· LOW CONV\n" +
-     "Less than half the counted sectors are committed.\n" +
+     "Less than half the counted sectors are moving seriously.\n" +
      "Movement may be drift, chop, or weak rotation rather than a trustworthy trend day.\n" +
      "\n" +
      "÷ BIFURCATED\n" +
-     "Internal disagreement is too high.\n" +
-     "This appears when cash is mixed, futures are mixed, sectors are split, or cash and futures point in opposite directions.\n" +
+     "Internal disagreement. Indexes get zero tolerance: any cash index or futures index that is red while the others are green (or vice versa, beyond the 0.2% noise floor) splits the group.\n" +
+     "Also fires when more than 25% of counted sectors are the minority color, or when any cash/futures pair of the same market (SPY/ES, QQQ/NQ, DIA/YM, IWM/RTY) points in opposite directions vs prior close.\n" +
      "\n" +
      "× DATA GAP\n" +
      "At least one enabled group returned too few usable readings — zero, or below half of the expected symbol count.\n" +
@@ -535,29 +585,36 @@ string qwRegimeTooltip =
      "\n" +
      "📐 COMMITMENT RULES\n" +
      "Below 0.2% = noise\n" +
-     "0.2-0.5% = drift\n" +
-     "Above 0.5% = committed\n" +
+     "0.2-0.5% = drift (color counts, conviction doesn't)\n" +
+     "0.5-1% = serious\n" +
+     "Above 1% = committed\n" +
      "\n" +
      "📊 DETAIL NUMBER\n" +
-     "Normal mode shows committed sectors on the dominant side / total counted sectors.\n" +
+     "Normal mode shows seriously-moving (0.5%+) sectors on the dominant side / total counted sectors.\n" +
      "Data-gap mode shows received/expected counts for Cash, Futures, and Sectors."
 
 if barstate.islast
     int qwRow = 0
     bool qwRegimeOnlyView = qwShowRegime and not qwShowCash and not qwShowFutures and not qwShowSectors
     bool qwShowRegimeHeader = qwShowRegime and not qwRegimeOnlyView
+    // "Both" baseline mode adds a third column (vs-open | vs-close) plus a
+    // column-label row. The regime-only view never needs the split — it shows
+    // no per-symbol percentages — so it stays at 2 columns.
+    bool qwBothColumns = qwBothBaselines and not qwRegimeOnlyView
+    int qwTableColumns = qwBothColumns ? 3 : 2
     int qwVisibleRows = qwRegimeOnlyView ? 1 :
+         (qwBothColumns ? 1 : 0) +
          (qwShowCash ? 1 + array.size(qwCashReadings) : 0) +
          (qwShowFutures ? 1 + array.size(qwFuturesReadings) : 0) +
          (qwShowSectors ? 1 + array.size(qwSectorReadings) : 0) +
          (qwShowRegimeHeader ? 2 : 0)
 
-    if na(qwTable) or qwTableRows != qwVisibleRows or qwTablePositionState != qwTablePosition
+    if na(qwTable) or qwTableRows != qwVisibleRows or qwTableColumnsState != qwTableColumns or qwTablePositionState != qwTablePosition
         if not na(qwTable)
             table.delete(qwTable)
         qwTable := table.new(
              position = qwTablePosition,
-             columns = 2,
+             columns = qwTableColumns,
              rows = math.max(1, qwVisibleRows),
              bgcolor = qwTableBgColor,
              border_width = qwTableBorderWidth,
@@ -566,22 +623,34 @@ if barstate.islast
              frame_color = qwTableFrameColor
          )
         qwTableRows := qwVisibleRows
+        qwTableColumnsState := qwTableColumns
         qwTablePositionState := qwTablePosition
+
+    // Column labels — only needed when two % columns are on screen.
+    if qwBothColumns
+        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "", headerValue = "vs OPEN", bothColumns = true, headerValue2 = "vs CLOSE")
+        qwRow += 1
 
     // Cash block
     if qwShowCash
-        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "CASH", headerValue = f_qwFormatPct(pctChange = qwCashNet))
+        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "CASH",
+             headerValue = f_qwFormatPct(pctChange = qwBothColumns ? qwCashNetVsOpen : qwCashNet),
+             bothColumns = qwBothColumns,
+             headerValue2 = f_qwFormatPct(pctChange = qwCashNetVsClose))
         qwRow += 1
         for cashReading in qwCashReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = cashReading, isDimmed = false)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = cashReading, isDimmed = false, bothColumns = qwBothColumns)
             qwRow += 1
 
     // Futures block
     if qwShowFutures
-        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "FUTURES", headerValue = f_qwFormatPct(pctChange = qwFuturesNet))
+        f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "FUTURES",
+             headerValue = f_qwFormatPct(pctChange = qwBothColumns ? qwFuturesNetVsOpen : qwFuturesNet),
+             bothColumns = qwBothColumns,
+             headerValue2 = f_qwFormatPct(pctChange = qwFuturesNetVsClose))
         qwRow += 1
         for futuresReading in qwFuturesReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = futuresReading, isDimmed = false)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = futuresReading, isDimmed = false, bothColumns = qwBothColumns)
             qwRow += 1
 
     // Sectors block — header line surfaces the live green/red counts and
@@ -603,8 +672,8 @@ if barstate.islast
         string qwSectorHeaderValue = str.format("●{0} {1}{2}  ●{3} {4}{5}",
              qwSectorGreensRaw, qwGreensArrow, qwGreensDeltaText,
              qwSectorRedsRaw,   qwRedsArrow,   qwRedsDeltaText)
-        color qwSectorHeaderValueColor = qwSectorGreensComm > qwSectorRedsComm ? color.new(color = NORD8, transp = 0) :
-             qwSectorGreensComm < qwSectorRedsComm ? color.new(color = NORD11, transp = 0) :
+        color qwSectorHeaderValueColor = qwSectorGreensSerious > qwSectorRedsSerious ? color.new(color = NORD8, transp = 0) :
+             qwSectorGreensSerious < qwSectorRedsSerious ? color.new(color = NORD11, transp = 0) :
              color.new(color = NORD4, transp = 30)
         table.cell(table_id = qwTable, column = 0, row = qwRow, text = "SECTORS",
              text_color = color.new(color = NORD9, transp = 0),
@@ -612,7 +681,14 @@ if barstate.islast
              text_valign = text.align_center,
              text_size = qwTextSize,
              bgcolor = color.new(color = NORD1, transp = 25))
-        table.cell(table_id = qwTable, column = 1, row = qwRow, text = qwSectorHeaderValue,
+        // In both-columns mode the counts sit in the rightmost column; the
+        // middle cell is filled with header background so the row reads as one
+        // continuous band.
+        if qwBothColumns
+            table.cell(table_id = qwTable, column = 1, row = qwRow, text = "",
+                 text_size = qwTextSize,
+                 bgcolor = color.new(color = NORD1, transp = 25))
+        table.cell(table_id = qwTable, column = qwBothColumns ? 2 : 1, row = qwRow, text = qwSectorHeaderValue,
              text_color = qwSectorHeaderValueColor,
              text_halign = text.align_right,
              text_valign = text.align_center,
@@ -620,7 +696,7 @@ if barstate.islast
              bgcolor = color.new(color = NORD1, transp = 25))
         qwRow += 1
         for sectorReading in qwSectorReadings
-            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading, isDimmed = qwIgnoreCommoditySectors and sectorReading.isCommodity)
+            f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading, isDimmed = qwIgnoreCommoditySectors and sectorReading.isCommodity, bothColumns = qwBothColumns)
             qwRow += 1
 
     // Regime verdict — synthesizes the five bifurcation / commitment / data checks.
@@ -630,7 +706,7 @@ if barstate.islast
                   qwCashReceived,    qwCashExpected,
                   qwFuturesReceived, qwFuturesExpected,
                   qwSectorTotal,     qwSectorExpected) :
-             str.format("{0}/{1}", math.max(qwSectorGreensComm, qwSectorRedsComm), qwSectorTotal)
+             str.format("{0}/{1}", math.max(qwSectorGreensSerious, qwSectorRedsSerious), qwSectorTotal)
         if qwRegimeOnlyView
             table.cell(table_id = qwTable, column = 0, row = qwRow, text = qwRegimeText,
                  text_color = color.new(color = NORD6, transp = 0),
@@ -647,10 +723,10 @@ if barstate.islast
                  bgcolor = qwRegimeColor,
                  tooltip = qwDataGap ?
                       "Per-group availability when a feed is missing: C=cash, F=futures, S=sectors. Format: received/expected." :
-                      "Committed sector count on the dominant side / total sectors counted.")
+                      "Seriously-moving (0.5%+) sector count on the dominant side / total sectors counted.")
             qwRow += 1
         else
-            f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "REGIME", headerValue = "Verdict")
+            f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "REGIME", headerValue = qwBothColumns ? "" : "Verdict", bothColumns = qwBothColumns, headerValue2 = "Verdict")
             qwRow += 1
             table.cell(table_id = qwTable, column = 0, row = qwRow, text = qwRegimeText,
                  text_color = color.new(color = NORD6, transp = 0),
@@ -659,7 +735,11 @@ if barstate.islast
                  text_size = qwTextSize,
                  bgcolor = qwRegimeColor,
                  tooltip = qwRegimeTooltip)
-            table.cell(table_id = qwTable, column = 1, row = qwRow, text = qwRegimeDetail,
+            if qwBothColumns
+                table.cell(table_id = qwTable, column = 1, row = qwRow, text = "",
+                     text_size = qwTextSize,
+                     bgcolor = qwRegimeColor)
+            table.cell(table_id = qwTable, column = qwBothColumns ? 2 : 1, row = qwRow, text = qwRegimeDetail,
                  text_color = color.new(color = NORD6, transp = 0),
                  text_halign = text.align_right,
                  text_valign = text.align_center,
@@ -667,5 +747,5 @@ if barstate.islast
                  bgcolor = qwRegimeColor,
                  tooltip = qwDataGap ?
                       "Per-group availability when a feed is missing: C=cash, F=futures, S=sectors. Format: received/expected." :
-                      "Committed sector count on the dominant side / total sectors counted.")
+                      "Seriously-moving (0.5%+) sector count on the dominant side / total sectors counted.")
             qwRow += 1

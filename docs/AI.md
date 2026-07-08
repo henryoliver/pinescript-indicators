@@ -956,7 +956,14 @@ enum TrendDir
 - **Prevent hallucinations** by consulting references
 
 ### 5. Never Forget Repainting Considerations
-- Use `lookahead = barmerge.lookahead_on` for real-time data accuracy
+- Choose `lookahead` by request type:
+  - `lookahead = barmerge.lookahead_on` for stable snapshot requests — daily
+    fundamentals, or previous-period OHLC fetched with `[1]` offsets — where the
+    requested value is already final and lookahead only fixes real-time lag.
+  - `lookahead = barmerge.lookahead_off` for streams of confirmed events from a
+    higher timeframe (e.g. `ta.pivothigh()`/`ta.pivotlow()` via
+    `request.security()`). With `lookahead_on` these read HTF values before the
+    HTF bar closes and repaint history.
 - Understand bar-by-bar execution model
 - Read: `https://www.tradingview.com/pine-script-docs/concepts/repainting/`
 
@@ -1109,7 +1116,8 @@ Before submitting any code changes, verify:
 
 ### Performance Considerations
 - Use `ignore_invalid_symbol = true` for `request.*()` functions
-- Use `lookahead = barmerge.lookahead_on` for real-time accuracy
+- Use `lookahead = barmerge.lookahead_on` only for stable snapshot requests;
+  confirmed-event streams (HTF pivots) need `lookahead_off` — see Pitfall 5
 - Render tables/labels only in `barstate.islast` or `barstate.islastconfirmedhistory`
 - Do not rescan an entire retained higher-timeframe history array on every new
   HTF bar when the signal is natively confirmable with built-ins like

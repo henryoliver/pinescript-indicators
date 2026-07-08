@@ -105,26 +105,26 @@ type RealtimeBarState
 
 // General Settings
 FeatureMode featureMode = input.enum(defval = FeatureMode.TAPE_AND_BLOCKS, title = "Feature Mode", tooltip = "Choose whether to run the full tape, only the tape table, or only the block trade markers. Block-trades-only mode skips tape calculations to reduce runtime work.", group = GROUP_GENERAL)
-showAggressiveOnly = input.bool(defval = false, title = "Show Only Agressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
+showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Orders", tooltip = "Shows only directional trades. If bid and ask quotes are available, it keeps trades above the ask and below the bid. If quotes are missing, it falls back to trades above or below the previous trade price. Neutral trades, including mid, at bid, and at ask, are hidden.", group = GROUP_GENERAL)
 
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all)", group = GROUP_GENERAL)
 intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Lower = faster + less memory. Live tape and recent block markers stay fully responsive; bars older than this window won't render block markers and won't seed historical ticks into the tape.", group = GROUP_GENERAL)
 largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
-largeOrderTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
+largeOrderTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBold = input.bool(defval = true, title = "Bold", inline = "large", group = GROUP_GENERAL)
 backgroundColor = input.color(defval = NORD0, title = "Table Background", tooltip = "Background color for the tape table.", group = GROUP_GENERAL)
-defaultTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Default Text", tooltip = "Default text color for neutral table cells.", group = GROUP_GENERAL)
-askTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Ask Text", tooltip = "Text color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
-askBackgroundColor = input.color(defval = color.new(color = #88C0D0, transp = 90), title = "Ask BG", tooltip = "Background color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
-aboveAskTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Above Ask Text", tooltip = "Text color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
+defaultTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Default Text", tooltip = "Default text color for neutral table cells.", group = GROUP_GENERAL)
+askTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Ask Text", tooltip = "Text color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
+askBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 90), title = "Ask BG", tooltip = "Background color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
+aboveAskTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Above Ask Text", tooltip = "Text color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
 aboveAskBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 50), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
 aboveAskBold = input.bool(defval = true, title = "Bold", inline = "above_ask", group = GROUP_GENERAL)
-bidTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Bid Text", tooltip = "Text color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
-bidBackgroundColor = input.color(defval = color.new(color = #BF616A, transp = 90), title = "Bid BG", tooltip = "Background color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
-belowBidTextColor = input.color(defval = color.new(color = #D8DEE9, transp = 20), title = "Below Bid Text", tooltip = "Text color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
+bidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Bid Text", tooltip = "Text color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
+bidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Bid BG", tooltip = "Background color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
+belowBidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Below Bid Text", tooltip = "Text color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 50), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBold = input.bool(defval = true, title = "Bold", inline = "below_bid", group = GROUP_GENERAL)
 
@@ -154,7 +154,7 @@ showRetail = input.bool(defval = true, title = "Show Retail/Amateur", tooltip = 
 retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, tooltip = "Maximum number of retail/amateur prints shown in the table.", group = GROUP_RETAIL)
 retailHeaderBg = input.color(defval = color.new(color = NORD2, transp = 80), title = "Retail Header BG", tooltip = "Background color for the retail section label.", group = GROUP_RETAIL)
 retailMinSize = input.int(defval = 0, title = "Retail Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the retail/amateur section.", group = GROUP_RETAIL)
-retailMaxSize = input.int(defval = 100, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section.", group = GROUP_RETAIL)
+retailMaxSize = input.int(defval = 0, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section. Set to 0 to include every print below the institutional minimum, so no size range falls between the two sections.", group = GROUP_RETAIL)
 
 const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
 
@@ -163,7 +163,7 @@ showInstitutional = input.bool(defval = true, title = "Show Institutional/Profes
 institutionalRows = input.int(defval = 10, title = "Institutional Rows", minval = 1, maxval = 50, tooltip = "Maximum number of institutional/professional prints shown in the table.", group = GROUP_INSTITUTIONAL)
 institutionalHeaderBg = input.color(defval = color.new(color = NORD1, transp = 80), title = "Institutional Header BG", tooltip = "Background color for the institutional section label.", group = GROUP_INSTITUTIONAL)
 institutionalMinSize = input.int(defval = 1000, title = "Institutional Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the institutional/professional section.", group = GROUP_INSTITUTIONAL)
-institutionalMaxSize = input.int(defval = 100000, title = "Institutional Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the institutional/professional section. Set to 0 to allow any size above the minimum.", group = GROUP_INSTITUTIONAL)
+institutionalMaxSize = input.int(defval = 0, title = "Institutional Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the institutional/professional section. Set to 0 to allow any size above the minimum. If capped, prints above the cap fall into the retail section unless its max also excludes them.", group = GROUP_INSTITUTIONAL)
 
 const string GROUP_BLOCK = "🐋 Block Trades"
 
@@ -202,11 +202,15 @@ if tapeEnabled
          ignore_invalid_timeframe = true,
          calc_bars_count   = intrabarLookbackBars
     )
-    tickPrices := requestedTickPrices
-    tickVolumes := requestedTickVolumes
-    tickTimes := requestedTickTimes
-    tickBids := requestedTickBids
-    tickAsks := requestedTickAsks
+    // The request returns na (not arrays) when tick data is unavailable for the
+    // symbol/plan; keep the empty defaults so the realtime fallback still runs.
+    bool lowerTfBatchValid = not na(requestedTickPrices) and not na(requestedTickVolumes) and not na(requestedTickTimes)
+    if lowerTfBatchValid
+        tickPrices := requestedTickPrices
+        tickVolumes := requestedTickVolumes
+        tickTimes := requestedTickTimes
+        tickBids := na(requestedTickBids) ? array.new<float>(size = requestedTickPrices.size(), initial_value = na) : requestedTickBids
+        tickAsks := na(requestedTickAsks) ? array.new<float>(size = requestedTickPrices.size(), initial_value = na) : requestedTickAsks
 else if blockTradesActive
     [requestedTickVolumes, requestedTickTimes] = request.security_lower_tf(
          symbol            = syminfo.tickerid,
@@ -216,8 +220,9 @@ else if blockTradesActive
          ignore_invalid_timeframe = true,
          calc_bars_count   = intrabarLookbackBars
     )
-    tickVolumes := requestedTickVolumes
-    tickTimes := requestedTickTimes
+    if not na(requestedTickVolumes) and not na(requestedTickTimes)
+        tickVolumes := requestedTickVolumes
+        tickTimes := requestedTickTimes
 // PERSISTENT STORAGE
 // varip = variable that persists across script executions (real-time updates)
 // These arrays store validated TickData records that survive script recalculations
@@ -254,7 +259,7 @@ tablePos = switch tablePosition
     => position.top_right
 
 // Create table (var = initialized once, persists across bars)
-var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = tapeEnabled ? backgroundColor : color.new(backgroundColor, 100), border_width = tapeEnabled ? borderWidth : 0, border_color = borderColor, frame_width = tapeEnabled ? frameWidth : 0, frame_color = frameColor)
+var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRows, bgcolor = tapeEnabled ? backgroundColor : color.new(color = backgroundColor, transp = 100), border_width = tapeEnabled ? borderWidth : 0, border_color = borderColor, frame_width = tapeEnabled ? frameWidth : 0, frame_color = frameColor)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🛠️ FUNCTIONS
@@ -296,7 +301,7 @@ f_updateRealtimeBarState(RealtimeBarState state, float barVolume, float barPrice
 f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
     // LTF arrays arrive in chronological order, so the new tick is always newest:
     // skip the linear scan and just push to the front + trim the tail.
-    ticks.unshift(newTick)
+    ticks.unshift(value = newTick)
     if ticks.size() > maxRows
         ticks.pop()
 
@@ -331,29 +336,29 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
     color tickTextColor = defaultTextColor
     color tickBgColor = backgroundColor
     bool useBold = false
-    int cond = currentTick.condition
+    int tickCondition = currentTick.condition
 
-    if cond == COND_AT_ASK
+    if tickCondition == COND_AT_ASK
         conditionText := "at ask"
         tickTextColor := askTextColor
         tickBgColor := askBackgroundColor
-    else if cond == COND_ABOVE_ASK
+    else if tickCondition == COND_ABOVE_ASK
         conditionText := "above ask"
         tickTextColor := aboveAskTextColor
         tickBgColor := aboveAskBackgroundColor
-    else if cond == COND_ABOVE_PRICE
+    else if tickCondition == COND_ABOVE_PRICE
         conditionText := "above price"
         tickTextColor := aboveAskTextColor
         tickBgColor := aboveAskBackgroundColor
-    else if cond == COND_AT_BID
+    else if tickCondition == COND_AT_BID
         conditionText := "at bid"
         tickTextColor := bidTextColor
         tickBgColor := bidBackgroundColor
-    else if cond == COND_BELOW_BID
+    else if tickCondition == COND_BELOW_BID
         conditionText := "below bid"
         tickTextColor := belowBidTextColor
         tickBgColor := belowBidBackgroundColor
-    else if cond == COND_BELOW_PRICE
+    else if tickCondition == COND_BELOW_PRICE
         conditionText := "below price"
         tickTextColor := belowBidTextColor
         tickBgColor := belowBidBackgroundColor
@@ -416,8 +421,8 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
     // Inlined f_isDuplicateLastRecordedTick.
     bool isDuplicatePrint = tickTime == lastRecordedTick.time and tickDirection == lastRecordedTick.direction and tickPrice == lastRecordedTick.price and tickVolume == lastRecordedTick.volume
 
-    bool passesAggressiveFilter = not showAggressiveOnly or tickDirection != 0
-    if passesAggressiveFilter and not isDuplicatePrint
+    if not isDuplicatePrint
+        // Block trades qualify on size alone — the aggressive display filter must not gate them.
         if blockTradesActive and tickVolume >= blockSizeThreshold
             f_recordBlockTradeState(blockState)
         // Bake the render condition in now so the table loop doesn't have to recompute it.
@@ -428,9 +433,12 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
             tickCondition := hasValidQuotes and tickPrice == tickBid ? COND_AT_BID : hasValidQuotes ? COND_BELOW_BID : COND_BELOW_PRICE
         else if hasValidQuotes
             tickCondition := tickPrice == tickAsk ? COND_AT_ASK : (tickPrice == tickBid ? COND_AT_BID : COND_MID)
-        bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickDirection, tickCondition)
-        if storedTick
-            f_updateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
+        // Aggressive = slippage prints only: above the ask / below the bid, or the no-quote price fallback.
+        bool isAggressivePrint = tickCondition == COND_ABOVE_ASK or tickCondition == COND_BELOW_BID or tickCondition == COND_ABOVE_PRICE or tickCondition == COND_BELOW_PRICE
+        if not showAggressiveOnly or isAggressivePrint
+            bool storedTick = f_storeTick(tickPrice, tickVolume, tickTime, tickDirection, tickCondition)
+            if storedTick
+                f_updateLastRecordedTick(lastRecordedTick, tickPrice, tickVolume, tickTime, tickDirection)
     tapeState.tapePrice := tickPrice
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -447,9 +455,9 @@ if barstate.isnew
 // 📰 LOWER-TF TICKS
 if tapeEnabled
     int availableTickCount = tickPrices.size()
-    float currentTailPrice = availableTickCount > 0 ? tickPrices.get(availableTickCount - 1) : na
-    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
-    int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
+    float currentTailPrice = availableTickCount > 0 ? tickPrices.get(index = availableTickCount - 1) : na
+    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(index = availableTickCount - 1) : na
+    int currentTailTime = availableTickCount > 0 ? tickTimes.get(index = availableTickCount - 1) : na
     bool tailTickChanged = availableTickCount > 0 and f_hasTailChanged(tailTracker, currentTailPrice, currentTailVolume, currentTailTime)
     bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
 
@@ -457,11 +465,11 @@ if tapeEnabled
         int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
         // Process all new lower-TF prints so block markers and section routing stay stable on the live bar.
         for tickIndex = processStartIndex to availableTickCount - 1
-            float currentTickPrice = tickPrices.get(tickIndex)
-            float currentTickVolume = tickVolumes.get(tickIndex)
-            int currentTickTime = tickTimes.get(tickIndex)
-            float currentTickBid = tickBids.get(tickIndex)
-            float currentTickAsk = tickAsks.get(tickIndex)
+            float currentTickPrice = tickPrices.get(index = tickIndex)
+            float currentTickVolume = tickVolumes.get(index = tickIndex)
+            int currentTickTime = tickTimes.get(index = tickIndex)
+            float currentTickBid = tickBids.get(index = tickIndex)
+            float currentTickAsk = tickAsks.get(index = tickIndex)
 
             bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
 
@@ -475,23 +483,23 @@ if tapeEnabled
     // ⚡ REALTIME FALLBACK
     bool noFreshLowerTfUpdate = not newTicksThisExec
     if barstate.isrealtime
-        float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
+        float realtimeVolumeDelta = math.max(volume - nz(source = realtimeBarState.volume), 0)
         bool realtimePrintReady = realtimeVolumeDelta >= minimumSize and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
         if realtimePrintReady and noFreshLowerTfUpdate
             f_processAndStoreTick(close, realtimeVolumeDelta, timenow, bid, ask)
         f_updateRealtimeBarState(realtimeBarState, volume, close, timenow)
 else if blockTradesActive
     int availableTickCount = tickVolumes.size()
-    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(availableTickCount - 1) : na
-    int currentTailTime = availableTickCount > 0 ? tickTimes.get(availableTickCount - 1) : na
+    float currentTailVolume = availableTickCount > 0 ? tickVolumes.get(index = availableTickCount - 1) : na
+    int currentTailTime = availableTickCount > 0 ? tickTimes.get(index = availableTickCount - 1) : na
     bool tailTickChanged = availableTickCount > 0 and f_hasBlockTailChanged(tailTracker, currentTailVolume, currentTailTime)
     bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
 
     if newTicksThisExec
         int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
         for tickIndex = processStartIndex to availableTickCount - 1
-            float currentTickVolume = tickVolumes.get(tickIndex)
-            int currentTickTime = tickTimes.get(tickIndex)
+            float currentTickVolume = tickVolumes.get(index = tickIndex)
+            int currentTickTime = tickTimes.get(index = tickIndex)
             bool isCompleteRecord = not na(currentTickVolume) and not na(currentTickTime) and currentTickVolume > 0 and currentTickTime > 0
             if isCompleteRecord and currentTickVolume >= blockSizeThreshold
                 f_recordBlockTradeState(blockState)
@@ -501,7 +509,7 @@ else if blockTradesActive
 
     bool noFreshLowerTfUpdate = not newTicksThisExec
     if barstate.isrealtime
-        float realtimeVolumeDelta = math.max(volume - nz(realtimeBarState.volume), 0)
+        float realtimeVolumeDelta = math.max(volume - nz(source = realtimeBarState.volume), 0)
         bool realtimeBlockReady = realtimeVolumeDelta >= blockSizeThreshold and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
         if realtimeBlockReady and noFreshLowerTfUpdate
             f_recordBlockTradeState(blockState)
