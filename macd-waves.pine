@@ -93,7 +93,7 @@ cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1,
      tooltip = "SMA smoothing producing %D — the cycle line whose 45/55 crossings open and close the half-cycle wave windows.", group = GROUP_WAVES)
 waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color",
      tooltip = "Label color for waves counted under an up MOM trend (matches ma-waves' wave colors).", group = GROUP_WAVES)
-waveDownColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Down Trend Wave Color",
+waveDownColor = input.color(defval = color.new(color = NORD11, transp = 10), title = "Down Trend Wave Color",
      tooltip = "Label color for waves counted under a down MOM trend.", group = GROUP_WAVES)
 waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40,
      tooltip = "Text size of the wave number labels.", group = GROUP_WAVES)

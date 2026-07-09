@@ -1032,36 +1032,35 @@ enum TrendDir
 
 ### Current Indicators
 
-1. **`fundamental-view-indicator.pine`**
+1. **`composite-breadth.pine`**
+   - Intraday market-breadth composite (VOLD, ADD, PCTABOVEVWAP, CUMTICK)
+   - Consensus-weighted score with TICK-extreme and VOLD session-extreme
+     context layers; session-anchored state resets
+   - Uses `request.security()` against the USI breadth feeds
+
+2. **`fundamental-view-indicator.pine`**
    - Displays comprehensive fundamental data table
    - Includes: Market cap, ROE, float, analyst recommendations, price targets, EPS/revenue history
    - Vertical two-column table (label + value)
    - Uses `request.financial()` and `request.earnings()`
 
-2. **`technical-view-indicator.pine`**
+3. **`technical-view-indicator.pine`**
    - Single-row horizontal table with technical metrics
    - Includes: Market cap, float, volume, dollar volume, P/E, P/S, ADR, ATR, RPS
    - Uses `request.financial()` and `request.security()`
 
-3. **`ma-waves.pine`**
+4. **`ma-waves.pine`**
    - Moving average wave counting indicator (Barry Burns methodology)
    - Uses custom type definitions (Trend, Wave, Cycle, Price)
    - Implements wave labeling with impulses and retracements
    - Uses `label.new()` for wave annotations
-
-4. **`options-gex-levels.pine`**
-   - Options gamma exposure (GEX) levels indicator
-   - Parses CSV data from `input.text_area()`
-   - Renders horizontal lines and zones for key GEX levels
-   - Uses arrays to manage lines/labels/boxes
 
 5. **`macd-waves.pine`**
    - Advanced MACD with wave identification
    - Identifies momentum waves based on MACD structure
 
 6. **`stochastic.pine`**
-   - Standard Stochastic Oscillator
-   - Customizable bands and styling
+   - Barry Burns stochastic (5/2/3, 80/20 + 45 mid) with Second Chance patterns
 
 7. **`support-resistance.pine`**
    - Multi-indicator cluster map for support and resistance
@@ -1070,9 +1069,22 @@ enum TrendDir
    - Uses `request.security()`, `request.footprint()`, and drawing objects
    - Renders in `barstate.islast` with line/label/box arrays
 
-8. **Market breadth indicators**
-   - `market-updown-volume-delta.pine` - NASDAQ 100 up/down volume delta
-   - `market-advdecl-issues-delta.pine` - NASDAQ 100 advance/decline delta
+8. **`structure-and-levels.pine`**
+   - Price structure and key levels engine
+
+9. **`fibonacci.pine`** / **`floor-pivots.pine`** / **`major-swings.pine`**
+   - Standalone level engines (fib retracements, floor pivots, strength-scored
+     major swings)
+
+10. **`options-gex-levels.pine`**
+    - Options gamma exposure (GEX) levels indicator
+    - Parses CSV data from `input.text_area()`
+    - Renders horizontal lines and zones for key GEX levels
+    - Uses arrays to manage lines/labels/boxes
+
+11. **`quote-window.pine`** / **`ticker-tape.pine`** / **`hoi.pine`**
+    - Table-based information displays (quote panel, multi-symbol tape,
+      high-of-interest levels)
 
 ### Common Features Across Indicators
 
