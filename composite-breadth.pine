@@ -38,15 +38,19 @@ const color NORD15 = #B48EAD
 // is too noisy; the cumulative slope captures the same information with
 // persistence baked in. The composite is a CONFIRMATION instrument: price
 // discovery happens in the futures, breadth answers "did the cash basket
-// ratify the move". On top of it sit two alert-grade context layers:
-// intrabar TICK extreme markers (exhaustion — Barry's ±1000 zones) and
-// alert-only VOLD session-extreme events. This section owns its inputs,
-// data requests, calculations, color prep, and plot-ready outputs.
+// ratify the move". On top of it sit alert-grade context layers: intrabar
+// TICK extreme markers (exhaustion — Barry's ±1000 zones, colored by the
+// opening-volume regime), alert-only VOLD session-extreme events, zero-line
+// persistence tracking (dwell time + persistent-flip alerts), the Raschke
+// opening-volume regime classifier, and the first-hour trend-day tell. This
+// section owns its inputs, data requests, calculations, color prep, and
+// plot-ready outputs.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_COMPOSITE_BREADTH_MARKET     = "🏛️ Market"
 const string GROUP_COMPOSITE_BREADTH_WEIGHTS    = "⚖️ Weights"
 const string GROUP_COMPOSITE_BREADTH_SIGNAL     = "🧮 Signal"
 const string GROUP_COMPOSITE_BREADTH_TICK       = "⚡ TICK Context"
+const string GROUP_COMPOSITE_BREADTH_CONTEXT    = "🕰️ Session Context"
 const string GROUP_COMPOSITE_BREADTH_DISPLAY    = "📋 Display"
 
 const float CBI_SCALE_MAX               = 100.0
@@ -66,6 +70,10 @@ const float CBI_TICK_BIAS_DAYS          = 20.0     // Steenbarger Adjusted-TICK 
 const int   CBI_FEED_HEALTH_GRACE_BARS  = 5        // bars after session open before a missing required feed triggers the log.warning — gives the USI feeds time to deliver their first non-na bar
 const int   CBI_VOLD_EXTREME_REARM_BARS = 10       // a VOLD-delta new session high/low only fires as an event when the prior extreme stood for at least this many bars — suppresses the every-bar "new extreme" spam of a steady trend leg
 const int   CBI_TIME_DIM_EXTRA_TRANSP   = 35       // extra transparency added to the composite line during the lunch trough and MOC window when time-of-day dimming is on
+const float CBI_OPEN_VOL_WINDOW_MINUTES = 30.0     // opening-volume capture window — Raschke's number-one day-type criterion is FIRST-30-MINUTE NYSE volume ("The very number one criteria I look at is volume and I will usually look at the first 30-minute volume"). Measured as the VOLD total (UPVOL+DNVOL, already requested) at the 30-minute mark — no extra feed needed
+const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sessions) for the opening-volume baseline the regime ratio compares against — cross-session EMA, same seeding pattern as the TICK bias mean
+const float CBI_TREND_TELL_START_MINUTES = 10.0    // trend-day tell window START — Raschke: opening breadth readings are gap-distorted for the first 5–10 minutes ("don't look at the breadth reading in the first five or ten minutes"), and ADD's earliest prints largely encode overnight gap direction, so the tell only arms after minute 10
+const float CBI_TREND_TELL_END_MINUTES  = 60.0     // trend-day tell window END — the backtested tell (TOS Indicators 2014–2024: extreme TICK inside the first 60 minutes → ~70% trend day, >80% with ADD/VOLD agreement) is specifically a FIRST-HOUR read; an extreme print at 13:00 is not the same evidence
 // NYSE RTH session windows (ET, Mon–Fri). RTH_OPEN anchors every session-wide
 // state reset; LUNCH is the documented intraday volume/volatility trough
 // (low-information breadth); MOC is the market-on-close rebalancing window
@@ -201,6 +209,82 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
      group = GROUP_COMPOSITE_BREADTH_TICK
  )
 
+// ─── Session context (persistence / volume regime / trend-day tell) ──────────
+// Research round 2026-07-10 (deep research, adversarially verified). Three
+// additions, all layered ON TOP of the tuned composite engine — none of them
+// touch the weighted sum, the consensus multiplier, or the EMAs:
+//   1. Zero-line PERSISTENCE — Steenbarger's verified trend-day criteria are
+//      persistence statements ("cumulative TICK stays positive and rising
+//      through the session", "%>VWAP remains above 50% through the session"),
+//      so the strongest confirmation read is how long the composite has HELD
+//      a side of zero, not where it is right now.
+//   2. Opening-volume REGIME (Raschke) — first-30-min volume vs its trailing
+//      mean classifies the day (expansion vs rotation), which decides whether
+//      a TICK extreme reads as exhaustion-fade (light volume) or continuation
+//      fuel (good volume).
+//   3. TREND-DAY TELL — extreme intrabar TICK inside the first hour with ADD
+//      and VOLD agreeing is a backtested early trend-day identifier.
+bool compositeBreadthShowStatusBadge = input.bool(
+     defval = true,
+     title = "Session Status Badge",
+     tooltip = "Single-cell table (top right) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), and the opening-volume regime ratio. This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+float compositeBreadthPersistFlipMinutes = input.float(
+     defval = 45.0,
+     title = "Persistent-Flip Minimum Hold (minutes)",
+     minval = 10.0,
+     maxval = 180.0,
+     step = 5.0,
+     tooltip = "A zero-line cross only fires the persistent-flip alert when the composite held the PRIOR side for at least this long (bar count derived from the chart timeframe). Filters the meaningless chop-flips near zero: a flip after a 90-minute hold is a regime statement, a flip after 4 minutes is noise. No research-validated dwell threshold exists (open question in the corpus) — 45 minutes ≈ one directional leg on the 30–120 min swings this composite is tuned to ratify; adjust to taste.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+bool compositeBreadthUseOpenVolRegime = input.bool(
+     defval = true,
+     title = "Opening-Volume Regime (Raschke)",
+     tooltip = "Classify each session by its first-30-minute volume (VOLD total = UPVOL+DNVOL at the 30-min mark) against a trailing 10-session mean. Raschke's number-one day-type criterion, and the regime that decides TICK-extreme interpretation: on GOOD-volume days extremes are momentum/continuation (\"you want to use the TICKS as a momentum indicator\"); on LIGHT-volume days extremes coincide with price extremes and are fade-friendly. Drives the TICK extreme marker color (orange = expansion/continuation, blue = light/fade-friendly, yellow = neutral or baseline still warming up) and the badge readout. Needs ~10 sessions of chart history to seed the baseline.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+float compositeBreadthOpenVolExpansionRatio = input.float(
+     defval = 1.2,
+     title = "Expansion Regime Ratio",
+     minval = 1.0,
+     maxval = 3.0,
+     step = 0.05,
+     tooltip = "Opening volume at or above this multiple of the trailing mean = range-expansion (trend-capable) regime. Raschke's rule is categorical (\"good volume day\" vs \"light volume day\") with no published number — 1.2× (20% above average) is a reasonable default; re-validate on current data rather than trusting it (breadth thresholds decay across regimes, Qi & Zhao 2008).",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+float compositeBreadthOpenVolLightRatio = input.float(
+     defval = 0.8,
+     title = "Light Regime Ratio",
+     minval = 0.3,
+     maxval = 1.0,
+     step = 0.05,
+     tooltip = "Opening volume at or below this multiple of the trailing mean = light-volume (rotation, fade-friendly) regime. Between the two ratios the day is classified neutral.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+bool compositeBreadthShowTrendTell = input.bool(
+     defval = true,
+     title = "Trend-Day Tell Marker",
+     tooltip = "Purple TD marker on the composite line when, between minute 10 and minute 60 of the session, the TICK feed prints an intrabar extreme beyond the tell threshold WHILE both VOLD and ADD confidences agree with its direction. Backtested third-party (TOS Indicators, 2014–2024): ~70% trend-day hit rate on the TICK extreme alone, >80% with ADD/VOLD agreement; Steenbarger cites the same early-TICK tell independently. Fires at most ONCE per session — it is a day-type classification, not a repeating signal. The matching alerts fire whether or not the marker is shown.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+float compositeBreadthTrendTellThreshold = input.float(
+     defval = 1500.0,
+     title = "Trend Tell TICK Threshold",
+     minval = 1000.0,
+     maxval = 2000.0,
+     step = 50.0,
+     tooltip = "Intrabar TICK high/low magnitude that arms the trend-day tell inside the first hour. 1500 is the backtested TOS Indicators level — deliberately far beyond the ±985 exhaustion threshold: ±1000 is \"stretched\", ±1500 in the first hour is \"one-sided participation broad enough to sustain a trend day\". Applied as-is to whichever TICK feed is resolved (same no-TICKQ-widening decision as the extreme threshold).",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
 // ─── Display ──────────────────────────────────────────────────────────────────
 bool compositeBreadthShowSignalLine = input.bool(
      defval = true,
@@ -324,6 +408,10 @@ string compositeBreadthTickSymbol = compositeBreadthTickNyseOnly ?
 int compositeBreadthCumTickSlopeWindow  = math.max(2, math.round(number = CBI_CUMTICK_SLOPE_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthSignalAlertGateBars = math.max(1, math.round(number = CBI_SIGNAL_ALERT_GATE_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthTickBiasWindowBars  = math.max(10, math.round(number = CBI_TICK_BIAS_DAYS * 390.0 * 60.0 / timeframe.in_seconds()))
+int compositeBreadthOpenVolWindowBars   = math.max(1, math.round(number = CBI_OPEN_VOL_WINDOW_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthTrendTellStartBars  = math.max(1, math.round(number = CBI_TREND_TELL_START_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthTrendTellEndBars    = math.max(2, math.round(number = CBI_TREND_TELL_END_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthPersistFlipMinBars  = math.max(1, math.round(number = compositeBreadthPersistFlipMinutes * 60.0 / timeframe.in_seconds()))
 float compositeBreadthTickScaleFactor  = compositeBreadthTickSymbol == "USI:TICKQ" ? CBI_TICKQ_SCALE_FACTOR : 1.0
 float compositeBreadthTickScale        = CBI_TICK_FIXED_SCALE * compositeBreadthTickScaleFactor
 float compositeBreadthCumTickSlopeScale = compositeBreadthCumTickSlopeWindow * compositeBreadthTickScale
@@ -855,6 +943,66 @@ else
 bool compositeBreadthSignalCrossArmed = compositeBreadthBarsSinceSessionOpen > compositeBreadthSignalAlertGateBars
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ⏳ ZERO-LINE PERSISTENCE
+// Steenbarger's verified trend-day criteria are persistence statements, not
+// level statements: "the cumulative NYSE TICK on the day stays positive and
+// rising through the session", "the percentage of NYSE stocks trading above
+// their day's VWAP remains above 50% through the session". The composite's
+// strongest confirmation read is therefore dwell time — how long it has HELD
+// one side of zero — which nothing on the chart surfaced until now.
+//
+// Tracked per session (reset on the 09:30 edge, counted only on bars where
+// the display line is valid): bars spent above/below zero, the current side,
+// and how many bars that side has been held. A bar sitting exactly on 0.0
+// carries the previous side rather than counting as a flip — the flip must be
+// a real sign change.
+//
+// The persistent-flip event fires when the composite crosses zero AFTER
+// holding the prior side for at least compositeBreadthPersistFlipMinBars —
+// a chop-flip four minutes after the last one is noise, a flip after a
+// 90-minute hold is a regime statement. Because all state reseeds at 09:30,
+// the earliest possible flip is minFlipMinutes into the session, so the event
+// needs no additional open-noise gating.
+// ═════════════════════════════════════════════════════════════════════════════
+var int compositeBreadthZeroSideSign     = 0
+var int compositeBreadthZeroSideBars     = 0
+var int compositeBreadthBarsAboveZero    = 0
+var int compositeBreadthBarsBelowZero    = 0
+var int compositeBreadthSessionValidBars = 0
+bool compositeBreadthPersistentFlipUp   = false
+bool compositeBreadthPersistentFlipDown = false
+
+if compositeBreadthSessionJustOpened
+    compositeBreadthZeroSideSign     := 0
+    compositeBreadthZeroSideBars     := 0
+    compositeBreadthBarsAboveZero    := 0
+    compositeBreadthBarsBelowZero    := 0
+    compositeBreadthSessionValidBars := 0
+
+if not na(compositeBreadthDisplayLine)
+    compositeBreadthSessionValidBars += 1
+    if compositeBreadthDisplayLine > 0.0
+        compositeBreadthBarsAboveZero += 1
+    else if compositeBreadthDisplayLine < 0.0
+        compositeBreadthBarsBelowZero += 1
+    int compositeBreadthZeroSideNew = compositeBreadthDisplayLine > 0.0 ? 1 :
+         compositeBreadthDisplayLine < 0.0 ? -1 : compositeBreadthZeroSideSign
+    if compositeBreadthZeroSideNew != compositeBreadthZeroSideSign
+        bool compositeBreadthHeldLongEnough = compositeBreadthZeroSideSign != 0 and
+             compositeBreadthZeroSideBars >= compositeBreadthPersistFlipMinBars
+        compositeBreadthPersistentFlipUp   := compositeBreadthHeldLongEnough and compositeBreadthZeroSideNew == 1
+        compositeBreadthPersistentFlipDown := compositeBreadthHeldLongEnough and compositeBreadthZeroSideNew == -1
+        compositeBreadthZeroSideSign := compositeBreadthZeroSideNew
+        compositeBreadthZeroSideBars := 1
+    else if compositeBreadthZeroSideSign != 0
+        compositeBreadthZeroSideBars += 1
+
+// Dwell ratio of the CURRENT side — the badge's "held X% of session" number.
+float compositeBreadthDwellRatio = compositeBreadthSessionValidBars > 0 ?
+     (compositeBreadthZeroSideSign == 1  ? compositeBreadthBarsAboveZero / float(compositeBreadthSessionValidBars) :
+      compositeBreadthZeroSideSign == -1 ? compositeBreadthBarsBelowZero / float(compositeBreadthSessionValidBars) : na) : na
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 📈 VOLD SESSION EXTREMES
 // Barry reads the up/down volume-difference line making fresh session
 // extremes as commitment. The ratio form fed to the composite
@@ -895,6 +1043,60 @@ if barstate.isconfirmed and not na(compositeBreadthVoldDelta)
         compositeBreadthVoldBarsSinceLow  := 0
     else
         compositeBreadthVoldBarsSinceLow += 1
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🔊 OPENING-VOLUME REGIME (Raschke)
+// Raschke's number-one day-type criterion: first-30-minute NYSE volume. High
+// opening volume = range-expansion / trend-capable day; light = rotation.
+// This is also the regime that resolves TICK-extreme interpretation — her
+// verified rule is volume-conditional: "If it's a light volume day TICKS very
+// often will match the extreme of the move" (exit/fade read), "If you've got
+// a good volume day, you want to use the TICKS as a momentum indicator"
+// (continuation read). The regime note in the TICK extremes section was
+// comment-only until now; this flag turns it into data.
+//
+// Volume source: the VOLD TOTAL (UPVOL + DNVOL) already requested for the
+// composite — total up-volume plus down-volume ≈ exchange volume minus
+// unchanged, and both sides of the ratio are session-cumulative, so its value
+// at the 30-minute mark IS the first-30-min volume. No extra request needed.
+//
+// Baseline: cross-session EMA (~10 sessions) of the captured opening volume,
+// seeded from the first captured session like the TICK bias mean. Today is
+// classified against the mean of PRIOR days first, then folded in. Until the
+// baseline exists (first session on a fresh chart load) the regime is
+// UNKNOWN, which consumers treat like neutral.
+//
+// Capture fires on the first CONFIRMED bar at/after the 30-minute live-bar
+// mark with a valid VOLD total (na gaps push it to the next valid bar). If
+// the feeds were dead long enough that the mark is only reached past twice
+// the window, the session is skipped entirely — a "first 30 minutes" captured
+// at 11:00 would poison the baseline.
+// ═════════════════════════════════════════════════════════════════════════════
+var float compositeBreadthOpenVolMean     = na
+var bool  compositeBreadthOpenVolCaptured = false
+var float compositeBreadthOpenVolRatio    = na
+var int   compositeBreadthVolRegime       = 0      // 1 = expansion, -1 = light, 0 = neutral (or unknown)
+var bool  compositeBreadthVolRegimeKnown  = false
+
+if compositeBreadthSessionJustOpened
+    compositeBreadthOpenVolCaptured := false
+    compositeBreadthOpenVolRatio    := na
+    compositeBreadthVolRegime       := 0
+    compositeBreadthVolRegimeKnown  := false
+
+if compositeBreadthUseOpenVolRegime and not compositeBreadthOpenVolCaptured and barstate.isconfirmed and
+     compositeBreadthBarsSinceSessionOpen >= compositeBreadthOpenVolWindowBars and
+     compositeBreadthBarsSinceSessionOpen <= compositeBreadthOpenVolWindowBars * 2 and
+     not na(compositeBreadthVoldTotal) and compositeBreadthVoldTotal > 0.0
+    compositeBreadthOpenVolCaptured := true
+    if not na(compositeBreadthOpenVolMean) and compositeBreadthOpenVolMean > 0.0
+        compositeBreadthOpenVolRatio   := compositeBreadthVoldTotal / compositeBreadthOpenVolMean
+        compositeBreadthVolRegimeKnown := true
+        compositeBreadthVolRegime      := compositeBreadthOpenVolRatio >= compositeBreadthOpenVolExpansionRatio ? 1 :
+             compositeBreadthOpenVolRatio <= compositeBreadthOpenVolLightRatio ? -1 : 0
+    float compositeBreadthOpenVolAlpha = 2.0 / (CBI_OPEN_VOL_MEAN_DAYS + 1.0)
+    compositeBreadthOpenVolMean := na(compositeBreadthOpenVolMean) ? compositeBreadthVoldTotal :
+         compositeBreadthOpenVolAlpha * compositeBreadthVoldTotal + (1.0 - compositeBreadthOpenVolAlpha) * compositeBreadthOpenVolMean
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚡ TICK EXTREMES (Barry's method)
@@ -948,6 +1150,56 @@ if compositeBreadthTickExtremeDownNew
     compositeBreadthTickExtremeDownPending := false
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 🚩 TREND-DAY TELL
+// The one leading signal in the research corpus with a backtest behind it:
+// extreme TICK early in the session identifies an emerging trend day (TOS
+// Indicators 2014–2024: intrabar TICK beyond ±1500 inside the first 60 min →
+// ~70% trend-day rate, >80% when ADD and VOLD agree; Steenbarger cites the
+// same tell independently via Market Tells). This slots into the existing
+// doctrine that opening LEVELS are information — only crosses are gated.
+//
+// Window: minute 10 to minute 60. The start offset respects Raschke's
+// gap-distortion rule and this file's own note that ADD's earliest prints
+// encode overnight gap direction — requiring ADD agreement at 09:32 would
+// mostly re-measure the gap, not participation.
+//
+// One-shot per session, either direction, first trigger wins: this is a
+// day-type CLASSIFICATION, not a repeating signal, and a session that prints
+// +1500-with-agreement and later −1500-with-agreement inside the same first
+// hour has no classifiable type anyway. Direction requires BOTH VOLD and ADD
+// confidences to share the extreme's sign — the >80% variant of the backtest.
+// The marker rides the display line like the TICK extreme triangles; in the
+// rare case the display line is na on the trigger bar the marker is skipped
+// but the alert still fires (no pending re-arm — a day-type call delivered
+// late is a different, weaker claim than one delivered on the trigger bar).
+// ═════════════════════════════════════════════════════════════════════════════
+var bool compositeBreadthTrendTellFired = false
+bool compositeBreadthTrendTellUp   = false
+bool compositeBreadthTrendTellDown = false
+
+if compositeBreadthSessionJustOpened
+    compositeBreadthTrendTellFired := false
+
+bool compositeBreadthInTellWindow = compositeBreadthBarsSinceSessionOpen > compositeBreadthTrendTellStartBars and
+     compositeBreadthBarsSinceSessionOpen <= compositeBreadthTrendTellEndBars
+
+if not compositeBreadthTrendTellFired and compositeBreadthInTellWindow
+    bool compositeBreadthTellUpCondition = not na(compositeBreadthTickHighValue) and
+         compositeBreadthTickHighValue >= compositeBreadthTrendTellThreshold and
+         not na(compositeBreadthVoldConfidence) and compositeBreadthVoldConfidence > 0.0 and
+         not na(compositeBreadthAddConfidence)  and compositeBreadthAddConfidence  > 0.0
+    bool compositeBreadthTellDownCondition = not na(compositeBreadthTickLowValue) and
+         compositeBreadthTickLowValue <= -compositeBreadthTrendTellThreshold and
+         not na(compositeBreadthVoldConfidence) and compositeBreadthVoldConfidence < 0.0 and
+         not na(compositeBreadthAddConfidence)  and compositeBreadthAddConfidence  < 0.0
+    if compositeBreadthTellUpCondition
+        compositeBreadthTrendTellUp    := true
+        compositeBreadthTrendTellFired := true
+    else if compositeBreadthTellDownCondition
+        compositeBreadthTrendTellDown  := true
+        compositeBreadthTrendTellFired := true
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS
 // ═════════════════════════════════════════════════════════════════════════════
 // Time-of-day dimming: extra transparency on the composite line during the
@@ -960,7 +1212,7 @@ color compositeBreadthLineBaseColor = f_compositeBreadthProgressiveColor(
  )
 bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
 color compositeBreadthLineColor = compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow and not na(compositeBreadthLineBaseColor) ?
-     color.new(color = compositeBreadthLineBaseColor, transp = math.min(95.0, color.t(compositeBreadthLineBaseColor) + CBI_TIME_DIM_EXTRA_TRANSP)) :
+     color.new(color = compositeBreadthLineBaseColor, transp = math.min(95.0, color.t(color = compositeBreadthLineBaseColor) + CBI_TIME_DIM_EXTRA_TRANSP)) :
      compositeBreadthLineBaseColor
 
 // Zero hline color stays solid; the display toggle handles show/hide. Using
@@ -997,13 +1249,54 @@ bgcolor(color = compositeBreadthShowSessionDivider and compositeBreadthSessionJu
 plot(series = compositeBreadthDisplayLine, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
 plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal", color = NORD3, linewidth = 2)
 
-// TICK extreme markers — Barry's exhaustion zones. NORD13 triangles at 50%
-// transparency, sitting above/below the composite line: up-triangle above on
-// extreme high, down-triangle below on extreme low. Read as "watch next cycle
-// on price" cues, not entries.
-color compositeBreadthTickExtremeColor = color.new(color = NORD13, transp = 50)
+// TICK extreme markers — Barry's exhaustion zones, triangles at 50%
+// transparency sitting above/below the composite line: up-triangle above on
+// extreme high, down-triangle below on extreme low. The color carries the
+// opening-volume regime (Raschke's volume-conditional TICK read): BLUE on a
+// light-volume day — the extreme likely coincides with the price extreme,
+// fade-friendly exhaustion; ORANGE on an expansion day — the extreme is
+// continuation fuel, look to enter pullbacks WITH it, don't fade; YELLOW when
+// the regime is neutral or the baseline is still warming up (the original
+// read-with-caution meaning).
+color compositeBreadthTickExtremeColor = color.new(
+     color = compositeBreadthVolRegime == 1 ? NORD12 : compositeBreadthVolRegime == -1 ? NORD9 : NORD13,
+     transp = 50)
 plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeUpNew   ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Up",   style = shape.triangleup,   location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny, display = compositeBreadthTickShowExtremes ? display.all : display.none)
 plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtremeDownNew ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset : na, title = "TICK Extreme Down", style = shape.triangledown, location = location.absolute, color = compositeBreadthTickExtremeColor, size = size.tiny, display = compositeBreadthTickShowExtremes ? display.all : display.none)
+
+// Trend-day tell — purple TD marker, at most one per session. labelup sits
+// BELOW the line pointing up (up-tell), labeldown ABOVE pointing down. Offset
+// doubles the TICK-extreme offset so a tell and an extreme landing on nearby
+// bars don't overlap.
+plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellUp   and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Up",   style = shape.labelup,   location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
+plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellDown and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Down", style = shape.labeldown, location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
+
+// Session status badge — the persistence + regime readout, one cell top-right,
+// rebuilt only on the last bar. Side arrow + dwell share + hold time answer
+// Steenbarger's confirmation question ("has breadth HELD a side all session?");
+// the volume line answers Raschke's ("what kind of day is this?").
+var table compositeBreadthStatusTable = table.new(position = position.top_right, columns = 1, rows = 1)
+if compositeBreadthShowStatusBadge and barstate.islast
+    string compositeBreadthSideText = compositeBreadthZeroSideSign == 1 ? "▲" : compositeBreadthZeroSideSign == -1 ? "▼" : "—"
+    string compositeBreadthDwellText = na(compositeBreadthDwellRatio) ? "" :
+         " " + str.tostring(value = math.round(number = compositeBreadthDwellRatio * 100.0)) + "% of session"
+    string compositeBreadthHoldText = compositeBreadthZeroSideSign == 0 ? "" :
+         " · held " + str.tostring(value = math.round(number = compositeBreadthZeroSideBars * timeframe.in_seconds() / 60.0)) + "m"
+    string compositeBreadthRegimeText = not compositeBreadthUseOpenVolRegime ? "" :
+         not compositeBreadthVolRegimeKnown ? " · open vol —" :
+         " · open vol " + str.tostring(value = compositeBreadthOpenVolRatio, format = "#.##") + "×" +
+         (compositeBreadthVolRegime == 1 ? " (expansion)" : compositeBreadthVolRegime == -1 ? " (light)" : " (neutral)")
+    color compositeBreadthBadgeTextColor = compositeBreadthZeroSideSign == 1 ? NORD8 :
+         compositeBreadthZeroSideSign == -1 ? NORD11 : NORD4
+    table.cell(
+         table_id = compositeBreadthStatusTable,
+         column = 0,
+         row = 0,
+         text = compositeBreadthSideText + compositeBreadthDwellText + compositeBreadthHoldText + compositeBreadthRegimeText,
+         text_color = compositeBreadthBadgeTextColor,
+         text_size = size.small,
+         bgcolor = color.new(color = NORD1, transp = 20)
+     )
 
 // Feed-health badge — one persistent label updated in-place each bar via
 // label.set_*() (more efficient than the delete+recreate pattern; TradingView
@@ -1059,3 +1352,14 @@ alertcondition(condition = compositeBreadthTickExtremeDownNew, title = "TICK ext
 // difference line).
 alertcondition(condition = compositeBreadthVoldNewSessionHigh, title = "VOLD new session high (after pause)", message = "Up/down volume difference broke to a fresh session high after holding a range — fresh volume commitment on the buy side.")
 alertcondition(condition = compositeBreadthVoldNewSessionLow,  title = "VOLD new session low (after pause)",  message = "Up/down volume difference broke to a fresh session low after holding a range — fresh volume commitment on the sell side.")
+
+// Persistent-flip alerts — zero-line cross after the prior side was held for
+// at least the configured minimum. State reseeds at 09:30, so the earliest
+// possible fire is minFlipMinutes into the session — no open-noise gate needed.
+alertcondition(condition = compositeBreadthPersistentFlipUp,   title = "Composite persistent flip UP",   message = "Composite breadth crossed above zero after a persistent hold below — potential regime change, not chop.")
+alertcondition(condition = compositeBreadthPersistentFlipDown, title = "Composite persistent flip DOWN", message = "Composite breadth crossed below zero after a persistent hold above — potential regime change, not chop.")
+
+// Trend-day tell alerts — extreme first-hour TICK with VOLD and ADD agreeing.
+// One-shot per session; fires whether or not the TD marker is displayed.
+alertcondition(condition = compositeBreadthTrendTellUp,   title = "Probable trend day UP",   message = "Extreme positive TICK inside the first hour with VOLD and ADD agreeing — backtested upside trend-day tell. Favor with-trend entries; do not fade TICK extremes today.")
+alertcondition(condition = compositeBreadthTrendTellDown, title = "Probable trend day DOWN", message = "Extreme negative TICK inside the first hour with VOLD and ADD agreeing — backtested downside trend-day tell. Favor with-trend entries; do not fade TICK extremes today.")

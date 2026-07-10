@@ -1036,6 +1036,9 @@ enum TrendDir
    - Intraday market-breadth composite (VOLD, ADD, PCTABOVEVWAP, CUMTICK)
    - Consensus-weighted score with TICK-extreme and VOLD session-extreme
      context layers; session-anchored state resets
+   - Context layers: zero-line persistence (dwell/persistent-flip),
+     opening-volume regime classifier, first-hour trend-day tell, session
+     status badge (table on `barstate.islast`)
    - Uses `request.security()` against the USI breadth feeds
 
 2. **`fundamental-view-indicator.pine`**

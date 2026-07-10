@@ -156,7 +156,7 @@ var float prevDayHigh = na
 var float prevDayLow = na
 var float prevDayClose = na
 if confirmedBar and showPreviousDay
-    [requestedPrevDayHigh, requestedPrevDayLow, requestedPrevDayClose] = request.security(symbol = sharedRegularSymbol, timeframe = "D", expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+    [requestedPrevDayHigh, requestedPrevDayLow, requestedPrevDayClose] = request.security(symbol = sharedRegularSymbol, timeframe = "D", expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
     prevDayHigh := requestedPrevDayHigh
     prevDayLow := requestedPrevDayLow
     prevDayClose := requestedPrevDayClose
@@ -164,22 +164,30 @@ if confirmedBar and showPreviousDay
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
 // Draws each level from the current session start to a small right extension,
-// with labels offset left of the current bar. Pivot line width and opacity
-// scale with level weight so PP/S1/R1 read stronger than the outer rungs.
+// with the legend labels anchored at the session-start bar so each day's
+// level names sit at the left end of their lines. Pivot line width and
+// opacity scale with level weight so PP/S1/R1 read stronger than the outer
+// rungs.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_RENDER = "⚙️ Render"
 
 int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all level labels.", group = GROUP_RENDER)
 int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
-int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
+int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts each label above its line by the chosen number of minimum ticks.", group = GROUP_RENDER)
 // Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
 // the extend input stays at 400 to keep a safe margin from that limit.
 int renderExtendBars = input.int(defval = 4, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right session-anchored levels extend beyond the current bar.", group = GROUP_RENDER)
-int renderLabelRightBars = input.int(defval = 80, title = "Label Right Bars", minval = 1, maxval = 1000, tooltip = "How far left from the current bar labels should sit.", group = GROUP_RENDER)
 color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by level labels.", group = GROUP_RENDER)
 
-// Session-start anchor every rendered level draws from.
-bool isNewSession = ta.change(source = time(timeframe = "D")) != 0
+// Session-start anchor every rendered level draws from. Anchored to the first
+// REGULAR-session bar (session.isfirstbar_regular), not the daily-bar time
+// change: time("D") flips on the first bar of the CALENDAR day, which on an
+// extended-hours chart is a pre-market bar (04:00 ET on stocks) — the day's
+// levels would start drawing inside the overnight session. The _regular
+// variant fires at the regular-session open on both RTH-only and extended
+// charts, keeping the anchor consistent with the session-modified ticker the
+// level VALUES are requested from.
+bool isNewSession = session.isfirstbar_regular
 bool confirmedNewSession = confirmedBar and isNewSession
 var int currentSessionStartBar = bar_index
 if confirmedNewSession
@@ -199,15 +207,20 @@ f_levelLineWidth(int levelWeight) =>
     levelWeight >= 3 ? 3 : levelWeight == 2 ? 2 : 1
 
 f_pivotDisplayColor(int levelWeight) =>
-    adjustedTransp = levelWeight >= 3 ? math.max(0, color.t(pivotLevelColor) - 20) : levelWeight == 2 ? math.max(0, color.t(pivotLevelColor) - 8) : math.min(90, color.t(pivotLevelColor) + 10)
+    adjustedTransp = levelWeight >= 3 ? math.max(0, color.t(color = pivotLevelColor) - 20) : levelWeight == 2 ? math.max(0, color.t(color = pivotLevelColor) - 8) : math.min(90, color.t(color = pivotLevelColor) + 10)
     color.new(color = pivotLevelColor, transp = adjustedTransp)
 
 f_labelY(float levelPrice) =>
-    // Push labels away from price: above resistance levels, below support levels.
-    levelPrice + syminfo.mintick * labelDistanceTicks * (levelPrice >= close ? 1.0 : -1.0)
+    // Every legend label sits ABOVE its own line, lifted by the configured
+    // tick distance. The anchor style (label_lower_left) places the text body
+    // above and to the right of this point.
+    levelPrice + syminfo.mintick * labelDistanceTicks
 
+// Legend labels anchor at the session-start bar — the left end of every
+// rendered line — so the day's level names read at the start of the session.
+// The horizontal-adjust input still nudges them in bars from that anchor.
 f_labelX() =>
-    bar_index - renderLabelRightBars + labelHorizontalAdjustBars
+    currentSessionStartBar + labelHorizontalAdjustBars
 
 // Draw helpers skip na prices: unavailable levels (early history, missing HTF
 // data) would otherwise still create invisible objects that count against the
@@ -218,7 +231,13 @@ f_drawPivotLevel(array<line> lines, array<label> labels, float levelPrice, strin
         line newLine = line.new(x1 = sessionStartBar, y1 = levelPrice, x2 = bar_index + renderExtendBars, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = f_pivotDisplayColor(levelWeight = pivotWeight), width = f_levelLineWidth(levelWeight = pivotWeight), style = f_lineStyle(styleName = styleName))
         array.push(id = lines, value = newLine)
         if showPivotLabels
-            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = text.align_left)
+            // style_label_lower_left anchors the label's LOWER-LEFT corner at
+            // (x, y): the text starts exactly at the session-start bar and
+            // sits fully ABOVE its line, reading to the right. (style_left
+            // vertically centers the text on the line; style_none centers it
+            // on the anchor, hanging half of it into the prior session.)
+            // Fully transparent background keeps the clean text-only look.
+            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_lower_left, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
             array.push(id = labels, value = newLabel)
 
 f_drawPreviousDayLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, int levelWidth, string styleName, int sessionStartBar) =>
@@ -226,7 +245,9 @@ f_drawPreviousDayLevel(array<line> lines, array<label> labels, float levelPrice,
         line newLine = line.new(x1 = sessionStartBar, y1 = levelPrice, x2 = bar_index + renderExtendBars, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = levelColor, width = levelWidth, style = f_lineStyle(styleName = styleName))
         array.push(id = lines, value = newLine)
         if showPreviousDayLabels
-            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = labelTextColor, color = NORD0, size = labelSizeInput, textalign = text.align_left)
+            // Same lower-left corner anchoring as the pivot labels — see the
+            // comment in f_drawPivotLevel.
+            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_lower_left, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
             array.push(id = labels, value = newLabel)
 
 var array<line> renderedLines = array.new<line>()

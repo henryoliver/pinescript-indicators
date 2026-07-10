@@ -59,7 +59,7 @@ trendSmaOffset = input.int(defval = 0, title = "SMA Offset", minval = -500, maxv
 trendFlatWindow = input.int(defval = 10, title = "Flat Window", minval = 1, maxval = 200,
      tooltip = "Bars over which the SMA's net movement is measured for the flat-regime test (only used when Flat ATR Fraction > 0). On a sideways MA the one-bar slope keeps alternating sign with real magnitude, so single bars never read flat — this window is what catches the neutral stretch the eye sees. A flat regime colors the line gray and ends the wave count.", group = GROUP_TREND)
 trendFlatAtrFraction = input.float(defval = 0.0, title = "Flat ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
-     tooltip = "Flat-regime sensitivity: the MA is flat when its net movement over the Flat Window is at most this fraction of ATR(14). 0 (default) disables the regime — no flat state, so the wave count resets only on a direction change. Try 0.25 to enable flat detection and the flat-break count reset.", group = GROUP_TREND)
+     tooltip = "Flat-regime sensitivity: the MA is flat when its net movement over the Flat Window is at most this fraction of ATR(14). A flat stretch ends the count like a direction change, so up > flat > up resets and re-anchors wave 1 after the resume. 0 (default) disables the regime — strictly UP/DOWN, the count then resets only on a direction change. Try 0.25 to enable flat detection.", group = GROUP_TREND)
 
 // Cycle Settings (Barry's cycle defaults: %K Length 5, %K Smoothing 2, %D Smoothing 3)
 cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_CYCLE)
@@ -108,8 +108,10 @@ f_trendEngine() =>
 // Signal to state — the slope's sign classifies the bar; FLAT exists only
 // through the regime test, because a per-bar reading can't catch neutral: on
 // a sideways MA the one-bar slope keeps real magnitude with alternating sign,
-// while the MA's NET movement over the window collapses toward zero. With the
-// regime disabled (default) the state is strictly UP or DOWN — the count
+// while the MA's NET movement over the window collapses toward zero. With
+// the regime enabled a plateau breaks the count like a direction change —
+// up > flat > up resets and re-anchors wave 1. With the regime disabled
+// (fraction 0, the default) the state is strictly UP or DOWN — the count
 // resets only on a direction change. An na slope (SMA warm-up, HTF gap bar)
 // or an exactly-zero slope holds the last state. The gray line, the
 // extreme-bar classification, and the wave count's flat break all read this
@@ -131,8 +133,8 @@ color trendColor = switch trendDir
 // half-cycle (plus the band-skip variants). Each half-cycle tracks its extreme
 // price live (highest high / lowest low) plus the extreme bar's open/close and
 // trend state (wave qualification and classification are judged on that bar),
-// and exports them with the just-ended half-cycle's final values and the turn
-// flag, for the WAVES and PLOT layers. Each bar belongs to the half-cycle
+// and exports them with the just-ended half-cycle's final values, for the
+// WAVES and PLOT layers. Each bar belongs to the half-cycle
 // matching its own %D state (Barry's window rule), so the boundary bar is the
 // NEW half-cycle's first bar: the ended cycle's extreme freezes on the bar
 // before the cross, and a wave can never pin on a bar of the next half-cycle
@@ -230,15 +232,6 @@ if cycleStartedThisBar
     cycleExtremeTrendDir := trendDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
          trendDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
 
-// Half-cycle turn: the live label only shows once %K has angled away from the
-// zone's extreme — down in a high half-cycle, up in a low half-cycle. %K is
-// the entry-hook line and turns ahead of %D, so the live label leads the
-// %D-lagged cross that ends the half-cycle. The flag is sticky for the rest
-// of the half-cycle and resets when a new one starts.
-bool cycleTurnedThisBar = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
-var bool cycleHasTurned = false
-cycleHasTurned := (not cycleStartedThisBar and cycleHasTurned) or cycleTurnedThisBar
-
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 WAVES
 // Wave structure on top of the cycle extremes (Barry Burns rules).
@@ -257,8 +250,14 @@ cycleHasTurned := (not cycleStartedThisBar and cycleHasTurned) or cycleTurnedThi
 // alone then reads the count's trend on both sides of a real top (QQQ 1m
 // 2026-07-08 09:00: a two-bar down dip bottomed one bar before the cycle low
 // and the up count ran straight from 5 into a 6-owner across the rollover).
-// The break is authoritative: the ended extreme classifies with the opposite
-// trend, anchoring wave 1 of the newborn count at the rollover's own extreme.
+// One agreement rule resolves the break: a wave pins only where the extreme
+// bar's reading and the boundary bar's reading AGREE. Disagreement (rollover,
+// or a lone opposite-slope extreme bar) pins nothing — the count resets and
+// takes the boundary's reading, and wave 1 anchors at the next extreme whose
+// bar agrees. Full agreement with the old trend after a mid-cycle break
+// (dip-and-resume) re-anchors wave 1 of a reborn same-direction count. The
+// live layer applies the same rule with the current reading standing in for
+// the boundary bar, so no wave ever previews into the other side's trend.
 // Exception — flat break: a FLAT reading on ANY bar of a half-cycle ends the
 // count at the boundary (Part 5: "as soon as you get the 50 MA going flat,
 // the wave count would end"), because the flat stretch usually falls between
@@ -377,16 +376,26 @@ if cycleStartedThisBar
     // from before the flat belongs to the dead count — classify it FLAT so it
     // pins nothing; one printed after the MA resumed re-anchors wave 1 below.
     bool endedCycleFlatBroke = waveCycleSawFlat and waveTrendDir != TrendDir.FLAT
-    // Direction break: the trend flipped inside the ended half-cycle. The
-    // rollover is authoritative even when the extreme bar reads the count's
-    // trend again — classify the extreme with the opposite trend so it can
-    // anchor wave 1 of the newborn count. A flat break supersedes it: the MA
-    // stalled rather than turned, and the flat rules below own the extreme.
-    if waveCycleSawOpposite and not endedCycleFlatBroke and waveTrendDir != TrendDir.FLAT and endedCycleTrendDir == waveTrendDir
-        endedCycleTrendDir := waveTrendDir == TrendDir.UP ? TrendDir.DOWN : TrendDir.UP
+    // One agreement rule resolves every direction case: a wave pins only
+    // where the extreme bar's reading and the boundary bar's reading AGREE —
+    // a bar can never receive a wave from a trend that wasn't standing at
+    // both ends of the verdict. Disagreement (a rollover whose extreme
+    // closed in the old trend — QQQ 2m 2026-07-10 08:44 — or a lone
+    // opposite-slope extreme bar inside a standing trend) pins NOTHING: the
+    // count resets, takes the boundary's reading, and wave 1 anchors at the
+    // next extreme whose bar agrees. Full agreement with the OLD trend after
+    // a mid-cycle break (dip-and-resume, QQQ 2m 2026-07-09 09:58) re-anchors
+    // wave 1 of a reborn same-direction count. A flat break supersedes both:
+    // the MA stalled rather than turned, and the flat rules below own it.
+    bool endedCycleRebirth = waveCycleSawOpposite and not endedCycleFlatBroke and waveTrendDir != TrendDir.FLAT and
+         endedCycleTrendDir == waveTrendDir and trendDir == waveTrendDir
+    bool endedCycleBarMismatch = not endedCycleFlatBroke and endedCycleTrendDir != TrendDir.FLAT and
+         trendDir != TrendDir.FLAT and endedCycleTrendDir != trendDir
+    if endedCycleBarMismatch
+        endedCycleTrendDir := trendDir
     if endedCycleFlatBroke and not na(endedCycleExtremeBar) and endedCycleExtremeBar <= waveLastFlatBar
         endedCycleTrendDir := TrendDir.FLAT
-    if endedCycleTrendDir != waveTrendDir or endedCycleFlatBroke
+    if endedCycleTrendDir != waveTrendDir or endedCycleFlatBroke or endedCycleRebirth or endedCycleBarMismatch
         // The old count ended. An owner whose closing impulse never confirmed
         // was only ever a cycle — it keeps its letter, not the even number;
         // an owner "a" that never got its "b" disappears instead.
@@ -405,7 +414,9 @@ if cycleStartedThisBar
     waveTrendDir := endedCycleTrendDir
     // Falls through after a reset too, so a low whose extreme printed under
     // the newborn trend anchors wave 1 immediately — no discarded cycle.
-    if waveTrendDir != TrendDir.FLAT and not na(endedCycleExtreme)
+    // Exception: a rollover-flipped extreme (bar mismatch) is discarded — its
+    // bar closed in the old trend and can't receive the newborn count's wave.
+    if waveTrendDir != TrendDir.FLAT and not na(endedCycleExtreme) and not endedCycleBarMismatch
         bool endedIsImpulseSide = (waveTrendDir == TrendDir.UP) == startedLowCycle
         if endedIsImpulseSide
             // Qualification is judged on the ended cycle's extreme bar against
@@ -500,17 +511,23 @@ if cycleStartedThisBar
 // if a new extreme bar reads the old trend again.
 TrendDir waveLiveTrendDir = na(cycleExtreme) ? waveTrendDir : cycleExtremeTrendDir
 bool waveLiveFlatBroke = waveCycleSawFlat and waveTrendDir != TrendDir.FLAT
-// Direction-break preview — mirrors the boundary: once the trend has flipped
-// inside the open cycle, an extreme bar reading the count's trend previews
-// the opposite classification (wave 1 of the newborn count). A flat break
-// supersedes it, exactly like the boundary.
-if waveCycleSawOpposite and not waveLiveFlatBroke and waveTrendDir != TrendDir.FLAT and waveLiveTrendDir == waveTrendDir and not na(cycleExtreme)
-    waveLiveTrendDir := waveTrendDir == TrendDir.UP ? TrendDir.DOWN : TrendDir.UP
+// Direction-break preview — mirrors the boundary's agreement rule with the
+// CURRENT trend reading standing in for the boundary bar: the label only
+// previews while the extreme bar's reading matches it, so a wave can never
+// preview into the other side's standing trend — a lone opposite-slope
+// extreme bar, or a new-trend extreme while the MA has already flipped back,
+// previews nothing (FLAT = "label dropped", like the flat-break preview). A
+// mid-cycle break with full agreement on the old trend previews the
+// same-direction rebirth (wave 1).
+bool waveLivePreviewsRebirth = waveCycleSawOpposite and not waveLiveFlatBroke and waveTrendDir != TrendDir.FLAT and
+     waveLiveTrendDir == waveTrendDir and trendDir == waveTrendDir and not na(cycleExtreme)
+if waveLiveTrendDir != TrendDir.FLAT and trendDir != TrendDir.FLAT and waveLiveTrendDir != trendDir
+    waveLiveTrendDir := TrendDir.FLAT
 // Flat-break preview — mirrors the boundary: an extreme from before the flat
 // reads FLAT (its label will be dropped), one after it previews the re-anchor.
 if waveLiveFlatBroke and not na(cycleExtremeBar) and cycleExtremeBar <= waveLastFlatBar
     waveLiveTrendDir := TrendDir.FLAT
-bool waveLivePreviewsReset = cycleZone != 0 and (waveLiveTrendDir != waveTrendDir or waveLiveFlatBroke)
+bool waveLivePreviewsReset = cycleZone != 0 and (waveLiveTrendDir != waveTrendDir or waveLiveFlatBroke or waveLivePreviewsRebirth)
 
 // ── Live qualification of the open impulse-side half-cycle, judged on the
 // current extreme bar and re-evaluated as the extreme moves. The open may
@@ -599,20 +616,33 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
         label.set_textcolor(id = updatedLabel, textcolor = labelTextColor)
     updatedLabel
 
-// Wave label — live once the half-cycle turns, pinned (or dropped) on the %D
-// cross. The retrace-number owner's label ref is kept so a deeper retrace or
+// Wave label — live once the staleness gate below opens, pinned (or dropped)
+// on the %D cross. The retrace-number owner's label ref is kept so a deeper retrace or
 // a trend reset can downgrade it to its letter, and the authoritative owner
 // text is re-applied every confirmed bar (provisional-retrace repaint
 // semantics; impulse pins are final).
 var label waveNumberLabel = na
 var label waveZoneOwnerLabel = na
 var label wavePendingALabel = na  // the held "a", drawn provisionally while the live "b" shows
-// Close-only gate (same as macd-waves): an intrabar %D cross or %K turn can
-// recede before the close, so touching labels on live ticks flashes pins,
-// owner downgrades, and previews that then vanish. Every label mutation waits
-// for the bar's confirming tick, where the extreme tracking and boundary
-// state above have already seen the bar's final values. Wave STATE is
-// untouched — it still updates every tick and rolls back.
+// Live display gate: the live label shows only while the cycle's extreme sits
+// on a CLOSED bar the current bar hasn't extended — the earliest evidence
+// that the extreme is a turning point rather than the running edge of the
+// move. It renders TICK-TIME in realtime (the block at the end of the file):
+// the extreme bar being closed means the label's identity is computed from
+// final OHLC and can't morph intrabar, so the label appears at the first tick
+// that trades on a new bar with the extreme intact and hides the instant the
+// forming bar takes it out (Pine rolls intrabar drawing changes back, so
+// state stays consistent). The re-arm means a label can never sit on an
+// extreme the market is actively breaking. Unconfirmed boundary ticks are the
+// one exception: an intrabar %D cross reseeds the cycle and would flash the
+// new cycle's label before the pin, so those ticks wait for the close.
+bool waveLiveLabelDrawn = not na(cycleExtreme) and cycleExtremeBar != bar_index and waveLiveLabelText != "" and
+     (barstate.isconfirmed or not cycleStartedThisBar)
+// Close-only gate for everything else — pins, owner downgrades, and the held
+// "a": an intrabar %D cross can recede before the close, so those label
+// mutations wait for the bar's confirming tick, where the extreme tracking
+// and boundary state above have already seen the bar's final values. Wave
+// STATE is untouched — it still updates every tick and rolls back.
 if barstate.isconfirmed
     if cycleStartedThisBar
         if waveEndedOwnerDelete and not na(waveZoneOwnerLabel)
@@ -637,18 +667,12 @@ if barstate.isconfirmed
             label releasedALabel = f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingAReleaseBar,
                  labelPrice = wavePendingAReleasePrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAReleaseIsHighSide)
             wavePendingALabel := na
-    if cycleHasTurned and waveLiveLabelText != "" and not na(cycleExtreme)
-        waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
-             labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
-    else if not na(waveNumberLabel)
-        label.delete(id = waveNumberLabel)
-        waveNumberLabel := na
     // Held-"a" preview: a lone "a" is meaningless, but once the very next cycle's
     // live bare-letter "b" is drawing, the "a" has meaning — show it now instead
     // of waiting for the %D cross to pin the "b". Provisional like every live
     // label: it deletes if the open cycle upgrades to a number or failed wave
     // (the boundary then drops the held "a" for good).
-    bool wavePendingAPreviewed = not na(wavePendingAPrice) and cycleHasTurned and not na(cycleExtreme) and waveLiveShowsLetter
+    bool wavePendingAPreviewed = not na(wavePendingAPrice) and waveLiveLabelDrawn and waveLiveShowsLetter
     if wavePendingAPreviewed
         wavePendingALabel := f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingABar,
              labelPrice = wavePendingAPrice, labelText = f_waveLetterAt(letterIndex = 0), labelTextColor = waveLabelColor, isHighSide = wavePendingAIsHighSide)
@@ -659,3 +683,13 @@ if barstate.isconfirmed
     // a live retrace is provisionally deeper (its number is being previewed there).
     if not na(waveZoneOwnerLabel) and waveOwnerHasZone
         label.set_text(id = waveZoneOwnerLabel, text = waveOwnerText)
+
+// Live wave label — tick-time, per the display gate above. On the boundary
+// bar's confirming tick this runs AFTER the pin block dropped the old ref, so
+// the upsert starts a fresh label for the new half-cycle.
+if waveLiveLabelDrawn
+    waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
+         labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
+else if not na(waveNumberLabel)
+    label.delete(id = waveNumberLabel)
+    waveNumberLabel := na

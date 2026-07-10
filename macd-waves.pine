@@ -135,6 +135,47 @@ if cycleStartedThisBar
     cycleExtreme := macd
     cycleExtremeBar := bar_index
 
+// ── Display extremes — label anchors only; the COUNT stays on the window
+// extremes above. The label belongs on the MACD line's true turn, which the
+// window partition can miss on both sides: the %D cross can LEAD the MACD
+// turn (the old swing's extreme prints after the window closes — covered by
+// the pinned-label migration in the label section) or LAG it (the new
+// swing's extreme printed before the window opened — covered by the boundary
+// back-scan seed here, which reaches back to the ended wave's display
+// extreme, exclusive, so no two labels ever claim the same bar).
+const int DISPLAY_BACKSCAN_MAX = 200
+max_bars_back(macd, DISPLAY_BACKSCAN_MAX)
+var float displayExtreme = na
+var int displayExtremeBar = na
+float endedDisplayExtreme = na
+int endedDisplayExtremeBar = na
+
+if not cycleStartedThisBar and ((cycleZone == 1 and macd > displayExtreme) or (cycleZone == -1 and macd < displayExtreme))
+    displayExtreme := macd
+    displayExtremeBar := bar_index
+
+if cycleStartedThisBar
+    endedDisplayExtreme := displayExtreme
+    endedDisplayExtremeBar := displayExtremeBar
+    float displaySeed = macd
+    int displaySeedOffset = 0
+    // Back-scan only once the line has actually turned off the ended wave's
+    // display extreme; while it is still extending the old swing (rare — %D
+    // crossing against a running MACD), every back bar belongs to the old
+    // swing and the migration owns the turn instead.
+    bool oldSwingTurned = not na(endedDisplayExtreme) and
+         (startedHighCycle ? macd > endedDisplayExtreme : macd < endedDisplayExtreme)
+    if oldSwingTurned
+        int displayBackscan = math.min(bar_index - endedDisplayExtremeBar - 1, DISPLAY_BACKSCAN_MAX)
+        if displayBackscan > 0
+            for barOffset = 1 to displayBackscan
+                float displayCandidate = macd[barOffset]
+                if startedHighCycle ? displayCandidate > displaySeed : displayCandidate < displaySeed
+                    displaySeed := displayCandidate
+                    displaySeedOffset := barOffset
+    displayExtreme := displaySeed
+    displayExtremeBar := bar_index - displaySeedOffset
+
 // Wave count: each confirmed extreme is classified against the previous
 // same-side extreme (higher high/low = bullish, lower/equal = bearish).
 // Extremes agreeing with the running trend keep counting up; a contra-trend
@@ -182,10 +223,6 @@ if cycleStartedThisBar and not na(endedCycleExtreme)
         lastLowExtreme := endedCycleExtreme
 
 [liveWaveNumber, liveWaveRetro, liveWaveTrend] = f_waveNumber(extremeValue = cycleExtreme, sameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme, isHighExtreme = cycleZone == 1, trendDirection = waveTrend, confirmedCount = waveCount)
-// Impulse waves (extreme side matches the wave's trend) only plot when their
-// half-cycle ends on the %D cross; retrace waves plot live on the MACD turn.
-bool liveWaveIsRetrace = cycleZone != liveWaveTrend
-
 // Helper function returning the label color for a wave's trend direction.
 f_waveTrendColor(int trendDirection) =>
     trendDirection == -1 ? waveDownColor : waveUpColor
@@ -205,16 +242,28 @@ f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, str
     updatedLabel
 
 // Cycle label — the wave number at the half-cycle's extreme MACD value, colored
-// by the wave's trend. Retrace waves draw once a CLOSED bar confirms the MACD
-// line has turned away from the extreme (the extreme bar is no longer the
-// closing bar); impulse waves wait for their half-cycle to end on the %D cross.
-// When a half-cycle ends, its label is pinned (or backfilled) at the final
-// extreme.
+// by the wave's trend. Every wave — impulse and retrace alike — draws once a
+// CLOSED bar confirms the MACD has turned away from the extreme (the extreme
+// bar is no longer the closing bar), hides again while a new extreme is being
+// driven, and is pinned (or backfilled) at the final extreme when the
+// half-cycle ends on the %D cross. After the pin the label migrates with the
+// MACD line to the swing's true turn (the line lags the %D cross), so it
+// always ends up ON the visual extreme even when that bar belongs to the next
+// window.
 color liveWaveColor = f_waveTrendColor(trendDirection = liveWaveTrend)
 var label cycleExtremeLabel = na
 var label prevWaveLabel = na
 var int prevWaveNumber = na
 var color prevWaveColor = na
+// Pinned-label migration state (display only): the MACD (5/20) turns AFTER
+// the faster stochastic %D (5/2/3) crosses, so the swing's real extreme often
+// prints ON the crossing bar or a few bars into the next window. The wave
+// count stays on the window extreme — plot-in-zone is the engine's rule — but
+// the LABEL follows the line to its actual turn, stopping for good on the
+// first confirmed bar that fails to extend it.
+var int pinnedExtremeSide = 0      // 1 = the pinned label marks a MACD high, -1 a low
+var float pinnedExtremeValue = na  // the label's current (possibly migrated) value
+var bool pinnedExtremeMigrating = false
 // Same close-only gate as the live label below: an intrabar %D cross can
 // recede before the close, so the pinned label waits for the confirming tick.
 // Wave STATE above is untouched — it still updates every tick and rolls back.
@@ -225,28 +274,52 @@ if cycleStartedThisBar and barstate.isconfirmed
             // Retrace-side breaker: the previous extreme becomes the new trend's impulse.
             label.set_text(id = prevWaveLabel, text = "1")
             label.set_textcolor(id = prevWaveLabel, textcolor = endedWaveColor)
+        // The pin anchors at the DISPLAY extreme (the line's true turn, which
+        // may sit before the window opened); the number comes from the
+        // window-partitioned engine above.
+        float pinAnchorValue = na(endedDisplayExtreme) ? endedCycleExtreme : endedDisplayExtreme
+        int pinAnchorBar = na(endedDisplayExtremeBar) ? endedCycleExtremeBar : endedDisplayExtremeBar
         cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
-             labelBarIndex = endedCycleExtremeBar, labelPrice = endedCycleExtreme,
+             labelBarIndex = pinAnchorBar, labelPrice = pinAnchorValue,
              labelText = str.tostring(endedWaveNumber),
              labelTextColor = endedWaveColor, isHighCycle = cycleZone == -1)
         prevWaveLabel := cycleExtremeLabel
         prevWaveNumber := endedWaveNumber
         prevWaveColor := endedWaveColor
+        pinnedExtremeSide := cycleZone == -1 ? 1 : -1
+        pinnedExtremeValue := pinAnchorValue
+        pinnedExtremeMigrating := true
     cycleExtremeLabel := na  // the next label belongs to the new half-cycle
-bool liveLabelDrawn = not na(cycleExtreme) and cycleExtremeBar != bar_index and liveWaveIsRetrace
-// Only touch the live label on a bar's closing tick: intrabar the MACD turn
+// Only touch the labels on a bar's closing tick: intrabar the MACD turn
 // away from the extreme is unconfirmed (the line can resume into a new extreme
 // before the close), so drawing on live ticks flashes false wave numbers. On
 // the closing tick the extreme tracking above has already seen the bar's final
 // MACD value, so a stale extreme bar means the turn held through the close.
 if barstate.isconfirmed
+    // Pinned-label migration (see the vars above). Runs on the pin bar too:
+    // the crossing bar already belongs to the new window, so it is the first
+    // candidate for a beyond-window extreme.
+    if pinnedExtremeMigrating and not na(prevWaveLabel) and not na(pinnedExtremeValue)
+        if pinnedExtremeSide == 1 ? macd > pinnedExtremeValue : macd < pinnedExtremeValue
+            pinnedExtremeValue := macd
+            label.set_xy(id = prevWaveLabel, x = bar_index, y = pinnedExtremeValue)
+        else
+            pinnedExtremeMigrating := false
+    // Live display gate: the label shows only once a closed bar has failed to
+    // extend the cycle's extreme — the earliest closed-bar evidence that the
+    // extreme is a turning point rather than the running edge of the move. It
+    // re-arms whenever a later bar takes the extreme out, so a label can never
+    // sit on an extreme the market is actively breaking. While the pinned
+    // label is still migrating the old swing hasn't finished, so the new
+    // window's label would mark a wave that hasn't started — it waits.
+    bool liveLabelDrawn = not na(displayExtreme) and displayExtremeBar != bar_index and not pinnedExtremeMigrating
     if liveLabelDrawn
         cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
-             labelBarIndex = cycleExtremeBar, labelPrice = cycleExtreme,
+             labelBarIndex = displayExtremeBar, labelPrice = displayExtreme,
              labelText = str.tostring(liveWaveNumber),
              labelTextColor = liveWaveColor, isHighCycle = cycleZone == 1)
     else if not na(cycleExtremeLabel)
-        // The open wave flipped to impulse — its label waits for the %D cross.
+        // The closing bar took the extreme out — hide until it holds again.
         label.delete(id = cycleExtremeLabel)
         cycleExtremeLabel := na
     // While the live extreme provisionally breaks the trend as a retrace, the
