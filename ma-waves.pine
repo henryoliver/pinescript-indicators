@@ -60,6 +60,8 @@ trendFlatWindow = input.int(defval = 10, title = "Flat Window", minval = 1, maxv
      tooltip = "Bars over which the SMA's net movement is measured for the flat-regime test (only used when Flat ATR Fraction > 0). On a sideways MA the one-bar slope keeps alternating sign with real magnitude, so single bars never read flat — this window is what catches the neutral stretch the eye sees. A flat regime colors the line gray and ends the wave count.", group = GROUP_TREND)
 trendFlatAtrFraction = input.float(defval = 0.0, title = "Flat ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
      tooltip = "Flat-regime sensitivity: the MA is flat when its net movement over the Flat Window is at most this fraction of ATR(14). A flat stretch ends the count like a direction change, so up > flat > up resets and re-anchors wave 1 after the resume. 0 (default) disables the regime — strictly UP/DOWN, the count then resets only on a direction change. Try 0.25 to enable flat detection.", group = GROUP_TREND)
+trendBreakAtrFraction = input.float(defval = 0.1, title = "Break ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
+     tooltip = "Direction-break sensitivity for the WAVE layer: the count's trend reading only flips once the SMA moves against it by at least this fraction of ATR(14) from its running extreme. Barry reads the MA's angle — a sign flip with negligible net movement is noise, so a micro-dip mid-retrace no longer resets the count while a real rollover still does. 0 = any tick against the trend flips the reading (legacy sign-only). The MA line's color stays pure sign-of-slope regardless.", group = GROUP_TREND)
 
 // Cycle Settings (Barry's cycle defaults: %K Length 5, %K Smoothing 2, %D Smoothing 3)
 cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_CYCLE)
@@ -98,10 +100,10 @@ f_trendEngine() =>
     float atrValue = ta.atr(length = 14)
     float netChange = smaValue - smaValue[trendFlatWindow]
     bool isFlatRegime = trendFlatAtrFraction > 0 and not na(netChange) and not na(atrValue) and
-         math.abs(netChange) <= trendFlatAtrFraction * atrValue
-    [smaValue, smaValue - smaValue[1], isFlatRegime ? 1.0 : 0.0]
+         math.abs(number = netChange) <= trendFlatAtrFraction * atrValue
+    [smaValue, smaValue - smaValue[1], isFlatRegime ? 1.0 : 0.0, atrValue]
 
-[trendSma, trendSlopePerBar, trendFlatRegimeRaw] = request.security(symbol = syminfo.tickerid, timeframe = calcTimeframe,
+[trendSma, trendSlopePerBar, trendFlatRegimeRaw, trendAtr] = request.security(symbol = syminfo.tickerid, timeframe = calcTimeframe,
      expression = f_trendEngine(), gaps = calcWaitForClose ? barmerge.gaps_on : barmerge.gaps_off,
      lookahead = barmerge.lookahead_off)
 
@@ -125,6 +127,37 @@ color trendColor = switch trendDir
     TrendDir.UP => TREND_UP_COLOR
     TrendDir.DOWN => TREND_DOWN_COLOR
     TrendDir.FLAT => TREND_FLAT_COLOR
+
+// Wave-layer trend reading — the count judges direction through an
+// ATR-fraction hysteresis on the SMA itself: the reading flips only once the
+// SMA retreats at least Break ATR Fraction × ATR from its running extreme.
+// Barry reads the MA's ANGLE — a sign flip with negligible net movement is
+// noise, not a direction change (QQQ 9m 2026-07-10: a micro-dip mid-retrace
+// reset the count and orphaned the 2 as a bare "a" while the reference ran
+// straight through 2,3,4,5,6). A real rollover still bends the line past the
+// threshold and breaks the count. The MA plot keeps the pure sign-of-slope
+// color above — the two can disagree for a few bars, exactly like the
+// reference's red-tinted wiggles that never touch its count. FLAT regime
+// bars stay owned by the flat latch; this reading is strictly UP/DOWN once
+// seeded. Updates are skipped on na bars (SMA warm-up, HTF gap bars).
+var int waveReadDirState = 0       // 1 = up, -1 = down, 0 = unseeded — the count's effective reading
+var float waveReadSmaExtreme = na  // the SMA's running extreme in the read direction
+if not na(trendSma)
+    float breakThreshold = trendBreakAtrFraction * nz(source = trendAtr, replacement = 0)
+    if waveReadDirState == 0
+        waveReadSmaExtreme := trendSma
+        waveReadDirState := trendSlopePerBar > 0 ? 1 : trendSlopePerBar < 0 ? -1 : 0
+    else if waveReadDirState == 1
+        waveReadSmaExtreme := math.max(waveReadSmaExtreme, trendSma)
+        if trendSma < waveReadSmaExtreme and waveReadSmaExtreme - trendSma >= breakThreshold
+            waveReadDirState := -1
+            waveReadSmaExtreme := trendSma
+    else
+        waveReadSmaExtreme := math.min(waveReadSmaExtreme, trendSma)
+        if trendSma > waveReadSmaExtreme and trendSma - waveReadSmaExtreme >= breakThreshold
+            waveReadDirState := 1
+            waveReadSmaExtreme := trendSma
+TrendDir waveReadDir = waveReadDirState == 1 ? TrendDir.UP : waveReadDirState == -1 ? TrendDir.DOWN : TrendDir.FLAT
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔄 CYCLES
@@ -159,10 +192,9 @@ max_bars_back(high, CYCLE_SEED_MAX_LOOKBACK)
 max_bars_back(low, CYCLE_SEED_MAX_LOOKBACK)
 max_bars_back(open, CYCLE_SEED_MAX_LOOKBACK)
 max_bars_back(close, CYCLE_SEED_MAX_LOOKBACK)
-// The trend state mirrored as ints so the seed scan can index it too
+// The wave-layer reading's int state is indexed by the seed scan directly
 // (max_bars_back needs a simple-type series, which an enum is not).
-int trendDirState = trendDir == TrendDir.UP ? 1 : trendDir == TrendDir.DOWN ? -1 : 0
-max_bars_back(trendDirState, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(waveReadDirState, CYCLE_SEED_MAX_LOOKBACK)
 
 float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing)
 float cycleD = ta.sma(source = cycleK, length = cycleDSmoothing)
@@ -200,7 +232,7 @@ if cycleZone != 0 and not cycleStartedThisBar and
     cycleExtremeBar := bar_index
     cycleExtremeOpen := open
     cycleExtremeClose := close
-    cycleExtremeTrendDir := trendDir
+    cycleExtremeTrendDir := waveReadDir
 
 if cycleStartedThisBar
     endedCycleExtreme := cycleExtreme
@@ -229,8 +261,8 @@ if cycleStartedThisBar
     cycleExtremeBar := bar_index - cycleSeedOffset
     cycleExtremeOpen := open[cycleSeedOffset]
     cycleExtremeClose := close[cycleSeedOffset]
-    cycleExtremeTrendDir := trendDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
-         trendDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
+    cycleExtremeTrendDir := waveReadDirState[cycleSeedOffset] == 1 ? TrendDir.UP :
+         waveReadDirState[cycleSeedOffset] == -1 ? TrendDir.DOWN : TrendDir.FLAT
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 WAVES
@@ -250,6 +282,10 @@ if cycleStartedThisBar
 // alone then reads the count's trend on both sides of a real top (QQQ 1m
 // 2026-07-08 09:00: a two-bar down dip bottomed one bar before the cycle low
 // and the up count ran straight from 5 into a 6-owner across the rollover).
+// Every reading here is the hysteresis waveReadDir (Break ATR Fraction), so
+// "opposite" means the SMA genuinely bent against the count — a sign-flip
+// micro-wiggle never reaches this layer (QQQ 9m 2026-07-10: it used to reset
+// mid-trend, orphan the 2 as a bare "a", and re-anchor 1 two waves late).
 // One agreement rule resolves the break: a wave pins only where the extreme
 // bar's reading and the boundary bar's reading AGREE. Disagreement (rollover,
 // or a lone opposite-slope extreme bar) pins nothing — the count resets and
@@ -328,9 +364,10 @@ if trendDir == TrendDir.FLAT
 // Direction-break latch — a reading OPPOSITE to the count's trend anywhere in
 // the open half-cycle (boundary bar included) breaks the count at the next
 // boundary even when the extreme bar reads the count's trend again. Consumed
-// and cleared there, like the flat latch.
+// and cleared there, like the flat latch. The reading is the hysteresis
+// waveReadDir, so sign-flip wiggles below the Break ATR Fraction never latch.
 var bool waveCycleSawOpposite = false
-if waveTrendDir != TrendDir.FLAT and trendDir != TrendDir.FLAT and trendDir != waveTrendDir
+if waveTrendDir != TrendDir.FLAT and waveReadDir != TrendDir.FLAT and waveReadDir != waveTrendDir
     waveCycleSawOpposite := true
 
 // Helper function to look up a zone letter (wraps past 'z').
@@ -370,7 +407,7 @@ if cycleStartedThisBar
     bool endedPinnedBareLetter = false
     // The ended cycle is classified by the trend on its own extreme bar; an
     // unseeded first cycle (na extreme) falls back to the boundary reading.
-    TrendDir endedCycleTrendDir = na(endedCycleExtreme) ? trendDir : endedCycleExtremeTrendDir
+    TrendDir endedCycleTrendDir = na(endedCycleExtreme) ? waveReadDir : endedCycleExtremeTrendDir
     // Flat break: a FLAT stretch inside the ended half-cycle ends the count
     // even when the extreme bar itself reads the count's trend. An extreme
     // from before the flat belongs to the dead count — classify it FLAT so it
@@ -388,11 +425,11 @@ if cycleStartedThisBar
     // wave 1 of a reborn same-direction count. A flat break supersedes both:
     // the MA stalled rather than turned, and the flat rules below own it.
     bool endedCycleRebirth = waveCycleSawOpposite and not endedCycleFlatBroke and waveTrendDir != TrendDir.FLAT and
-         endedCycleTrendDir == waveTrendDir and trendDir == waveTrendDir
+         endedCycleTrendDir == waveTrendDir and waveReadDir == waveTrendDir
     bool endedCycleBarMismatch = not endedCycleFlatBroke and endedCycleTrendDir != TrendDir.FLAT and
-         trendDir != TrendDir.FLAT and endedCycleTrendDir != trendDir
+         waveReadDir != TrendDir.FLAT and endedCycleTrendDir != waveReadDir
     if endedCycleBarMismatch
-        endedCycleTrendDir := trendDir
+        endedCycleTrendDir := waveReadDir
     if endedCycleFlatBroke and not na(endedCycleExtremeBar) and endedCycleExtremeBar <= waveLastFlatBar
         endedCycleTrendDir := TrendDir.FLAT
     if endedCycleTrendDir != waveTrendDir or endedCycleFlatBroke or endedCycleRebirth or endedCycleBarMismatch
@@ -520,8 +557,8 @@ bool waveLiveFlatBroke = waveCycleSawFlat and waveTrendDir != TrendDir.FLAT
 // mid-cycle break with full agreement on the old trend previews the
 // same-direction rebirth (wave 1).
 bool waveLivePreviewsRebirth = waveCycleSawOpposite and not waveLiveFlatBroke and waveTrendDir != TrendDir.FLAT and
-     waveLiveTrendDir == waveTrendDir and trendDir == waveTrendDir and not na(cycleExtreme)
-if waveLiveTrendDir != TrendDir.FLAT and trendDir != TrendDir.FLAT and waveLiveTrendDir != trendDir
+     waveLiveTrendDir == waveTrendDir and waveReadDir == waveTrendDir and not na(cycleExtreme)
+if waveLiveTrendDir != TrendDir.FLAT and waveReadDir != TrendDir.FLAT and waveLiveTrendDir != waveReadDir
     waveLiveTrendDir := TrendDir.FLAT
 // Flat-break preview — mirrors the boundary: an extreme from before the flat
 // reads FLAT (its label will be dropped), one after it previews the re-anchor.

@@ -240,11 +240,11 @@ f_qwCellTextColor(float pctChange) =>
 f_qwPctTextColor(float pctChange) =>
     color pctTextColor = color.new(color = NORD4, transp = 40)
     if not na(pctChange)
-        if math.abs(pctChange) >= QW_COMMITTED_THRESHOLD
+        if math.abs(number = pctChange) >= QW_COMMITTED_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD8 : NORD11, transp = 0)
-        else if math.abs(pctChange) >= QW_SERIOUS_THRESHOLD
+        else if math.abs(number = pctChange) >= QW_SERIOUS_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 0)
-        else if math.abs(pctChange) >= QW_NOISE_THRESHOLD
+        else if math.abs(number = pctChange) >= QW_NOISE_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 45)
         else
             pctTextColor := color.new(color = NORD3, transp = 0)
@@ -377,12 +377,12 @@ float qwFuturesNet = qwUseTodayOpenBaseline ? qwFuturesNetVsOpen : qwFuturesNetV
 // aren't comparable across the pair — comparing them in "Today's Open" mode
 // would flag a phantom misalignment any time the overnight gap was meaningful.
 bool qwCashFuturesMisaligned = false
-for qwPairIndex = 0 to math.min(array.size(qwCashReadings), array.size(qwFuturesReadings)) - 1
-    QwReading qwPairCash    = array.get(qwCashReadings,    qwPairIndex)
-    QwReading qwPairFutures = array.get(qwFuturesReadings, qwPairIndex)
+for qwPairIndex = 0 to math.min(array.size(id = qwCashReadings), array.size(id = qwFuturesReadings)) - 1
+    QwReading qwPairCash    = array.get(id = qwCashReadings, index = qwPairIndex)
+    QwReading qwPairFutures = array.get(id = qwFuturesReadings, index = qwPairIndex)
     if not na(qwPairCash.pctChangeVsClose) and not na(qwPairFutures.pctChangeVsClose) and
-         math.abs(qwPairCash.pctChangeVsClose)    >= QW_NOISE_THRESHOLD and
-         math.abs(qwPairFutures.pctChangeVsClose) >= QW_NOISE_THRESHOLD and
+         math.abs(number = qwPairCash.pctChangeVsClose)    >= QW_NOISE_THRESHOLD and
+         math.abs(number = qwPairFutures.pctChangeVsClose) >= QW_NOISE_THRESHOLD and
          ((qwPairCash.pctChangeVsClose > 0.0) != (qwPairFutures.pctChangeVsClose > 0.0))
         qwCashFuturesMisaligned := true
 
@@ -416,9 +416,9 @@ int qwFuturesExpected    = 4
 int qwSectorExpected     = qwIgnoreCommoditySectors ? 9 : 11
 int qwCashReceived       = f_qwGroupSize(readings = qwCashReadings,    excludeCommodity = false)
 int qwFuturesReceived    = f_qwGroupSize(readings = qwFuturesReadings, excludeCommodity = false)
-int qwCashMinReceived    = math.ceil(qwCashExpected    * QW_PARTIAL_GAP_FRACTION)
-int qwFuturesMinReceived = math.ceil(qwFuturesExpected * QW_PARTIAL_GAP_FRACTION)
-int qwSectorMinReceived  = math.ceil(qwSectorExpected  * QW_PARTIAL_GAP_FRACTION)
+int qwCashMinReceived    = math.ceil(number = qwCashExpected * QW_PARTIAL_GAP_FRACTION)
+int qwFuturesMinReceived = math.ceil(number = qwFuturesExpected * QW_PARTIAL_GAP_FRACTION)
+int qwSectorMinReceived  = math.ceil(number = qwSectorExpected * QW_PARTIAL_GAP_FRACTION)
 bool qwCashDataGap       = qwCashReceived    < qwCashMinReceived
 bool qwFuturesDataGap    = qwFuturesReceived < qwFuturesMinReceived
 bool qwSectorsDataGap    = qwSectorTotal     < qwSectorMinReceived
@@ -604,14 +604,14 @@ if barstate.islast
     int qwTableColumns = qwBothColumns ? 3 : 2
     int qwVisibleRows = qwRegimeOnlyView ? 1 :
          (qwBothColumns ? 1 : 0) +
-         (qwShowCash ? 1 + array.size(qwCashReadings) : 0) +
-         (qwShowFutures ? 1 + array.size(qwFuturesReadings) : 0) +
-         (qwShowSectors ? 1 + array.size(qwSectorReadings) : 0) +
+         (qwShowCash ? 1 + array.size(id = qwCashReadings) : 0) +
+         (qwShowFutures ? 1 + array.size(id = qwFuturesReadings) : 0) +
+         (qwShowSectors ? 1 + array.size(id = qwSectorReadings) : 0) +
          (qwShowRegimeHeader ? 2 : 0)
 
     if na(qwTable) or qwTableRows != qwVisibleRows or qwTableColumnsState != qwTableColumns or qwTablePositionState != qwTablePosition
         if not na(qwTable)
-            table.delete(qwTable)
+            table.delete(table_id = qwTable)
         qwTable := table.new(
              position = qwTablePosition,
              columns = qwTableColumns,
@@ -667,8 +667,8 @@ if barstate.islast
     if qwShowSectors
         string qwGreensArrow = na(qwGreensDelta) ? "·" : qwGreensDelta > 0 ? "▲" : qwGreensDelta < 0 ? "▼" : "→"
         string qwRedsArrow   = na(qwRedsDelta)   ? "·" : qwRedsDelta   > 0 ? "▲" : qwRedsDelta   < 0 ? "▼" : "→"
-        string qwGreensDeltaText = na(qwGreensDelta) ? "" : str.tostring(math.abs(qwGreensDelta))
-        string qwRedsDeltaText   = na(qwRedsDelta)   ? "" : str.tostring(math.abs(qwRedsDelta))
+        string qwGreensDeltaText = na(qwGreensDelta) ? "" : str.tostring(value = math.abs(number = qwGreensDelta))
+        string qwRedsDeltaText   = na(qwRedsDelta)   ? "" : str.tostring(value = math.abs(number = qwRedsDelta))
         string qwSectorHeaderValue = str.format("●{0} {1}{2}  ●{3} {4}{5}",
              qwSectorGreensRaw, qwGreensArrow, qwGreensDeltaText,
              qwSectorRedsRaw,   qwRedsArrow,   qwRedsDeltaText)

@@ -4,9 +4,10 @@
 //@version=6
 indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = false)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-const string GROUP_STOCH = "📈 Cycle (Setup Chart)"
-
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
 // Nord Theme Color
 // Polar Night
 const color NORD0 = #2E3440
@@ -29,29 +30,34 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 📈 CYCLE
+// Barry's cycle stochastic (%K Length 5, %K Smoothing 2, %D Smoothing 3) with
+// a flat-hold %D direction read used for the plot coloring.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_STOCH = "📈 Cycle (Setup Chart)"
+
 // Direction colors (same pair as the trend coloring in macd-waves)
-const color UP_COLOR = color.new(color = NORD8, transp = 20)
-const color DOWN_COLOR = color.new(color = NORD9, transp = 60)
+const color STOCH_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color STOCH_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-// 🎛️ USER INPUT SETTINGS
-
-// Stochastic Input Settings (Barry's cycle defaults: %K Length 5, %K Smoothing 2, %D Smoothing 3)
 int periodK = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_STOCH)
 int smoothK = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_STOCH)
 int periodD = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_STOCH)
 
-// 🧮 CALCULATIONS
-float k = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
-float d = ta.sma(source = k, length = periodD)
+float stochK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = periodK), length = smoothK)
+float stochD = ta.sma(source = stochK, length = periodD)
 
 // Direction of %D — hold the last direction on flat bars so the color doesn't flicker.
-var bool dRising = true
-dRising := d > d[1] ? true : d < d[1] ? false : dRising
+var bool stochDRising = true
+stochDRising := stochD > stochD[1] ? true : stochD < stochD[1] ? false : stochDRising
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 📊 PLOT
 // %D first so %K draws on top of it. Widths/colors are Style-tab editable.
-plot(series = d, title = "%D", color = dRising ? UP_COLOR : DOWN_COLOR, linewidth = 4)
-plot(series = k, title = "%K", color = NORD3, linewidth = 2)
+// ═════════════════════════════════════════════════════════════════════════════
+plot(series = stochD, title = "%D", color = stochDRising ? STOCH_UP_COLOR : STOCH_DOWN_COLOR, linewidth = 4)
+plot(series = stochK, title = "%K", color = NORD3, linewidth = 2)
 
 // Bands — fixed prices; color/width/style/visibility are Style-tab editable.
 hline(price = 80, title = "Upper Band", color = NORD3, linewidth = 1, linestyle = hline.style_dashed)

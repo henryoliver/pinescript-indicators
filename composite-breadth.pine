@@ -227,7 +227,25 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
 bool compositeBreadthShowStatusBadge = input.bool(
      defval = true,
      title = "Session Status Badge",
-     tooltip = "Single-cell table (top right) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), and the opening-volume regime ratio. This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not.",
+     tooltip = "Single-cell table (position and text size set below) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), and the opening-volume regime ratio. This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+string compositeBreadthStatusBadgePosition = input.string(
+     defval = position.top_right,
+     title = "Status Badge Position",
+     options = [position.top_left, position.top_center, position.top_right,
+     position.middle_left, position.middle_center, position.middle_right,
+     position.bottom_left, position.bottom_center, position.bottom_right],
+     tooltip = "Where the session status badge sits on the pane.",
+     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+ )
+
+int compositeBreadthStatusBadgeTextSize = input.int(
+     defval = 12,
+     title = "Status Badge Text Size",
+     options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+     tooltip = "Font size used by the session status badge text.",
      group = GROUP_COMPOSITE_BREADTH_CONTEXT
  )
 
@@ -1271,11 +1289,12 @@ plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExtr
 plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellUp   and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Up",   style = shape.labelup,   location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
 plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellDown and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Down", style = shape.labeldown, location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
 
-// Session status badge — the persistence + regime readout, one cell top-right,
-// rebuilt only on the last bar. Side arrow + dwell share + hold time answer
-// Steenbarger's confirmation question ("has breadth HELD a side all session?");
-// the volume line answers Raschke's ("what kind of day is this?").
-var table compositeBreadthStatusTable = table.new(position = position.top_right, columns = 1, rows = 1)
+// Session status badge — the persistence + regime readout, one cell at the
+// user-chosen corner, rebuilt only on the last bar. Side arrow + dwell share +
+// hold time answer Steenbarger's confirmation question ("has breadth HELD a
+// side all session?"); the volume line answers Raschke's ("what kind of day is
+// this?").
+var table compositeBreadthStatusTable = table.new(position = compositeBreadthStatusBadgePosition, columns = 1, rows = 1)
 if compositeBreadthShowStatusBadge and barstate.islast
     string compositeBreadthSideText = compositeBreadthZeroSideSign == 1 ? "▲" : compositeBreadthZeroSideSign == -1 ? "▼" : "—"
     string compositeBreadthDwellText = na(compositeBreadthDwellRatio) ? "" :
@@ -1294,7 +1313,7 @@ if compositeBreadthShowStatusBadge and barstate.islast
          row = 0,
          text = compositeBreadthSideText + compositeBreadthDwellText + compositeBreadthHoldText + compositeBreadthRegimeText,
          text_color = compositeBreadthBadgeTextColor,
-         text_size = size.small,
+         text_size = compositeBreadthStatusBadgeTextSize,
          bgcolor = color.new(color = NORD1, transp = 20)
      )
 

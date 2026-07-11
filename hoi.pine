@@ -4,12 +4,11 @@
 //@version=6
 indicator(title = "Hindenburg Omen Indicator", shorttitle = "⚠️ HOI", overlay = true)
 
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-const string GROUP_MARKET = "🏛️ Market"
-const string GROUP_CONDITIONS = "🧪 Conditions"
-const string GROUP_DISPLAY = "🖥️ Display"
-
-// Nord Theme Color Constants
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
 // Polar Night
 const color NORD0 = #2E3440
 const color NORD1 = #3B4252
@@ -31,7 +30,15 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// 🎛️ USER INPUT SETTINGS
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚠️ HINDENBURG OMEN
+// Market routing, omen conditions, cluster confirmation, and the signal-window
+// background render all live here.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_MARKET = "🏛️ Market"
+const string GROUP_CONDITIONS = "🧪 Conditions"
+const string GROUP_DISPLAY = "🖥️ Display"
+
 // Market Selection — unified dropdown across all market-aware indicators.
 // TradingView publishes USI breadth feeds with these suffixes only: .NY (NYSE),
 // .NQ (Nasdaq exchange), .DJ (Dow 30 — index-specific), .US (combined US).
@@ -99,8 +106,7 @@ bool showBackground = input.bool(defval = true, title = "Show Background",
 color backgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Background Color",
      tooltip = "Background highlight color shown while the signal window is active.", group = GROUP_DISPLAY)
 
-// 🧮 DATA & CALCULATIONS
-// Get breadth and index data (daily)
+// Breadth and index data (daily)
 float advIssues = request.security(symbol = advSymbol, timeframe = "D", expression = close,
      gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 float decIssues = request.security(symbol = decSymbol, timeframe = "D", expression = close,
@@ -116,15 +122,15 @@ float marketIndexValue = request.security(symbol = indexSymbol, timeframe = "D",
 
 // Calculations
 // Total number of issues (like the reference codes)
-float total = advIssues + decIssues + uncIssues
-float nhPct = not na(total) and total > 0 ? (newHighs / total * 100) : na
-float nlPct = not na(total) and total > 0 ? (newLows / total * 100) : na
+float totalIssues = advIssues + decIssues + uncIssues
+float newHighsPct = not na(totalIssues) and totalIssues > 0 ? (newHighs / totalIssues * 100) : na
+float newLowsPct = not na(totalIssues) and totalIssues > 0 ? (newLows / totalIssues * 100) : na
 
 // Condition 1: % of issues hitting new 52W highs and 52W lows >= threshold
-bool isNewHighLowThresholdMet = not na(nhPct) and not na(nlPct) and
-     nhPct >= newLowHighThreshold and
-     nlPct >= newLowHighThreshold and
-     math.min(nhPct, nlPct) >= newLowHighThreshold
+bool isNewHighLowThresholdMet = not na(newHighsPct) and not na(newLowsPct) and
+     newHighsPct >= newLowHighThreshold and
+     newLowsPct >= newLowHighThreshold and
+     math.min(newHighsPct, newLowsPct) >= newLowHighThreshold
 
 // Condition 2: Index is higher or equal in value than when it was X days ago
 bool isPositiveTrend = not na(marketIndexValue) and not na(marketIndexValue[posTrendLookback]) and
@@ -153,10 +159,10 @@ var array<int> signalWindow = array.new<int>()
 var int clusterCount = 0
 
 if dailyConfirmed and barstate.isconfirmed
-    array.push(signalWindow, homenSignalRaw ? 1 : 0)
-    if array.size(signalWindow) > clusterWindowDays
-        array.shift(signalWindow)
-    clusterCount := int(array.sum(signalWindow))
+    array.push(id = signalWindow, value = homenSignalRaw ? 1 : 0)
+    if array.size(id = signalWindow) > clusterWindowDays
+        array.shift(id = signalWindow)
+    clusterCount := int(array.sum(id = signalWindow))
 
 bool homenSignal = homenSignalRaw and clusterCount >= clusterMinSignals
 
@@ -170,4 +176,4 @@ if dailyConfirmed and barstate.isconfirmed
 
 // Background Color for Signal Period (days)
 bool inSignalWindow = not na(daysSinceSignal) and daysSinceSignal >= 0 and daysSinceSignal <= signalPeriod
-bgcolor(showBackground and inSignalWindow ? backgroundColor : na, title = "Signal Period Background")
+bgcolor(color = showBackground and inSignalWindow ? backgroundColor : na, title = "Signal Period Background")
