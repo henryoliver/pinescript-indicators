@@ -1054,9 +1054,12 @@ enum TrendDir
 
 4. **`ma-waves.pine`**
    - Moving average wave counting indicator (Barry Burns methodology)
-   - Uses custom type definitions (Trend, Wave, Cycle, Price)
+   - Three layered engines: 50 SMA trend (with a `TrendDir` enum and
+     ATR-fraction hysteresis), stochastic %D 45/55 cycle boundaries, and the
+     wave count classifying each half-cycle's extreme
    - Implements wave labeling with impulses and retracements
-   - Uses `label.new()` for wave annotations
+   - Uses `label.new()` for wave annotations (tick-time live label, pinned on
+     the %D cross)
 
 5. **`macd-waves.pine`**
    - Advanced MACD with wave identification
