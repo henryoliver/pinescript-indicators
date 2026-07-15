@@ -1034,11 +1034,18 @@ enum TrendDir
 
 1. **`composite-breadth.pine`**
    - Intraday market-breadth composite (VOLD, ADD, PCTABOVEVWAP, CUMTICK)
-   - Consensus-weighted score with TICK-extreme and VOLD session-extreme
-     context layers; session-anchored state resets
-   - Context layers: zero-line persistence (dwell/persistent-flip),
-     opening-volume regime classifier, first-hour trend-day tell, session
-     status badge (table on `barstate.islast`)
+   - Line = smooth weighted stance; consensus (hysteresis sign votes with a
+     deadband) renders as line opacity + badge dissent readout, not as a
+     line multiplier; TICK-extreme and VOLD session-extreme context layers;
+     session-anchored state resets
+   - Context layers (each in its own input group, all independent of the
+     engine): zero-line persistence (dwell/persistent-flip), early-shift
+     warning (CUMTICK dissent vs established stance), PCCE options-sentiment
+     layer (equity-only put/call stretch + divergence; gated dynamic
+     request — zero cost when disabled), adaptive 30-day extended levels
+     (computation gated on toggle), opening-volume regime classifier,
+     first-hour trend-day tell, session status badge (table on
+     `barstate.islast`), configurable session-divider lines
    - Uses `request.security()` against the USI breadth feeds
 
 2. **`fundamental-view-indicator.pine`**
@@ -1091,6 +1098,16 @@ enum TrendDir
 11. **`quote-window.pine`** / **`ticker-tape.pine`** / **`hoi.pine`**
     - Table-based information displays (quote panel, multi-symbol tape,
       high-of-interest levels)
+
+12. **`obv.pine`**
+    - On Balance Volume (Barry Burns methodology) — smart-money/accumulation
+      detector in its own pane
+    - OBV drawn thin/neutral (like the MACD line); a 20-period SIMPLE MA OF OBV
+      is the hero line, slope-colored with the same blue up/down pair as the
+      macd-waves signal line and stochastic %D
+    - Bollinger Bands mode retained from the stock indicator
+    - Deliberately carries no trend lines or horizontal S/R (Barry rejects both
+      on OBV) — the signal MA is the only reference
 
 ### Common Features Across Indicators
 

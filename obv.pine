@@ -1,0 +1,128 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "On Balance Volume", shorttitle = "🐳 OBV", format = format.volume, timeframe = "", timeframe_gaps = true)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🐳 ON BALANCE VOLUME
+// Barry Burns' smart-money detector: volume added on up-closes, subtracted on
+// down-closes, unchanged on equal closes — a running cumulative total. It is all
+// about the CLOSE vs the prior close (never highs/lows), and the absolute value
+// is meaningless — you read the shape: direction, slope, and position relative
+// to the signal MA below. OBV is drawn thin and neutral (like the MACD line in
+// macd-waves) so the slope-colored signal line is the hero of the pane.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_OBV = "🐳 On Balance Volume"
+
+// OBV line color — neutral/thin so the signal MA reads as the primary line.
+const color OBV_LINE_COLOR = NORD3
+
+obvSource = input.source(defval = close, title = "Source",
+     tooltip = "Series compared bar-to-bar. Barry: OBV is all about the CLOSE vs the prior close — leave this on close unless you have a reason not to.", group = GROUP_OBV)
+
+// OBV core: sign of the close-to-close change scales the bar's whole volume,
+// accumulated. nz() guards the first bar and any gaps the vendor leaves blank.
+float obv = ta.cum(source = math.sign(number = ta.change(source = obvSource)) * nz(source = volume))
+
+// Vendor volume guard — OBV is meaningless without a volume feed (spot forex
+// needs a provider that supplies tick volume; Barry's note holds here).
+var float cumulativeVolume = 0.0
+cumulativeVolume += nz(source = volume)
+if barstate.islast and cumulativeVolume == 0
+    runtime.error(message = "No volume is provided by the data vendor.")
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 〰️ SIGNAL MA
+// Barry's explicit OBV setup: a 20-period SIMPLE moving average OF THE OBV line
+// (never of price — the classic setup trap). OBV above its MA = bullish volume
+// pattern, below = bearish (Technique 2); a sloped MA under flat price is the
+// accumulation tell (Technique 1). The MA slope drives the line color the same
+// way the MACD signal line is colored in macd-waves — the up and down shades are
+// the same blue family, so the line reads as one color while still showing its
+// lean. EMA turns faster for intraday; Barry's stated preference is the 20 SMA.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_SIGNAL = "〰️ Signal MA"
+const string TT_SIGNAL_BB = "Only applies when 'SMA + Bollinger Bands' is selected. Sets the band distance from the MA in standard deviations."
+
+// Signal-line slope colors — identical pair to the MACD signal line in
+// macd-waves and the stochastic %D: both are blue, so up/down read as the same
+// color while the shade still carries the slope.
+const color SIGNAL_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color SIGNAL_DOWN_COLOR = color.new(color = NORD9, transp = 60)
+
+signalMaType = input.string(defval = "SMA", title = "Type",
+     options = ["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"],
+     tooltip = "MA applied TO THE OBV line. Barry's setup is a 20 SMA of OBV. 'SMA + Bollinger Bands' adds bands around it.", group = GROUP_SIGNAL, display = display.none)
+signalMaLength = input.int(defval = 20, title = "Length", minval = 1,
+     tooltip = "MA lookback. Barry's default is 20 for swing/daily charts.", group = GROUP_SIGNAL, display = display.none)
+signalBbMult = input.float(defval = 2.0, title = "BB StdDev", minval = 0.001, maxval = 50, step = 0.5,
+     tooltip = TT_SIGNAL_BB, group = GROUP_SIGNAL, display = display.none)
+
+var bool signalEnabled = signalMaType != "None"
+var bool signalIsBB = signalMaType == "SMA + Bollinger Bands"
+
+// Helper function to compute the selected MA type over a source series.
+f_signalMa(float maSource, int maLength, simple string maType) =>
+    switch maType
+        "SMA"                   => ta.sma(source = maSource, length = maLength)
+        "SMA + Bollinger Bands" => ta.sma(source = maSource, length = maLength)
+        "EMA"                   => ta.ema(source = maSource, length = maLength)
+        "SMMA (RMA)"            => ta.rma(source = maSource, length = maLength)
+        "WMA"                   => ta.wma(source = maSource, length = maLength)
+        "VWMA"                  => ta.vwma(source = maSource, length = maLength)
+        => na
+
+float signalMa = signalEnabled ? f_signalMa(maSource = obv, maLength = signalMaLength, maType = signalMaType) : na
+float signalStDev = signalIsBB ? ta.stdev(source = obv, length = signalMaLength) * signalBbMult : na
+
+// MA slope drives the color; hold the last direction on flat bars so it doesn't
+// flicker (same treatment as the macd-waves signal line and stochastic %D).
+var bool signalRising = true
+signalRising := signalMa > signalMa[1] ? true : signalMa < signalMa[1] ? false : signalRising
+color signalColor = signalRising ? SIGNAL_UP_COLOR : SIGNAL_DOWN_COLOR
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 PLOTS
+// Final plot/fill statements only — every series and color is computed in its
+// owning section above. Barry rejects trend lines and horizontal S/R on OBV
+// ("the market is not that linear"), so this pane deliberately carries no
+// levels — the signal MA is the only reference line.
+// ═════════════════════════════════════════════════════════════════════════════
+plot(series = obv, title = "OBV", color = OBV_LINE_COLOR, linewidth = 2)
+plot(series = signalMa, title = "Signal MA", color = signalColor, linewidth = 4,
+     display = signalEnabled ? display.all : display.none, editable = signalEnabled)
+
+// Bollinger Bands — only drawn in 'SMA + Bollinger Bands' mode.
+bbUpperPlot = plot(series = signalIsBB ? signalMa + signalStDev : na, title = "Upper Bollinger Band",
+     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none, editable = signalIsBB)
+bbLowerPlot = plot(series = signalIsBB ? signalMa - signalStDev : na, title = "Lower Bollinger Band",
+     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none, editable = signalIsBB)
+fill(plot1 = bbUpperPlot, plot2 = bbLowerPlot, color = signalIsBB ? color.new(color = NORD8, transp = 92) : na,
+     title = "Bollinger Bands Background Fill", display = signalIsBB ? display.all : display.none, editable = signalIsBB)

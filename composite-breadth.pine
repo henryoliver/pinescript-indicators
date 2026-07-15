@@ -2,7 +2,10 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Composite Breadth Indicator", shorttitle = "📊 CBI", format = format.price, precision = 2)
+// dynamic_requests: explicit (it is the v6 default) because the PCCE context
+// layer issues its request.security call inside its enable-toggle's scope —
+// a disabled layer costs nothing, not even a request slot.
+indicator(title = "Composite Breadth Indicator", shorttitle = "📊 CBI", format = format.price, precision = 2, max_lines_count = 500, dynamic_requests = true)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -38,37 +41,76 @@ const color NORD15 = #B48EAD
 // is too noisy; the cumulative slope captures the same information with
 // persistence baked in. The composite is a CONFIRMATION instrument: price
 // discovery happens in the futures, breadth answers "did the cash basket
-// ratify the move". On top of it sit alert-grade context layers: intrabar
-// TICK extreme markers (exhaustion — Barry's ±1000 zones, colored by the
+// ratify the move". The LINE is the smooth weighted stance (2026-07-13
+// volatility rework — consensus renders as line opacity, the badge dissent
+// readout, and the early-shift event instead of multiplying the line, so the
+// composite carries the session-cumulative character of the feeds it
+// summarizes). On top of it sit alert-grade context layers: intrabar TICK
+// extreme markers (exhaustion — Barry's ±1000 zones, colored by the
 // opening-volume regime), alert-only VOLD session-extreme events, zero-line
-// persistence tracking (dwell time + persistent-flip alerts), the Raschke
-// opening-volume regime classifier, and the first-hour trend-day tell. This
-// section owns its inputs, data requests, calculations, color prep, and
-// plot-ready outputs.
+// persistence tracking (dwell time + persistent-flip alerts), the early-shift
+// warning (CUMTICK dissent against an established stance — the Steenbarger
+// divergence read as an event), the PCCE options-sentiment layer (equity-only
+// put/call stretch vs a trailing baseline + divergence vs the stance —
+// context only, never a weight), adaptive 30-day extended levels (the
+// composite's own typical daily range, the structure-and-levels LONG-TERM
+// S/R read on this pane), the Raschke opening-volume regime classifier, and
+// the first-hour trend-day tell. Every context layer is INDEPENDENT of the
+// engine: none touches the weighted sum, the consensus votes, or the EMAs,
+// and the optional ones gate their own computation (and, for PCCE, the data
+// request itself) behind their toggles. This section owns its inputs, data
+// requests, calculations, color prep, and plot-ready outputs.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_COMPOSITE_BREADTH_MARKET     = "🏛️ Market"
-const string GROUP_COMPOSITE_BREADTH_WEIGHTS    = "⚖️ Weights"
-const string GROUP_COMPOSITE_BREADTH_SIGNAL     = "🧮 Signal"
-const string GROUP_COMPOSITE_BREADTH_TICK       = "⚡ TICK Context"
-const string GROUP_COMPOSITE_BREADTH_CONTEXT    = "🕰️ Session Context"
-const string GROUP_COMPOSITE_BREADTH_DISPLAY    = "📋 Display"
+// One input group per layer so the settings panel mirrors the architecture:
+// engine groups first (Market/Weights/Signal), then each independent context
+// layer, then the pure-display groups. Every context layer is additive —
+// none of them touch the weighted sum, the consensus votes, or the EMAs —
+// and each can be disabled without affecting the composite.
+const string GROUP_COMPOSITE_BREADTH_MARKET  = "🏛️ Market"
+const string GROUP_COMPOSITE_BREADTH_WEIGHTS = "⚖️ Weights"
+const string GROUP_COMPOSITE_BREADTH_SIGNAL  = "🧮 Signal"
+const string GROUP_COMPOSITE_BREADTH_TICK    = "⚡ TICK Context"
+const string GROUP_COMPOSITE_BREADTH_BADGE   = "🪧 Status Badge"
+const string GROUP_COMPOSITE_BREADTH_PERSIST = "⏳ Persistence & Early Shift"
+const string GROUP_COMPOSITE_BREADTH_REGIME  = "🔊 Opening-Volume Regime"
+const string GROUP_COMPOSITE_BREADTH_TELL    = "🚩 Trend-Day Tell"
+const string GROUP_COMPOSITE_BREADTH_PCCE    = "🎭 Options Sentiment (PCCE)"
+const string GROUP_COMPOSITE_BREADTH_LEVELS  = "📏 Adaptive Levels"
+const string GROUP_COMPOSITE_BREADTH_DIVIDER = "🪟 Session Divider"
+const string GROUP_COMPOSITE_BREADTH_DISPLAY = "📋 Display"
 
 const float CBI_SCALE_MAX               = 100.0
 const float CBI_TICK_FIXED_SCALE        = 500.0    // NYSE-reference cumTICK saturation base — "TICK averaged ±500 across the slope window"; scaled per market by the TICK market factor
 const int   CBI_SIGNAL_WARMUP_BARS      = 5        // bars to seed display before first signal value — slightly longer than legacy 3 so the EMA isn't dominated by the seed at session open
 const int   CBI_DISPLAY_SMOOTH_LENGTH   = 3        // light EMA on composite for the plot only — reduces visual noise without affecting calc
-const float CBI_OPACITY_ANCHOR          = 35.0
-const float CBI_EXTENDED_LEVEL          = 60.0     // dotted reference at ±60 — Barry's manual "30-day VOLD support/resistance" equivalent, marks abnormally extended breadth
+const float CBI_OPACITY_ANCHOR          = 50.0     // |line| value where the color gradient + magnitude opacity saturate. Recalibrated 35 → 50 with the consensus-squeeze removal: the unsqueezed line runs 1.4-3× larger on disagreement bars, so the old anchor saturated most of the session and erased the vivid-means-strong dynamic range
+const float CBI_EXTENDED_LEVEL_MEAN_DAYS = 30.0    // trailing-mean window (sessions) for the ADAPTIVE extended levels — dotted stepped lines at the composite's own typical daily max/min, the same 30-day-range construction as the VOLD baselines and the same long-term-levels read that makes structure-and-levels' LONG-TERM S/R useful on price. Replaces the old static ±60 hlines: a fixed level can't track regime changes, and because these sit inside the composite's real range they don't pin the auto-scale outward
+const int   CBI_EXTENDED_LEVEL_MIN_SESSIONS = 5    // completed sessions required before the adaptive levels plot — the EMA seeds at the FIRST loaded session's raw extreme, so on short history a single blowout day would pin the "typical" level for weeks; hiding the levels until a few sessions have folded keeps a bad seed from masquerading as a baseline
 const int   CBI_SIGNAL_MIN_TRANSP       = 40
 const float CBI_SIGNAL_ALERT_GATE_MINUTES = 30.0   // post-open window in MINUTES during which composite-vs-signal CROSS alerts stay muted (bar count derived from the chart timeframe). The 09:30–10:00 window is auction-seeding noise for the internals — ADD's early print largely encodes overnight gap direction, and a freshly reseeded signal EMA makes crosses there mostly artifacts. LEVEL alerts (±50 impulse, VOLD extremes, TICK extremes) are NOT gated: extreme levels at the open are real information (early breadth thrust = trend-day tell); it's specifically the crosses that are noise
 
 const float CBI_CUMTICK_SLOPE_MINUTES   = 10.0     // cumulative-TICK slope lookback in MINUTES — bar count derived from the chart timeframe (5 bars on 2-min) so the window keeps its meaning on 1m/2m/5m charts. Short enough to catch real-time inflections, long enough to filter single-bar noise
+const float CBI_CUMTICK_SLOPE_SMOOTH_MINUTES = 10.0 // EMA window (minutes → bars) applied to the cumTICK slope BEFORE normalization — the raw 10-minute ROC flips sign constantly (TICK oscillates ±300 around zero all day), and that per-bar sign chatter was the composite's main fast-noise injector at 25% weight. Smoothing the slope keeps the component's leading character while dropping the flicker
 const float CBI_TICK_BIAS_DAYS          = 20.0     // Steenbarger Adjusted-TICK trailing-mean window in trading days — raw TICK carries a persistent positive bias; subtracting a ~20-day mean before cumulating recenters the cumTICK slope
 const int   CBI_FEED_HEALTH_GRACE_BARS  = 5        // bars after session open before a missing required feed triggers the log.warning — gives the USI feeds time to deliver their first non-na bar
 const int   CBI_VOLD_EXTREME_REARM_BARS = 10       // a VOLD-delta new session high/low only fires as an event when the prior extreme stood for at least this many bars — suppresses the every-bar "new extreme" spam of a steady trend leg
 const float CBI_VOLD_RANGE_MEAN_DAYS    = 30.0     // trailing-mean window (sessions) for the TYPICAL daily VOLD extreme — Barry's self-invented 30-day volume-trend S/R technique ("15-minute bars, 30 days back, draw horizontal levels at the recurring daily extremes"). Today's net pushing beyond the typical session extreme = beyond a normal day's range — "it would be against the odds for it to continue"
 const float CBI_TICK_HOLD_TEST_MINUTES  = 10.0     // post-extreme observation window for Barry's hold-the-zero-line test — long enough to see whether the recovery holds the extreme's half of zero, short enough that the read still matters for the next cycle turn; bar count derived from the chart timeframe
 const float CBI_TICK_SNAPBACK_LEVEL     = 250.0    // NYSE-scale (market-scaled): mean recovery beyond this on the OPPOSITE side of zero = decisive snap-back — Barry's "snaps back well above zero, toward +500" made numeric as halfway into the opposite neutral box. Between zero and this level the recovery is inconclusive and no event fires
+const float CBI_EARLY_SHIFT_DISSENT_MINUTES = 20.0 // how long the CUMTICK vote must hold the OPPOSITE side of an established composite stance before the early-shift warning fires — Steenbarger's cumulative-TICK divergence read made into a discrete event: breadth rotating under the trend BEFORE the composite crosses zero. Doubled 10 → 20 after the 2026-07-14 multi-week review: the shorter window fired 3-5×/session (texture, not event); a real rollover episode survives 20 minutes easily, drift doesn't. The stance itself must have been held for at least the persistent-flip minimum, and re-arming needs SUSTAINED re-agreement (half this window), so one rollover with wiggles = one event
+
+// PCCE options-sentiment layer (research verdict 2026-07-14): the Cboe
+// EQUITY-ONLY put/call ratio is the one options-flow family that partially
+// escapes 0DTE index contamination (0DTE = 40-62% of SPX volume), and the
+// USI:PCCE feed was empirically verified to print intraday on TradingView
+// (187 distinct values in one RTH session on a 2-min chart). The literature
+// ceiling for aggregate put/call is CONTEXT, not signal — no intraday-leading
+// evidence survived adversarial verification — so this layer is alert-grade
+// only and never enters the weighted sum.
+const string CBI_PCCE_SYMBOL           = "USI:PCCE"
+const float CBI_PCCE_BASELINE_DAYS     = 20.0      // trailing-mean window (sessions) for the PCCE baseline (mean + mean-absolute-deviation of each session's MEAN print — not its close: intraday prints run structurally hot at the open, so a close-built baseline flagged ▲puts most mornings) — same fold-at-09:30 construction as the opening-volume and VOLD-range baselines. The raw level is meaningless without it: 0.55 and 0.80 both occurred within two adjacent days; only the deviation from the recent regime reads
+const float CBI_PCCE_SLOPE_MINUTES     = 15.0      // PCCE slope lookback in MINUTES (bar count derived from the chart timeframe) — the divergence read keys on the ratio GRINDING one way (persistent put accumulation/unwind), not on bar-to-bar wiggles; the session-cumulative ratio moves slowly, so the slope window is wider than the cumTICK one
+const float CBI_PCCE_DISSENT_MINUTES   = 30.0      // how long the PCCE slope must dissent against an established composite stance before the options-flow divergence event fires — the observed pre-dump pattern (2026-07-10: puts building all afternoon under a rally) is a sustained grind, so a short dissent is noise. Doubled 15 → 30 after the 2026-07-14 multi-week review: 15 minutes let sign-only drift fire 2-4×/session; re-arming also needs sustained re-agreement (half this window)
 const int   CBI_TIME_DIM_EXTRA_TRANSP   = 35       // extra transparency added to the composite line during the lunch trough and MOC window when time-of-day dimming is on
 const float CBI_OPEN_VOL_WINDOW_MINUTES = 30.0     // opening-volume capture window — Raschke's number-one day-type criterion is FIRST-30-MINUTE NYSE volume ("The very number one criteria I look at is volume and I will usually look at the first 30-minute volume"). Measured as the market's TVOL print at the 30-minute mark — the exact total-volume series, already requested as the VOLD ratio denominator
 const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sessions) for the opening-volume baseline the regime ratio compares against — cross-session EMA, same seeding pattern as the TICK bias mean
@@ -170,7 +212,40 @@ int compositeBreadthSignalLength = input.int(
      minval = 1,
      maxval = 100,
      step = 1,
-     tooltip = "EMA period for the signal line (smoothed reference). Fed from the smoothed display line so signal vs composite is internally consistent. Reseeds at every session open after a brief warmup (time-anchored, so it works on RTH-only and extended-hours charts alike) — crosses read against fresh state rather than carrying over from the prior session. Default 20 follows Ehlers' half-cycle rule for crossover pairs: the 3-EMA display vs a 20-EMA signal is tuned to ~40-minute directional legs on a 2-min chart, squarely inside the 30–120 min swings this composite is meant to ratify (the old 15 was tuned to ~24-min legs — the very fastest edge of that target). Lag ≈ 19 minutes on 2-min — under a third of a one-hour move, the right trade for a CONFIRMATION line. Drop toward 15 to lead faster at the cost of more whipsaw crosses; don't go far above 25 — a 195-bar RTH session can't converge much more EMA.",
+     tooltip = "EMA period for the signal line (smoothed reference). Fed from the smoothed display line so signal vs composite is internally consistent. Reseeds at every session open after a brief warmup (time-anchored, so it works on RTH-only and extended-hours charts alike) — crosses read against fresh state rather than carrying over from the prior session. Default 20 follows Ehlers' half-cycle rule for crossover pairs: the 3-EMA display vs a 20-EMA signal tunes to ~40-minute directional legs on a 2-min chart, squarely inside the 30–120 min swings this composite ratifies. Drop toward 9 for a fast momentum/hook read (~18-minute legs — viable since the line is the smooth unsqueezed stance, but expect lunch-chop crosses); don't go far above 25 — a 195-bar RTH session can't converge much more EMA. NOTE: the length is in BARS, so on a 5-min chart 9 already tunes to ~45-minute legs.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+bool compositeBreadthShowSignalLine = input.bool(
+     defval = true,
+     title = "Signal Line",
+     tooltip = "Smoothed reference line — EMA of the smoothed composite (fed from the same series that's plotted, so divergences read true). Composite above signal = upward momentum building; composite below signal = downward. Hiding the line does NOT mute the cross alerts — display toggles never disable alerts in this indicator.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+color compositeBreadthSignalLineColor = input.color(
+     defval = NORD3,
+     title = "Signal Line Color",
+     tooltip = "Color of the signal EMA line (transparency supported via the picker).",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+int compositeBreadthSignalLineWidth = input.int(
+     defval = 4,
+     title = "Signal Line Width",
+     minval = 1,
+     maxval = 10,
+     tooltip = "Signal EMA line width in pixels. Default 4 matches the composite line's weight so the pair reads as equals; drop to 1-2 for a subtler reference line.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+float compositeBreadthConsensusDeadband = input.float(
+     defval = 0.1,
+     title = "Consensus Vote Deadband",
+     minval = 0.0,
+     maxval = 0.5,
+     step = 0.05,
+     tooltip = "Confidence magnitude a component must exceed before it VOTES in the consensus read. Near-zero components abstain — flat is not dissent — and an established vote holds through the band (hysteresis, the same pattern as ma-waves' hysteresis read direction), flipping only when confidence crosses the band on the OPPOSITE side. Kills the consensus flicker that came from a component's sign chattering around zero without delaying real rollovers. The same deadband stabilizes the reference sign the votes are measured against. CAUTION: 0 restores instantaneous-sign voting, which makes the CUMTICK vote flip nearly every bar — that effectively disables the early-shift warning and PCCE divergence events (both need a vote that HOLDS a side for their dwell windows).",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
@@ -216,10 +291,12 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
      group = GROUP_COMPOSITE_BREADTH_TICK
  )
 
-// ─── Session context (persistence / volume regime / trend-day tell) ──────────
-// Research round 2026-07-10 (deep research, adversarially verified). Three
-// additions, all layered ON TOP of the tuned composite engine — none of them
-// touch the weighted sum, the consensus multiplier, or the EMAs:
+// ─── Context layers (badge / persistence / volume regime / tell / PCCE) ──────
+// Each layer gets its own input group so the settings panel mirrors the
+// architecture. All are layered ON TOP of the tuned composite engine — none
+// of them touch the weighted sum, the consensus votes, or the EMAs, and the
+// optional ones gate their own computation behind their toggles. The first
+// three came from the 2026-07-10 research round (adversarially verified):
 //   1. Zero-line PERSISTENCE — Steenbarger's verified trend-day criteria are
 //      persistence statements ("cumulative TICK stays positive and rising
 //      through the session", "%>VWAP remains above 50% through the session"),
@@ -232,10 +309,10 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
 //   3. TREND-DAY TELL — extreme intrabar TICK inside the first hour with ADD
 //      and VOLD agreeing is a backtested early trend-day identifier.
 bool compositeBreadthShowStatusBadge = input.bool(
-     defval = true,
+     defval = false,
      title = "Session Status Badge",
-     tooltip = "Single-cell table (position and text size set below) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), the opening-volume regime ratio, and — once triggered — the VOLD >30d flag (today's up/down volume difference pushed beyond its typical 30-day session extreme; stays on for the rest of the session). This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     tooltip = "Single-cell table (position and text size set below) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), the opening-volume regime ratio, the VOLD >30d flag (today's up/down volume difference pushed beyond its typical 30-day session extreme; sticky for the session), the consensus dissent readout, and the PCCE options-sentiment stretch. This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not. OFF by default; the underlying persistence state still computes (it drives the flip and early-shift alerts).",
+     group = GROUP_COMPOSITE_BREADTH_BADGE
  )
 
 string compositeBreadthStatusBadgePosition = input.string(
@@ -245,7 +322,7 @@ string compositeBreadthStatusBadgePosition = input.string(
      position.middle_left, position.middle_center, position.middle_right,
      position.bottom_left, position.bottom_center, position.bottom_right],
      tooltip = "Where the session status badge sits on the pane.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_BADGE
  )
 
 int compositeBreadthStatusBadgeTextSize = input.int(
@@ -253,7 +330,7 @@ int compositeBreadthStatusBadgeTextSize = input.int(
      title = "Status Badge Text Size",
      options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
      tooltip = "Font size used by the session status badge text.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_BADGE
  )
 
 float compositeBreadthPersistFlipMinutes = input.float(
@@ -262,15 +339,22 @@ float compositeBreadthPersistFlipMinutes = input.float(
      minval = 10.0,
      maxval = 180.0,
      step = 5.0,
-     tooltip = "A zero-line cross only fires the persistent-flip alert when the composite held the PRIOR side for at least this long (bar count derived from the chart timeframe). Filters the meaningless chop-flips near zero: a flip after a 90-minute hold is a regime statement, a flip after 4 minutes is noise. No research-validated dwell threshold exists (open question in the corpus) — 45 minutes ≈ one directional leg on the 30–120 min swings this composite is tuned to ratify; adjust to taste.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     tooltip = "A zero-line cross only fires the persistent-flip alert when the composite held the PRIOR side for at least this long (bar count derived from the chart timeframe). Filters the meaningless chop-flips near zero: a flip after a 90-minute hold is a regime statement, a flip after 4 minutes is noise. Also the stance-hold gate for the early-shift warning and the PCCE divergence event. No research-validated dwell threshold exists (open question in the corpus) — 45 minutes ≈ one directional leg on the 30–120 min swings this composite is tuned to ratify; adjust to taste.",
+     group = GROUP_COMPOSITE_BREADTH_PERSIST
+ )
+
+bool compositeBreadthShowEarlyShift = input.bool(
+     defval = true,
+     title = "Early-Shift Markers",
+     tooltip = "Yellow diamond when CUMTICK (the leading component) has dissented against an established composite stance for the dissent window (20 min) — breadth rotating under the trend before the zero cross. One event per rollover: re-arming needs sustained re-agreement (half the window). Markers auto-hide on expansion-regime days, where counter-trend context is continuation fuel (Raschke). Display only: the early-shift ALERTS fire whether or not the markers are shown or muted, per this indicator's doctrine.",
+     group = GROUP_COMPOSITE_BREADTH_PERSIST
  )
 
 bool compositeBreadthUseOpenVolRegime = input.bool(
      defval = true,
      title = "Opening-Volume Regime (Raschke)",
-     tooltip = "Classify each session by its first-30-minute volume (the market's TVOL print at the 30-min mark) against a trailing 10-session mean. Raschke's number-one day-type criterion, and the regime that decides TICK-extreme interpretation: on GOOD-volume days extremes are momentum/continuation (\"you want to use the TICKS as a momentum indicator\"); on LIGHT-volume days extremes coincide with price extremes and are fade-friendly. Drives the TICK extreme marker color (orange = expansion/continuation, blue = light/fade-friendly, yellow = neutral or baseline still warming up) and the badge readout. Needs ~10 sessions of chart history to seed the baseline.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     tooltip = "Classify each session by its first-30-minute volume (the market's TVOL print at the 30-min mark) against a trailing 10-session mean. Raschke's number-one day-type criterion, and the regime that decides TICK-extreme interpretation: on GOOD-volume days extremes are momentum/continuation (\"you want to use the TICKS as a momentum indicator\"); on LIGHT-volume days extremes coincide with price extremes and are fade-friendly. Drives the TICK extreme marker color (orange = expansion/continuation, blue = light/fade-friendly, yellow = neutral or baseline still warming up), the badge readout, and the expansion-day MUTE of the early-shift/divergence markers (counter-trend context is continuation fuel on expansion days; their alerts still fire). Needs ~10 sessions of chart history to seed the baseline.",
+     group = GROUP_COMPOSITE_BREADTH_REGIME
  )
 
 float compositeBreadthOpenVolExpansionRatio = input.float(
@@ -280,7 +364,7 @@ float compositeBreadthOpenVolExpansionRatio = input.float(
      maxval = 3.0,
      step = 0.05,
      tooltip = "Opening volume at or above this multiple of the trailing mean = range-expansion (trend-capable) regime. Raschke's rule is categorical (\"good volume day\" vs \"light volume day\") with no published number — 1.2× (20% above average) is a reasonable default; re-validate on current data rather than trusting it (breadth thresholds decay across regimes, Qi & Zhao 2008).",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_REGIME
  )
 
 float compositeBreadthOpenVolLightRatio = input.float(
@@ -290,14 +374,14 @@ float compositeBreadthOpenVolLightRatio = input.float(
      maxval = 1.0,
      step = 0.05,
      tooltip = "Opening volume at or below this multiple of the trailing mean = light-volume (rotation, fade-friendly) regime. Between the two ratios the day is classified neutral.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_REGIME
  )
 
 bool compositeBreadthShowTrendTell = input.bool(
      defval = true,
      title = "Trend-Day Tell Marker",
      tooltip = "Purple TD marker on the composite line when, between minute 10 and minute 60 of the session, the TICK feed prints an intrabar extreme beyond the tell threshold WHILE both VOLD and ADD confidences agree with its direction. Backtested third-party (TOS Indicators, 2014–2024): ~70% trend-day hit rate on the TICK extreme alone, >80% with ADD/VOLD agreement; Steenbarger cites the same early-TICK tell independently. Fires at most ONCE per session — it is a day-type classification, not a repeating signal. The matching alerts fire whether or not the marker is shown.",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_TELL
  )
 
 float compositeBreadthTrendTellThreshold = input.float(
@@ -307,14 +391,45 @@ float compositeBreadthTrendTellThreshold = input.float(
      maxval = 2000.0,
      step = 50.0,
      tooltip = "Intrabar TICK high/low magnitude that arms the trend-day tell inside the first hour, expressed on the NYSE scale and multiplied by the selected market's TICK factor (capped at 95% of the feed's issue-count bound — on the Dow the cap turns it into \"29-30 of 30 issues ticking together\"). 1500 is the backtested TOS Indicators level — deliberately far beyond the ±985 exhaustion threshold: ±1000 is \"stretched\", ±1500 in the first hour is \"one-sided participation broad enough to sustain a trend day\".",
-     group = GROUP_COMPOSITE_BREADTH_CONTEXT
+     group = GROUP_COMPOSITE_BREADTH_TELL
+ )
+
+// ─── Options sentiment (PCCE context layer) ──────────────────────────────────
+// Fully independent: disabling removes the data request and every derived
+// calculation — zero cost to the composite. Never a weighted component (see
+// the constants-block note for the research verdict).
+bool compositeBreadthPcceEnabled = input.bool(
+     defval = true,
+     title = "PCCE Options Sentiment Layer",
+     tooltip = "Adds the Cboe EQUITY-ONLY put/call ratio (USI:PCCE — verified printing live intraday on TradingView, ~every 2-min bar) as an alert-grade CONTEXT layer: a stretch read on the status badge and an options-flow divergence event vs the composite stance. Equity-only is the one put/call family that partially escapes 0DTE index contamination (0DTE = 40-62% of SPX volume). Deliberately NOT a weighted component: no intraday-leading evidence for aggregate put/call survived adversarial verification (2026-07-14 research) — this is context, weighted accordingly at zero. Disabling removes the request.security call entirely.",
+     group = GROUP_COMPOSITE_BREADTH_PCCE
+ )
+
+float compositeBreadthPcceStretchThreshold = input.float(
+     defval = 1.0,
+     title = "Stretch Threshold (typical devs)",
+     minval = 0.5,
+     maxval = 3.0,
+     step = 0.25,
+     tooltip = "How many TYPICAL DEVIATIONS (mean-absolute-deviation units, ~0.8σ for near-normal data — deliberately not labeled σ) beyond its trailing ~20-session baseline PCCE must sit before the badge flags it: ▲puts (put-heavy tape vs the recent regime — bearish sentiment stretch) or ▼calls (call-heavy). Baseline = trailing mean and MAD of each session's MEAN print (not its close — intraday prints run structurally hot at the open, and a close-built baseline flagged ▲puts most mornings), folded at the 09:30 edge like the opening-volume and VOLD-range baselines. The raw level is meaningless without this normalization — 0.55 and 0.80 both printed within two adjacent days.",
+     group = GROUP_COMPOSITE_BREADTH_PCCE
+ )
+
+bool compositeBreadthPcceShowDivergence = input.bool(
+     defval = true,
+     title = "Divergence Markers",
+     tooltip = "Orange diamond when PCCE has been grinding AGAINST an established composite stance: puts accumulating under a bullish stance (bearish divergence, diamond above the line) or put pressure unwinding under a bearish stance (bullish divergence, below). Requires the stance held for at least the persistent-flip minimum AND the PCCE slope dissenting for the dissent window (30 min) — the 2026-07-10 pattern (puts building all afternoon under a rally, dump next day) made mechanical. One event per episode: re-arming needs sustained re-agreement (half the window). Markers auto-hide on expansion-regime days (counter-trend context is continuation fuel there — Raschke). PCCE is contrarian-scaled: rising = bearish pressure, so \"dissent\" means the ratio trending the SAME direction as the stance sign. Alerts fire whether or not the markers are shown or muted.",
+     group = GROUP_COMPOSITE_BREADTH_PCCE
  )
 
 // ─── Display ──────────────────────────────────────────────────────────────────
-bool compositeBreadthShowSignalLine = input.bool(
-     defval = true,
-     title = "Signal Line",
-     tooltip = "Smoothed reference line — EMA of the smoothed composite (fed from the same series that's plotted, so divergences read true). Composite above signal = upward momentum building; composite below signal = downward.",
+int compositeBreadthConsensusDimStrength = input.int(
+     defval = 45,
+     title = "Consensus Dim Strength",
+     minval = 0,
+     maxval = 90,
+     step = 5,
+     tooltip = "Extra line transparency at maximum component disagreement — consensus renders as OPACITY, not as a multiplier on the line (the old multiplier rescaled the whole line 30-70% every time one component's sign flickered). (1 − consensus) × this is added to the line's transparency: full agreement = vivid, split = pale. 0 turns consensus dimming off entirely. Stacks with time-of-day dimming, capped at 95 — lower one of the two if the lunch-window line goes too faint during disagreement.",
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
@@ -334,16 +449,40 @@ bool compositeBreadthShowZeroLine = input.bool(
 
 bool compositeBreadthShowExtendedLevels = input.bool(
      defval = false,
-     title = "Show Extended Levels (±60)",
-     tooltip = "Dotted reference lines at ±CBI_EXTENDED_LEVEL (60 by default). Beyond visual saturation the composite would otherwise look identical from ±35 to ±100; the dotted lines mark the \"extended for this market\" zone — Barry's equivalent of his manually-drawn 30-day VOLD support/resistance levels. Breadth pushing past ±60 is an extended directional reading, not a normal-range one. OFF by default because the ±60 hlines pin TradingView's auto-scale to at least [−60, +60], which can compress the composite's actual swing. Turn on if you want fixed visual reference levels at the cost of some auto-scale flexibility.",
-     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+     title = "Adaptive Extended Levels (30d)",
+     tooltip = "Stepped reference lines at the composite's TYPICAL daily max and min — trailing ~30-session means of each session's extreme, the same construction as the VOLD 30-day range baselines and the same long-term-levels read as structure-and-levels' LONG-TERM S/R, applied to this pane's scale. Today's line tagging its typical extreme = beyond a normal day's breadth range (\"against the odds to continue\" — tighten trails, take targets seriously). Adaptive levels track regime changes and sit inside the composite's real range, so they don't pin the auto-scale outward. OFF by default — when off, the level baselines aren't computed at all. Needs one completed session on the loaded history before the first levels appear.",
+     group = GROUP_COMPOSITE_BREADTH_LEVELS
  )
 
 bool compositeBreadthShowSessionDivider = input.bool(
      defval = true,
      title = "Session Divider",
-     tooltip = "Tint the first bar of each NYSE RTH session so day boundaries are obvious at a glance — without it, back-to-back sessions blur together and you can't tell where one day ends and the next begins. Anchored to the same time-anchored 09:30 edge that resets every piece of session state (EMAs, cumTick, VOLD extremes, feed-health counters), so the divider lands exactly where the indicator resets.",
-     group = GROUP_COMPOSITE_BREADTH_DISPLAY
+     tooltip = "Vertical line on the first bar of each NYSE RTH session so day boundaries are obvious at a glance — without it, back-to-back sessions blur together. Anchored to the same time-anchored 09:30 edge that resets every piece of session state (EMAs, cumTick, VOLD extremes, feed-health counters), so the divider lands exactly where the indicator resets. Color, width, and style configurable below.",
+     group = GROUP_COMPOSITE_BREADTH_DIVIDER
+ )
+
+color compositeBreadthSessionDividerColor = input.color(
+     defval = color.new(color = NORD3, transp = 40),
+     title = "Divider Color",
+     tooltip = "Session divider line color (transparency supported via the picker).",
+     group = GROUP_COMPOSITE_BREADTH_DIVIDER
+ )
+
+int compositeBreadthSessionDividerWidth = input.int(
+     defval = 4,
+     title = "Divider Width",
+     minval = 1,
+     maxval = 10,
+     tooltip = "Session divider line width in pixels.",
+     group = GROUP_COMPOSITE_BREADTH_DIVIDER
+ )
+
+string compositeBreadthSessionDividerStyle = input.string(
+     defval = "Solid",
+     title = "Divider Style",
+     options = ["Solid", "Dashed", "Dotted"],
+     tooltip = "Session divider line style.",
+     group = GROUP_COMPOSITE_BREADTH_DIVIDER
  )
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -472,6 +611,15 @@ string compositeBreadthTickSymbol = compositeBreadthTickNyseOnly ?
 // drives the Steenbarger trailing-mean adjustment on the cumTICK input.
 // ═════════════════════════════════════════════════════════════════════════════
 int compositeBreadthCumTickSlopeWindow  = math.max(2, math.round(number = CBI_CUMTICK_SLOPE_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthCumTickSlopeSmoothBars = math.max(2, math.round(number = CBI_CUMTICK_SLOPE_SMOOTH_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthEarlyShiftDissentBars  = math.max(2, math.round(number = CBI_EARLY_SHIFT_DISSENT_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthPcceSlopeBars          = math.max(2, math.round(number = CBI_PCCE_SLOPE_MINUTES * 60.0 / timeframe.in_seconds()))
+int compositeBreadthPcceDissentBars        = math.max(2, math.round(number = CBI_PCCE_DISSENT_MINUTES * 60.0 / timeframe.in_seconds()))
+// Re-arm dwell = half the dissent window: after a dissent event fires, the
+// opposing read must hold that long before a NEW episode can arm — one
+// rollover with wiggles stays one event instead of three.
+int compositeBreadthEarlyShiftRearmBars    = math.max(1, math.round(number = compositeBreadthEarlyShiftDissentBars / 2.0))
+int compositeBreadthPcceRearmBars          = math.max(1, math.round(number = compositeBreadthPcceDissentBars / 2.0))
 int compositeBreadthSignalAlertGateBars = math.max(1, math.round(number = CBI_SIGNAL_ALERT_GATE_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthTickBiasWindowBars  = math.max(10, math.round(number = CBI_TICK_BIAS_DAYS * 390.0 * 60.0 / timeframe.in_seconds()))
 int compositeBreadthOpenVolWindowBars   = math.max(1, math.round(number = CBI_OPEN_VOL_WINDOW_MINUTES * 60.0 / timeframe.in_seconds()))
@@ -571,6 +719,22 @@ float compositeBreadthPctVwapValue = request.security(
      ignore_invalid_symbol = true
  )
 
+// PCCE — the optional options-sentiment context feed (equity-only put/call,
+// no per-market routing: Cboe publishes ONE equity-only series, and the
+// options tape it aggregates isn't exchange-partitioned the way the stock
+// internals are). Requested inside the toggle via Pine v6 dynamic requests,
+// so a disabled layer costs nothing — not even a request slot.
+float compositeBreadthPcceValue = na
+if compositeBreadthPcceEnabled
+    compositeBreadthPcceValue := request.security(
+         symbol = CBI_PCCE_SYMBOL,
+         timeframe = timeframe.period,
+         expression = close,
+         gaps = barmerge.gaps_on,
+         lookahead = barmerge.lookahead_off,
+         ignore_invalid_symbol = true
+     )
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔔 SESSION DETECTION
 // AnyFeedLive = at least one of the five breadth feeds is non-na this bar.
@@ -632,7 +796,32 @@ f_compositeBreadthClampedRatio(float numerator, float denominator) =>
         compositeBreadthRatio := math.max(-1.0, math.min(1.0, numerator / denominator))
     compositeBreadthRatio
 
-f_compositeBreadthProgressiveColor(float value, float scale, int minTransp) =>
+// One EWMA step — the file's single most repeated fragment (every trailing
+// baseline fold and every session EMA seed uses the same seed-or-fold
+// expression). PURE — no internal state: each call site keeps its own var
+// and assigns the return, so the helper stays safe inside conditional
+// scopes (a var-holding helper called conditionally would break Pine's
+// every-bar execution guarantee).
+f_compositeBreadthEwmaStep(float previous, float sample, float length) =>
+    float compositeBreadthEwmaAlpha = 2.0 / (length + 1.0)
+    na(previous) ? sample : compositeBreadthEwmaAlpha * sample + (1.0 - compositeBreadthEwmaAlpha) * previous
+
+// Hysteresis consensus vote: a component votes +1/−1 only after its
+// confidence leaves the ±deadband, holds that vote through the band, and
+// flips only when confidence crosses the band on the OPPOSITE side. 0 =
+// never established a side (abstains from consensus). Same pattern as
+// ma-waves' hysteresis read direction — real rollovers register,
+// micro-wiggles around zero don't.
+f_compositeBreadthVoteSign(int currentVote, float confidence, float deadband) =>
+    int compositeBreadthVoteResult = currentVote
+    if not na(confidence)
+        if confidence > deadband
+            compositeBreadthVoteResult := 1
+        else if confidence < -deadband
+            compositeBreadthVoteResult := -1
+    compositeBreadthVoteResult
+
+f_compositeBreadthProgressiveColor(float value, float scale, int minTransp, float extraTransp) =>
     color compositeBreadthResultColor = na
     if not na(value)
         // Two-stage gradient — NORD11 → NORD3 (neutral grey at zero) → NORD8 — produces
@@ -641,9 +830,12 @@ f_compositeBreadthProgressiveColor(float value, float scale, int minTransp) =>
         color compositeBreadthBaseColor = value >= 0.0 ?
              color.from_gradient(value = value, bottom_value = 0.0,    top_value = scale, bottom_color = NORD3,  top_color = NORD8) :
              color.from_gradient(value = value, bottom_value = -scale, top_value = 0.0,   bottom_color = NORD11, top_color = NORD3)
-        // Magnitude-based transparency: faded near zero, vivid at |value| ≥ scale.
+        // Magnitude-based transparency (faded near zero, vivid at |value| ≥
+        // scale) plus the caller's extra dim (consensus + time-of-day),
+        // folded into ONE color.new — the old two-stage color.t() unwrap +
+        // rewrap allocated a second color on nearly every bar.
         float compositeBreadthMagnitude = math.min(1.0, math.abs(number = value) / scale)
-        int compositeBreadthTransparency = int(minTransp - minTransp * compositeBreadthMagnitude)
+        float compositeBreadthTransparency = math.min(95.0, minTransp - minTransp * compositeBreadthMagnitude + extraTransp)
         compositeBreadthResultColor := color.new(color = compositeBreadthBaseColor, transp = compositeBreadthTransparency)
     compositeBreadthResultColor
 
@@ -692,9 +884,7 @@ float compositeBreadthPctVwapConfidence = not na(compositeBreadthPctVwapValue) ?
 // the window fills, which only affects the oldest loaded bars.
 var float compositeBreadthTickBiasMean = na
 if not na(compositeBreadthTickValue)
-    float compositeBreadthTickBiasAlpha = 2.0 / (compositeBreadthTickBiasWindowBars + 1.0)
-    compositeBreadthTickBiasMean := na(compositeBreadthTickBiasMean) ? compositeBreadthTickValue :
-         compositeBreadthTickBiasAlpha * compositeBreadthTickValue + (1.0 - compositeBreadthTickBiasAlpha) * compositeBreadthTickBiasMean
+    compositeBreadthTickBiasMean := f_compositeBreadthEwmaStep(previous = compositeBreadthTickBiasMean, sample = compositeBreadthTickValue, length = compositeBreadthTickBiasWindowBars)
 
 float compositeBreadthTickAdjustedValue = na(compositeBreadthTickValue) ? na :
      compositeBreadthCumTickBiasAdjust and not na(compositeBreadthTickBiasMean) ?
@@ -737,8 +927,22 @@ bool compositeBreadthCumTickSlopeReady = compositeBreadthBarsSinceSessionOpen > 
 float compositeBreadthCumTickSlope = compositeBreadthCumTickSlopeReady ?
      compositeBreadthCumTickValue - compositeBreadthCumTickValue[compositeBreadthCumTickSlopeWindow] : na
 
-float compositeBreadthCumTickConfidenceLive = not na(compositeBreadthCumTickSlope) ?
-     math.max(-1.0, math.min(1.0, compositeBreadthCumTickSlope / compositeBreadthCumTickSlopeScale)) : na
+// Slope smoothing — the raw 10-minute ROC of cumTICK flips sign constantly
+// (TICK oscillates around zero all day), so the unsmoothed slope injected
+// per-bar sign chatter into 25% of the weighted sum and, before the consensus
+// rework, flickered the consensus tier on top. A short EMA on the slope keeps
+// the leading inflections and drops the flicker. Session-scoped like
+// everything upstream: reseeds at 09:30, blanks with the slope.
+var float compositeBreadthCumTickSlopeSmoothed = na
+if compositeBreadthSessionJustOpened
+    compositeBreadthCumTickSlopeSmoothed := na
+if not na(compositeBreadthCumTickSlope)
+    compositeBreadthCumTickSlopeSmoothed := f_compositeBreadthEwmaStep(previous = compositeBreadthCumTickSlopeSmoothed, sample = compositeBreadthCumTickSlope, length = compositeBreadthCumTickSlopeSmoothBars)
+else
+    compositeBreadthCumTickSlopeSmoothed := na
+
+float compositeBreadthCumTickConfidenceLive = not na(compositeBreadthCumTickSlopeSmoothed) ?
+     math.max(-1.0, math.min(1.0, compositeBreadthCumTickSlopeSmoothed / compositeBreadthCumTickSlopeScale)) : na
 
 // MOC freeze — TICK after 15:45 ET is dominated by market-on-close
 // rebalancing program spikes and is ignored for directional analysis by
@@ -775,6 +979,7 @@ var bool compositeBreadthVoldFeedLive       = false
 var bool compositeBreadthTotalVolFeedLive   = false
 var bool compositeBreadthPctVwapFeedLive    = false
 var bool compositeBreadthTickFeedLive       = false
+var bool compositeBreadthPcceFeedLive       = false
 var bool compositeBreadthFeedWarningEmitted = false
 
 if compositeBreadthSessionJustOpened
@@ -783,6 +988,7 @@ if compositeBreadthSessionJustOpened
     compositeBreadthTotalVolFeedLive   := false
     compositeBreadthPctVwapFeedLive    := false
     compositeBreadthTickFeedLive       := false
+    compositeBreadthPcceFeedLive       := false
     compositeBreadthFeedWarningEmitted := false
 
 if not na(compositeBreadthTickValue)
@@ -795,14 +1001,23 @@ if not na(compositeBreadthTotalVolValue)
     compositeBreadthTotalVolFeedLive   := true
 if not na(compositeBreadthPctVwapValue)
     compositeBreadthPctVwapFeedLive    := true
+if not na(compositeBreadthPcceValue)
+    compositeBreadthPcceFeedLive       := true
 
 // One boolean drives every per-bar consumer (warning gate, alert condition,
 // badge visibility). The human-readable missing-feeds list is only needed on
 // the rare paths that actually display it (one-time log warning, last-bar
 // badge), so it's built on demand by the helper below instead of concatenating
 // strings on every historical bar.
-bool compositeBreadthAnyFeedMissing = not (compositeBreadthAddFeedLive and compositeBreadthVoldFeedLive and
+// Two tiers of missing-ness: the five CORE feeds drive the log.warning and
+// the feed-health alert (a dead core feed degrades the composite itself);
+// PCCE is optional context — when enabled and dark it shows on the red
+// label's list so the user knows the layer is blind, but it must never page
+// via the required-feeds alert or the session warning.
+bool compositeBreadthCoreFeedMissing = not (compositeBreadthAddFeedLive and compositeBreadthVoldFeedLive and
      compositeBreadthTotalVolFeedLive and compositeBreadthPctVwapFeedLive and compositeBreadthTickFeedLive)
+bool compositeBreadthAnyFeedMissing = compositeBreadthCoreFeedMissing or
+     (compositeBreadthPcceEnabled and not compositeBreadthPcceFeedLive)
 
 f_compositeBreadthMissingFeedsText() =>
     string compositeBreadthMissingText = ""
@@ -816,6 +1031,8 @@ f_compositeBreadthMissingFeedsText() =>
         compositeBreadthMissingText += "PCTVWAP "
     if not compositeBreadthTickFeedLive
         compositeBreadthMissingText += "TICK "
+    if compositeBreadthPcceEnabled and not compositeBreadthPcceFeedLive
+        compositeBreadthMissingText += "PCCE "
     compositeBreadthMissingText
 
 // Emit a one-time log.warning per session once we're past the grace window.
@@ -827,19 +1044,24 @@ f_compositeBreadthMissingFeedsText() =>
 // signal. The emitted-flag resets every session, so without this
 // guard a multi-day historical load would fire one warning per historical
 // session with a missing feed and flood the Pine Logs panel on every load.
-if barstate.isrealtime and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS and not compositeBreadthFeedWarningEmitted and compositeBreadthAnyFeedMissing
+if barstate.isrealtime and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS and not compositeBreadthFeedWarningEmitted and compositeBreadthCoreFeedMissing
     log.warning("CBI: feed(s) not delivering after {0} bars post-open — {1}(market = {2})", CBI_FEED_HEALTH_GRACE_BARS, f_compositeBreadthMissingFeedsText(), compositeBreadthMarket)
     compositeBreadthFeedWarningEmitted := true
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧬 COMPOSITE SCORE
-// Weighted sum × consensus multiplier × CBI_SCALE_MAX, using FOUR weighted
-// components: VOLD, ADD, PCTABOVEVWAP, CUMTICK. Consensus measures cross-
-// component agreement: when the four move together, the line is allowed to
-// reach its full magnitude; when they disagree, it's squeezed toward zero
-// (a squeezed line reads "uncertain breadth", not "neutral breadth"). Raw
-// per-bar TICK is NOT a weighted component — it only drives the extreme
-// triangle markers and their alerts.
+// Weighted sum × CBI_SCALE_MAX, using FOUR weighted components: VOLD, ADD,
+// PCTABOVEVWAP, CUMTICK. The LINE is the weighted directional alone — the
+// smooth stance, the same session-cumulative character as the feeds it
+// summarizes. Consensus (cross-component agreement) is still computed, but it
+// no longer multiplies the line (2026-07-13 volatility rework): the old
+// `directional × consensus` construction rescaled the entire line by 30%
+// (one dissenter) to 70% (split) every time a component's sign flickered,
+// producing sawtooth swings the underlying feeds never printed. Disagreement
+// now renders as line OPACITY (colors section), the badge's dissent readout,
+// and the early-shift event — visible without distorting the stance's
+// magnitude. Raw per-bar TICK is NOT a weighted component — it only drives
+// the extreme triangle markers and their alerts.
 // ═════════════════════════════════════════════════════════════════════════════
 // A component is "active" only when both its data is present AND its weight is
 // non-zero. Setting a weight to 0 must fully remove that component from BOTH
@@ -849,11 +1071,6 @@ bool compositeBreadthVoldActive    = not na(compositeBreadthVoldConfidence)    a
 bool compositeBreadthAddActive     = not na(compositeBreadthAddConfidence)     and compositeBreadthAddWeight     > 0.0
 bool compositeBreadthPctVwapActive = not na(compositeBreadthPctVwapConfidence) and compositeBreadthPctVwapWeight > 0.0
 bool compositeBreadthCumTickActive = not na(compositeBreadthCumTickConfidence) and compositeBreadthCumTickWeight > 0.0
-
-int compositeBreadthActiveCount = (compositeBreadthVoldActive ? 1 : 0) +
-     (compositeBreadthAddActive     ? 1 : 0) +
-     (compositeBreadthPctVwapActive ? 1 : 0) +
-     (compositeBreadthCumTickActive ? 1 : 0)
 
 float compositeBreadthWeightedSum = 0.0
 float compositeBreadthWeightTotal = 0.0
@@ -873,36 +1090,81 @@ if compositeBreadthCumTickActive
 float compositeBreadthDirectional = compositeBreadthWeightTotal > 0.0 ?
      compositeBreadthWeightedSum / compositeBreadthWeightTotal : na
 
-// Consensus = SIGN agreement only, in categorical tiers. Practitioner logic
-// is categorical: all components align = full size, one dissents = reduce,
-// split = stand down. The former magnitude-stdev squeeze layered on top of
-// this was removed (2026-07-13 simplification): magnitude divergence in the
-// same direction is sensitivity, not disagreement (PCTABOVEVWAP structurally
-// migrates slower than VOLD/ADD on clean trend days), and the stdev
-// machinery — deviation sums, the three-way max-stdev special case, the
-// 0.85 same-sign floor — added state without changing the read. Agreement
-// is measured against the sign of the weighted directional itself, so the
-// reference respects the user's weights.
-bool compositeBreadthDirectionalPositive = na(compositeBreadthDirectional) or compositeBreadthDirectional >= 0.0
-int compositeBreadthSignAlignedCount =
-     (compositeBreadthVoldActive    and ((compositeBreadthVoldConfidence    >= 0.0) == compositeBreadthDirectionalPositive) ? 1 : 0) +
-     (compositeBreadthAddActive     and ((compositeBreadthAddConfidence     >= 0.0) == compositeBreadthDirectionalPositive) ? 1 : 0) +
-     (compositeBreadthPctVwapActive and ((compositeBreadthPctVwapConfidence >= 0.0) == compositeBreadthDirectionalPositive) ? 1 : 0) +
-     (compositeBreadthCumTickActive and ((compositeBreadthCumTickConfidence >= 0.0) == compositeBreadthDirectionalPositive) ? 1 : 0)
-float compositeBreadthSignAlignmentRatio = compositeBreadthActiveCount > 0 ?
-     compositeBreadthSignAlignedCount / float(compositeBreadthActiveCount) : 1.0
+// Consensus = SIGN agreement in categorical tiers, measured on HYSTERESIS
+// VOTES rather than instantaneous signs (2026-07-13 volatility rework). Two
+// changes from the raw-sign version:
+//   1. DEADBAND + ABSTENTION — a component votes only after its confidence
+//      leaves the ±deadband. Near-zero is flat, not dissent: the raw-sign
+//      version let CUMTICK's chatter inside ±0.05 flip the tier 1.0↔0.7
+//      every few bars.
+//   2. HYSTERESIS — an established vote holds through the band and flips
+//      only when confidence crosses the band on the opposite side, so real
+//      rollovers register and micro-wiggles don't (see the vote helper).
+// Practitioner logic stays categorical: all voters align = full agreement,
+// one dissents = reduce, split = stand down. Agreement is measured against
+// the sign of the weighted directional itself, so the reference respects the
+// user's weights. Votes reseed at 09:30 with the rest of the session state.
+var int compositeBreadthVoldVoteSign        = 0
+var int compositeBreadthAddVoteSign         = 0
+var int compositeBreadthPctVwapVoteSign     = 0
+var int compositeBreadthCumTickVoteSign     = 0
+var int compositeBreadthDirectionalVoteSign = 0
+if compositeBreadthSessionJustOpened
+    compositeBreadthVoldVoteSign        := 0
+    compositeBreadthAddVoteSign         := 0
+    compositeBreadthPctVwapVoteSign     := 0
+    compositeBreadthCumTickVoteSign     := 0
+    compositeBreadthDirectionalVoteSign := 0
+
+compositeBreadthVoldVoteSign    := f_compositeBreadthVoteSign(currentVote = compositeBreadthVoldVoteSign,    confidence = compositeBreadthVoldConfidence,    deadband = compositeBreadthConsensusDeadband)
+compositeBreadthAddVoteSign     := f_compositeBreadthVoteSign(currentVote = compositeBreadthAddVoteSign,     confidence = compositeBreadthAddConfidence,     deadband = compositeBreadthConsensusDeadband)
+compositeBreadthPctVwapVoteSign := f_compositeBreadthVoteSign(currentVote = compositeBreadthPctVwapVoteSign, confidence = compositeBreadthPctVwapConfidence, deadband = compositeBreadthConsensusDeadband)
+compositeBreadthCumTickVoteSign := f_compositeBreadthVoteSign(currentVote = compositeBreadthCumTickVoteSign, confidence = compositeBreadthCumTickConfidence, deadband = compositeBreadthConsensusDeadband)
+
+// The REFERENCE sign carries the same hysteresis as the votes (review fix
+// 2026-07-14): an instantaneous reference re-admitted the flicker the votes
+// were built to kill — the weighted directional chopping across 0.0 at lunch
+// flipped ALL held votes to "dissenters" against a stance they collectively
+// set, sawtoothing the consensus tier (and the line's opacity) per bar.
+compositeBreadthDirectionalVoteSign := f_compositeBreadthVoteSign(currentVote = compositeBreadthDirectionalVoteSign, confidence = compositeBreadthDirectional, deadband = compositeBreadthConsensusDeadband)
+bool compositeBreadthRefPositive = compositeBreadthDirectionalVoteSign >= 0
+
+// One VOTING and one DISSENTS boolean per component — the consensus tier,
+// the alignment ratio, and the badge dissent readout all derive from these
+// same booleans, so the three surfaces can never disagree about who is
+// dissenting.
+bool compositeBreadthVoldVoting    = compositeBreadthVoldActive    and compositeBreadthVoldVoteSign    != 0
+bool compositeBreadthAddVoting     = compositeBreadthAddActive     and compositeBreadthAddVoteSign     != 0
+bool compositeBreadthPctVwapVoting = compositeBreadthPctVwapActive and compositeBreadthPctVwapVoteSign != 0
+bool compositeBreadthCumTickVoting = compositeBreadthCumTickActive and compositeBreadthCumTickVoteSign != 0
+bool compositeBreadthVoldDissents    = compositeBreadthVoldVoting    and (compositeBreadthVoldVoteSign    == 1) != compositeBreadthRefPositive
+bool compositeBreadthAddDissents     = compositeBreadthAddVoting     and (compositeBreadthAddVoteSign     == 1) != compositeBreadthRefPositive
+bool compositeBreadthPctVwapDissents = compositeBreadthPctVwapVoting and (compositeBreadthPctVwapVoteSign == 1) != compositeBreadthRefPositive
+bool compositeBreadthCumTickDissents = compositeBreadthCumTickVoting and (compositeBreadthCumTickVoteSign == 1) != compositeBreadthRefPositive
+
+int compositeBreadthVotingCount =
+     (compositeBreadthVoldVoting ? 1 : 0) + (compositeBreadthAddVoting ? 1 : 0) +
+     (compositeBreadthPctVwapVoting ? 1 : 0) + (compositeBreadthCumTickVoting ? 1 : 0)
+int compositeBreadthDissentCount =
+     (compositeBreadthVoldDissents ? 1 : 0) + (compositeBreadthAddDissents ? 1 : 0) +
+     (compositeBreadthPctVwapDissents ? 1 : 0) + (compositeBreadthCumTickDissents ? 1 : 0)
+float compositeBreadthSignAlignmentRatio = compositeBreadthVotingCount > 0 ?
+     (compositeBreadthVotingCount - compositeBreadthDissentCount) / float(compositeBreadthVotingCount) : 1.0
 
 // Tiers: full agreement (4/4, 3/3, 2/2) = 1.0; one dissenter among 3-4
 // (ratio ≥ 0.666) = 0.7; split (ratio ≥ 0.333, e.g. 2/4 or 1/2) = 0.3;
 // outvoted majority-vs-weight edge cases below that = 0.1. With 0 or 1
-// active components there is nothing to agree about — consensus stays 1.0.
-float compositeBreadthConsensus = compositeBreadthActiveCount <= 1 ? 1.0 :
+// voters, or no established reference sign, there is nothing to agree
+// about — consensus stays 1.0 (the badge still names a lone dissenter).
+float compositeBreadthConsensus = compositeBreadthVotingCount <= 1 or compositeBreadthDirectionalVoteSign == 0 ? 1.0 :
      compositeBreadthSignAlignmentRatio >= 0.999 ? 1.0 :
      compositeBreadthSignAlignmentRatio >= 0.666 ? 0.7 :
      compositeBreadthSignAlignmentRatio >= 0.333 ? 0.3 : 0.1
 
+// The line is the UNSQUEEZED weighted stance — consensus renders as opacity
+// and events instead of multiplying the magnitude (see the section header).
 float compositeBreadthLineValue = na(compositeBreadthDirectional) ? na :
-     compositeBreadthDirectional * compositeBreadthConsensus * CBI_SCALE_MAX
+     compositeBreadthDirectional * CBI_SCALE_MAX
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 DISPLAY + SIGNAL EMA
@@ -927,9 +1189,7 @@ var float compositeBreadthDisplayLine = na
 if compositeBreadthSessionJustOpened
     compositeBreadthDisplayLine := na
 if not na(compositeBreadthLineValue)
-    float compositeBreadthDisplayAlpha = 2.0 / (CBI_DISPLAY_SMOOTH_LENGTH + 1.0)
-    compositeBreadthDisplayLine := na(compositeBreadthDisplayLine) ? compositeBreadthLineValue :
-         compositeBreadthDisplayAlpha * compositeBreadthLineValue + (1.0 - compositeBreadthDisplayAlpha) * compositeBreadthDisplayLine
+    compositeBreadthDisplayLine := f_compositeBreadthEwmaStep(previous = compositeBreadthDisplayLine, sample = compositeBreadthLineValue, length = CBI_DISPLAY_SMOOTH_LENGTH)
 else
     compositeBreadthDisplayLine := na
 
@@ -952,9 +1212,7 @@ if compositeBreadthSessionJustOpened
 if not na(compositeBreadthDisplayLine)
     compositeBreadthSignalSeedCount += 1
     if compositeBreadthSignalSeedCount > CBI_SIGNAL_WARMUP_BARS
-        float compositeBreadthSignalAlpha = 2.0 / (compositeBreadthSignalLength + 1.0)
-        compositeBreadthSignalLineValue := na(compositeBreadthSignalLineValue) ? compositeBreadthDisplayLine :
-             compositeBreadthSignalAlpha * compositeBreadthDisplayLine + (1.0 - compositeBreadthSignalAlpha) * compositeBreadthSignalLineValue
+        compositeBreadthSignalLineValue := f_compositeBreadthEwmaStep(previous = compositeBreadthSignalLineValue, sample = compositeBreadthDisplayLine, length = compositeBreadthSignalLength)
 else
     compositeBreadthSignalLineValue := na
     compositeBreadthSignalSeedCount := 0
@@ -1030,6 +1288,212 @@ float compositeBreadthDwellRatio = compositeBreadthSessionValidBars > 0 ?
       compositeBreadthZeroSideSign == -1 ? compositeBreadthBarsBelowZero / float(compositeBreadthSessionValidBars) : na) : na
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ⚠️ EARLY-SHIFT WARNING (CUMTICK dissent vs an established stance)
+// Steenbarger's cumulative-TICK divergence read as a discrete event. CUMTICK
+// is the composite's designated leading component, so when its VOTE holds the
+// opposite side of a stance the composite has carried for at least the
+// persistent-flip minimum, breadth is rotating under the trend — and the
+// warning fires BEFORE the composite crosses zero, which is the whole point.
+// Cross-check PCTABOVEVWAP recrossing 50 for the stronger variant before
+// acting. One-shot per dissent episode: re-arms only after SUSTAINED
+// re-agreement (half the dissent window) or a stance flip, so a three-hour
+// dissent doesn't spam, one slow rollover with wiggles stays one event, and
+// a genuinely separate later divergence still fires. Dissent is measured on
+// the hysteresis vote, so a single TICK swing can't start the clock — the
+// vote itself has to roll over and hold for the dissent window.
+// ═════════════════════════════════════════════════════════════════════════════
+var bool compositeBreadthEarlyShiftFired    = false
+var int  compositeBreadthCumTickDissentBars = 0
+var int  compositeBreadthCumTickAgreeBars   = 0
+bool compositeBreadthEarlyShiftUp   = false
+bool compositeBreadthEarlyShiftDown = false
+
+if compositeBreadthSessionJustOpened
+    compositeBreadthEarlyShiftFired    := false
+    compositeBreadthCumTickDissentBars := 0
+    compositeBreadthCumTickAgreeBars   := 0
+
+// Counting runs on CONFIRMED bars with a LIVE composite, outside the MOC
+// window (review fixes 2026-07-14): tick-time counting let the alert fire
+// intrabar and then roll back — a phantom alert with no marker on the
+// confirmed bar; MOC bars read a deliberately FROZEN CumTick vote that
+// cannot re-agree, and na-composite bars (ETH overnight) carry a stale
+// stance sign. Frozen/no-information bars HOLD the streaks. Re-arm needs
+// SUSTAINED re-agreement — half the dissent window — or a stance flip or
+// the 09:30 reset: a single agreement bar used to re-arm, so one slow
+// rollover with wiggles produced three "episodes" (multi-week review:
+// 3-5 diamonds/session — texture, not event).
+bool compositeBreadthCumTickDissenting = compositeBreadthZeroSideSign != 0 and compositeBreadthCumTickActive and
+     compositeBreadthCumTickVoteSign == -compositeBreadthZeroSideSign
+bool compositeBreadthCumTickAgrees = compositeBreadthZeroSideSign != 0 and compositeBreadthCumTickActive and
+     compositeBreadthCumTickVoteSign == compositeBreadthZeroSideSign
+bool compositeBreadthStanceBroken = compositeBreadthZeroSideSign == 0 or
+     compositeBreadthZeroSideSign != compositeBreadthZeroSideSign[1]
+if barstate.isconfirmed and not na(compositeBreadthDisplayLine) and not compositeBreadthInMocWindow
+    if compositeBreadthStanceBroken
+        compositeBreadthCumTickDissentBars := 0
+        compositeBreadthCumTickAgreeBars   := 0
+        compositeBreadthEarlyShiftFired    := false
+    else if compositeBreadthCumTickAgrees
+        compositeBreadthCumTickDissentBars := 0
+        compositeBreadthCumTickAgreeBars   += 1
+        if compositeBreadthCumTickAgreeBars >= compositeBreadthEarlyShiftRearmBars
+            compositeBreadthEarlyShiftFired := false
+    else if compositeBreadthCumTickDissenting
+        compositeBreadthCumTickAgreeBars   := 0
+        compositeBreadthCumTickDissentBars += 1
+        if not compositeBreadthEarlyShiftFired and compositeBreadthCumTickDissentBars >= compositeBreadthEarlyShiftDissentBars and
+             compositeBreadthZeroSideBars >= compositeBreadthPersistFlipMinBars
+            compositeBreadthEarlyShiftUp    := compositeBreadthZeroSideSign == -1
+            compositeBreadthEarlyShiftDown  := compositeBreadthZeroSideSign == 1
+            compositeBreadthEarlyShiftFired := true
+    // else: CumTick vote unformed — hold the streaks, no re-arm
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📏 ADAPTIVE EXTENDED LEVELS (30-day composite range)
+// Barry's 30-day VOLD S/R technique applied to the composite's own scale —
+// the long-term-levels read that makes structure-and-levels' LONG-TERM S/R
+// useful on price, reproduced for this pane. Trailing ~30-session EMAs of
+// each session's composite max/min mark the TYPICAL daily extreme on each
+// side; today's line tagging its typical extreme = beyond a normal day's
+// breadth range ("it would be against the odds for it to continue" — tighten
+// trails, take targets seriously, honor price-chart exits). Fold-then-reset
+// at the session boundary, the same pattern as the VOLD range baselines. The
+// series only change at the boundary, so they plot as stepped horizontal
+// levels.
+// ═════════════════════════════════════════════════════════════════════════════
+// Whole layer gated on its toggle: when off, no baselines are computed at
+// all. Toggling on triggers a full-history recompute (input change reruns
+// the script), so the baselines are identical to always-on.
+var float compositeBreadthLineSessionMax    = na
+var float compositeBreadthLineSessionMin    = na
+var float compositeBreadthExtendedHighLevel = na
+var float compositeBreadthExtendedLowLevel  = na
+var int   compositeBreadthExtendedFoldCount = 0
+
+if compositeBreadthShowExtendedLevels
+    if compositeBreadthSessionJustOpened
+        if not na(compositeBreadthLineSessionMax)
+            compositeBreadthExtendedHighLevel := f_compositeBreadthEwmaStep(previous = compositeBreadthExtendedHighLevel, sample = compositeBreadthLineSessionMax, length = CBI_EXTENDED_LEVEL_MEAN_DAYS)
+            compositeBreadthExtendedFoldCount += 1
+        if not na(compositeBreadthLineSessionMin)
+            compositeBreadthExtendedLowLevel := f_compositeBreadthEwmaStep(previous = compositeBreadthExtendedLowLevel, sample = compositeBreadthLineSessionMin, length = CBI_EXTENDED_LEVEL_MEAN_DAYS)
+        compositeBreadthLineSessionMax := na
+        compositeBreadthLineSessionMin := na
+
+    if barstate.isconfirmed and not na(compositeBreadthDisplayLine)
+        compositeBreadthLineSessionMax := na(compositeBreadthLineSessionMax) ? compositeBreadthDisplayLine :
+             math.max(compositeBreadthLineSessionMax, compositeBreadthDisplayLine)
+        compositeBreadthLineSessionMin := na(compositeBreadthLineSessionMin) ? compositeBreadthDisplayLine :
+             math.min(compositeBreadthLineSessionMin, compositeBreadthDisplayLine)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎭 OPTIONS SENTIMENT (PCCE)
+// Alert-grade CONTEXT layer on the Cboe equity-only put/call ratio — never a
+// weighted component (2026-07-14 research verdict: no intraday-leading
+// evidence for aggregate put/call survived adversarial verification; the
+// equity-only series is the one family that partially escapes 0DTE index
+// contamination, and USI:PCCE verifiably prints intraday on TradingView).
+// Two reads, both independent of the composite engine:
+//   1. STRETCH — PCCE vs a trailing ~20-session baseline (mean +
+//      mean-absolute-deviation of each session's MEAN print, fold-at-09:30
+//      like every other cross-session baseline here). Beyond the threshold
+//      the badge flags ▲puts / ▼calls. The raw level is meaningless without
+//      this: 0.55 and 0.80 both printed within two adjacent days.
+//   2. DIVERGENCE — PCCE grinding AGAINST an established composite stance.
+//      PCCE is contrarian-scaled (rising = put demand = bearish pressure),
+//      so dissent is slope sign EQUAL to the stance sign: puts building
+//      under a bullish stance (bearish divergence) or put pressure
+//      unwinding under a bearish stance (bullish divergence). Same dwell +
+//      one-shot-per-episode machinery as the CUMTICK early shift; the
+//      stance-hold requirement (persistent-flip minimum) keeps it out of
+//      the noisy open, where PCCE swings hardest.
+// Everything below no-ops when the layer is disabled — the request itself
+// is already gated in the data-requests section.
+// ═════════════════════════════════════════════════════════════════════════════
+// Outputs declared at global scope; the whole layer computes inside its
+// enable toggle — disabled means zero per-bar work, matching the adaptive
+// levels' scope-gate pattern (and the tooltip's promise).
+var float compositeBreadthPcceSessionLast   = na
+var float compositeBreadthPcceSessionSum    = 0.0
+var int   compositeBreadthPcceSessionCount  = 0
+var float compositeBreadthPcceBaselineMean  = na
+var float compositeBreadthPcceBaselineDev   = na
+var int   compositeBreadthPcceDissentCount  = 0
+var int   compositeBreadthPcceAgreeCount    = 0
+var bool  compositeBreadthPcceDivFired      = false
+bool compositeBreadthPcceDivergenceBear = false
+bool compositeBreadthPcceDivergenceBull = false
+
+if compositeBreadthPcceEnabled
+    if compositeBreadthSessionJustOpened
+        // Fold the completed session's MEAN print (not its close — the
+        // stretch compares INTRADAY prints, and intraday levels run
+        // structurally hot at the open relative to the close; a
+        // close-built baseline flagged ▲puts most mornings). Classify-
+        // then-fold: today's deviation reads against the PRIOR mean.
+        if compositeBreadthPcceSessionCount > 0
+            float compositeBreadthPcceSessionMean = compositeBreadthPcceSessionSum / compositeBreadthPcceSessionCount
+            if not na(compositeBreadthPcceBaselineMean)
+                compositeBreadthPcceBaselineDev := f_compositeBreadthEwmaStep(previous = compositeBreadthPcceBaselineDev, sample = math.abs(number = compositeBreadthPcceSessionMean - compositeBreadthPcceBaselineMean), length = CBI_PCCE_BASELINE_DAYS)
+            compositeBreadthPcceBaselineMean := f_compositeBreadthEwmaStep(previous = compositeBreadthPcceBaselineMean, sample = compositeBreadthPcceSessionMean, length = CBI_PCCE_BASELINE_DAYS)
+        compositeBreadthPcceSessionSum   := 0.0
+        compositeBreadthPcceSessionCount := 0
+        compositeBreadthPcceSessionLast  := na
+        compositeBreadthPcceDissentCount := 0
+        compositeBreadthPcceAgreeCount   := 0
+        compositeBreadthPcceDivFired     := false
+
+    // SessionLast holds the latest valid print through gaps_on na bars —
+    // the badge reads it so the readout doesn't blink on gap bars.
+    if not na(compositeBreadthPcceValue)
+        compositeBreadthPcceSessionLast := compositeBreadthPcceValue
+        if barstate.isconfirmed
+            compositeBreadthPcceSessionSum   += compositeBreadthPcceValue
+            compositeBreadthPcceSessionCount += 1
+
+    // Slope gated on the session-open bar count so the lookback never
+    // reaches across the overnight gap (PCCE resets each session). Prior
+    // value hoisted — one history read instead of three.
+    float compositeBreadthPccePriorValue = compositeBreadthPcceValue[compositeBreadthPcceSlopeBars]
+    bool compositeBreadthPcceSlopeReady = compositeBreadthBarsSinceSessionOpen > compositeBreadthPcceSlopeBars and
+         not na(compositeBreadthPcceValue) and not na(compositeBreadthPccePriorValue)
+    int compositeBreadthPcceSlopeDir = compositeBreadthPcceSlopeReady ?
+         (compositeBreadthPcceValue > compositeBreadthPccePriorValue ? 1 :
+          compositeBreadthPcceValue < compositeBreadthPccePriorValue ? -1 : 0) : 0
+
+    // Contrarian scale: dissent = PCCE slope trending the SAME direction as
+    // the stance sign (puts rising under a bullish stance / falling under a
+    // bearish one); agreement is the opposite slope. Confirmed live bars
+    // only, and a gap/flat bar HOLDS the streak instead of resetting it —
+    // with gaps_on, a single missed Cboe print used to wipe 14 minutes of
+    // accumulated dissent (and made the event unreachable on 1-min charts,
+    // where the feed's ~2-min cadence leaves every other bar na).
+    bool compositeBreadthPcceDissenting = compositeBreadthZeroSideSign != 0 and
+         compositeBreadthPcceSlopeDir == compositeBreadthZeroSideSign and compositeBreadthPcceSlopeDir != 0
+    bool compositeBreadthPcceAgrees = compositeBreadthZeroSideSign != 0 and
+         compositeBreadthPcceSlopeDir == -compositeBreadthZeroSideSign and compositeBreadthPcceSlopeDir != 0
+    if barstate.isconfirmed and not na(compositeBreadthDisplayLine)
+        if compositeBreadthStanceBroken
+            compositeBreadthPcceDissentCount := 0
+            compositeBreadthPcceAgreeCount   := 0
+            compositeBreadthPcceDivFired     := false
+        else if compositeBreadthPcceAgrees
+            compositeBreadthPcceDissentCount := 0
+            compositeBreadthPcceAgreeCount   += 1
+            if compositeBreadthPcceAgreeCount >= compositeBreadthPcceRearmBars
+                compositeBreadthPcceDivFired := false
+        else if compositeBreadthPcceDissenting
+            compositeBreadthPcceAgreeCount   := 0
+            compositeBreadthPcceDissentCount += 1
+            if not compositeBreadthPcceDivFired and compositeBreadthPcceDissentCount >= compositeBreadthPcceDissentBars and
+                 compositeBreadthZeroSideBars >= compositeBreadthPersistFlipMinBars
+                compositeBreadthPcceDivergenceBear := compositeBreadthZeroSideSign == 1
+                compositeBreadthPcceDivergenceBull := compositeBreadthZeroSideSign == -1
+                compositeBreadthPcceDivFired       := true
+        // else: na print / flat slope — hold the streaks, no re-arm
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 📈 VOLD SESSION EXTREMES + 30-DAY RANGE
 // Barry reads the up/down volume-difference line making fresh session
 // extremes as commitment. The ratio form fed to the composite
@@ -1078,13 +1542,10 @@ if compositeBreadthSessionJustOpened
     // BEFORE resetting them — classify-against-prior-days-then-fold, the
     // same pattern as the opening-volume mean. Seeded from the first
     // completed session; converges as loaded history fills the window.
-    float compositeBreadthVoldRangeAlpha = 2.0 / (CBI_VOLD_RANGE_MEAN_DAYS + 1.0)
     if not na(compositeBreadthVoldSessionMax)
-        compositeBreadthVoldDailyHighMean := na(compositeBreadthVoldDailyHighMean) ? compositeBreadthVoldSessionMax :
-             compositeBreadthVoldRangeAlpha * compositeBreadthVoldSessionMax + (1.0 - compositeBreadthVoldRangeAlpha) * compositeBreadthVoldDailyHighMean
+        compositeBreadthVoldDailyHighMean := f_compositeBreadthEwmaStep(previous = compositeBreadthVoldDailyHighMean, sample = compositeBreadthVoldSessionMax, length = CBI_VOLD_RANGE_MEAN_DAYS)
     if not na(compositeBreadthVoldSessionMin)
-        compositeBreadthVoldDailyLowMean := na(compositeBreadthVoldDailyLowMean) ? compositeBreadthVoldSessionMin :
-             compositeBreadthVoldRangeAlpha * compositeBreadthVoldSessionMin + (1.0 - compositeBreadthVoldRangeAlpha) * compositeBreadthVoldDailyLowMean
+        compositeBreadthVoldDailyLowMean := f_compositeBreadthEwmaStep(previous = compositeBreadthVoldDailyLowMean, sample = compositeBreadthVoldSessionMin, length = CBI_VOLD_RANGE_MEAN_DAYS)
     compositeBreadthVoldSessionMax      := na
     compositeBreadthVoldSessionMin      := na
     compositeBreadthVoldBarsSinceHigh   := 0
@@ -1167,9 +1628,7 @@ if compositeBreadthUseOpenVolRegime and not compositeBreadthOpenVolCaptured and 
         compositeBreadthVolRegimeKnown := true
         compositeBreadthVolRegime      := compositeBreadthOpenVolRatio >= compositeBreadthOpenVolExpansionRatio ? 1 :
              compositeBreadthOpenVolRatio <= compositeBreadthOpenVolLightRatio ? -1 : 0
-    float compositeBreadthOpenVolAlpha = 2.0 / (CBI_OPEN_VOL_MEAN_DAYS + 1.0)
-    compositeBreadthOpenVolMean := na(compositeBreadthOpenVolMean) ? compositeBreadthTotalVolValue :
-         compositeBreadthOpenVolAlpha * compositeBreadthTotalVolValue + (1.0 - compositeBreadthOpenVolAlpha) * compositeBreadthOpenVolMean
+    compositeBreadthOpenVolMean := f_compositeBreadthEwmaStep(previous = compositeBreadthOpenVolMean, sample = compositeBreadthTotalVolValue, length = CBI_OPEN_VOL_MEAN_DAYS)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚡ TICK EXTREMES (Barry's method)
@@ -1325,18 +1784,23 @@ if not compositeBreadthTrendTellFired and compositeBreadthInTellWindow
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS
 // ═════════════════════════════════════════════════════════════════════════════
-// Time-of-day dimming: extra transparency on the composite line during the
-// lunch trough and the MOC window — the two structurally low-information
-// stretches of the session. Visual only; the math is untouched.
-color compositeBreadthLineBaseColor = f_compositeBreadthProgressiveColor(
+// Two dim layers on top of the magnitude gradient, both visual-only, folded
+// into the gradient helper's single color.new (no second allocation):
+//   1. CONSENSUS dimming — it IS the disagreement display now that consensus
+//      no longer multiplies the line: (1 − consensus) × the Consensus Dim
+//      Strength input, so full agreement is vivid and a split vote goes
+//      pale instead of collapsing the line.
+//   2. Time-of-day dimming during the lunch trough and the MOC window — the
+//      two structurally low-information stretches of the session.
+bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
+float compositeBreadthExtraTransp = (1.0 - compositeBreadthConsensus) * compositeBreadthConsensusDimStrength +
+     (compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow ? CBI_TIME_DIM_EXTRA_TRANSP : 0)
+color compositeBreadthLineColor = f_compositeBreadthProgressiveColor(
      value = compositeBreadthDisplayLine,
      scale = CBI_OPACITY_ANCHOR,
-     minTransp = CBI_SIGNAL_MIN_TRANSP
+     minTransp = CBI_SIGNAL_MIN_TRANSP,
+     extraTransp = compositeBreadthExtraTransp
  )
-bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
-color compositeBreadthLineColor = compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow and not na(compositeBreadthLineBaseColor) ?
-     color.new(color = compositeBreadthLineBaseColor, transp = math.min(95.0, color.t(compositeBreadthLineBaseColor) + CBI_TIME_DIM_EXTRA_TRANSP)) :
-     compositeBreadthLineBaseColor
 
 // Zero hline color stays solid; the display toggle handles show/hide. Using
 // transparency alone would leave the line invisible but still pinning the
@@ -1352,25 +1816,50 @@ color compositeBreadthZeroLineColor = NORD3
 // ═════════════════════════════════════════════════════════════════════════════
 hline(price = 0, title = "Zero", color = compositeBreadthZeroLineColor, linestyle = hline.style_solid, linewidth = 3, display = compositeBreadthShowZeroLine ? display.all : display.none)
 
-// Extended-level reference lines at ±CBI_EXTENDED_LEVEL. Dotted, dim NORD3.
-// Past visual saturation the composite line looks the same from ±35 onward
-// — these lines re-introduce a "this is extended for this market" cue,
-// equivalent to Barry's manually drawn 30-day VOLD support/resistance levels.
-// Toggling off uses display.none rather than alpha=100: an hline with alpha=100
-// is invisible but its `price` parameter still pins TradingView's auto-scale
-// to include ±60, which compresses the composite's natural swing around zero.
-// display.none removes the hline from the scale calculation entirely.
-color compositeBreadthExtendedLineColor = color.new(color = NORD3, transp = 60)
-hline(price =  CBI_EXTENDED_LEVEL, title = "Extended Up",   color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1, display = compositeBreadthShowExtendedLevels ? display.all : display.none)
-hline(price = -CBI_EXTENDED_LEVEL, title = "Extended Down", color = compositeBreadthExtendedLineColor, linestyle = hline.style_dotted, linewidth = 1, display = compositeBreadthShowExtendedLevels ? display.all : display.none)
+// Adaptive extended levels — trailing 30-session means of the composite's own
+// daily max/min (Barry's 30-day VOLD S/R construction on this pane's scale).
+// The series only change at the session boundary, so they render as stepped
+// horizontal levels; linebr keeps them blank until the first completed
+// session seeds the baselines. Unlike the old ±60 hlines these sit inside
+// the composite's real range, so they don't pin the auto-scale outward.
+// Warm-up guard: hidden until a few sessions have folded so a single
+// blowout seed session can't masquerade as the "typical" level.
+bool compositeBreadthExtendedLevelsWarm = compositeBreadthShowExtendedLevels and
+     compositeBreadthExtendedFoldCount >= CBI_EXTENDED_LEVEL_MIN_SESSIONS
+color compositeBreadthExtendedLineColor = color.new(color = NORD3, transp = 40)
+plot(series = compositeBreadthExtendedLevelsWarm ? compositeBreadthExtendedHighLevel : na, title = "Typical Session High (30d)", color = compositeBreadthExtendedLineColor, linewidth = 1, style = plot.style_linebr)
+plot(series = compositeBreadthExtendedLevelsWarm ? compositeBreadthExtendedLowLevel  : na, title = "Typical Session Low (30d)",  color = compositeBreadthExtendedLineColor, linewidth = 1, style = plot.style_linebr)
 
-// Session divider — vertical column tint on the session-open bar so each new
-// RTH day is visually separated from the prior one. Same time-anchored edge
-// that drives every session-wide reset.
-bgcolor(color = compositeBreadthShowSessionDivider and compositeBreadthSessionJustOpened ? color.new(color = NORD3, transp = 70) : na, title = "Session Divider")
+// ─── Session divider ──────────────────────────────────────────────────────────
+// Vertical line on the session-open bar so each new RTH day is visually
+// separated from the prior one — same time-anchored edge that drives every
+// session-wide reset. Drawn as a line object (not bgcolor) so color, width,
+// and style are user-configurable. One line per session; max_lines_count is
+// raised on the indicator() call so loaded history keeps its dividers
+// (deepest plans can exceed 500 sessions — the oldest dividers drop first).
+// Deliberate exception to the draw-on-islast checklist rule: historical
+// session boundaries can only be drawn on their own bars. The style map is
+// a var initializer — inputs are constant, so it evaluates once, not per bar.
+var compositeBreadthSessionDividerLineStyle = switch compositeBreadthSessionDividerStyle
+    "Solid"  => line.style_solid
+    "Dashed" => line.style_dashed
+    => line.style_dotted
+if compositeBreadthShowSessionDivider and compositeBreadthSessionJustOpened
+    line.new(
+         x1 = bar_index,
+         y1 = -1.0,
+         x2 = bar_index,
+         y2 = 1.0,
+         xloc = xloc.bar_index,
+         extend = extend.both,
+         color = compositeBreadthSessionDividerColor,
+         style = compositeBreadthSessionDividerLineStyle,
+         width = compositeBreadthSessionDividerWidth
+     )
 
+// ─── Composite + signal lines ─────────────────────────────────────────────────
 plot(series = compositeBreadthDisplayLine, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
-plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal", color = NORD3, linewidth = 2)
+plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal", color = compositeBreadthSignalLineColor, linewidth = compositeBreadthSignalLineWidth)
 
 // TICK extreme markers — Barry's exhaustion zones, triangles at 50%
 // transparency sitting above/below the composite line: up-triangle above on
@@ -1406,11 +1895,37 @@ plotshape(series = compositeBreadthTickShowExtremes and compositeBreadthTickExha
 plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellUp   and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Up",   style = shape.labelup,   location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
 plotshape(series = compositeBreadthShowTrendTell and compositeBreadthTrendTellDown and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset * 2.0 : na, title = "Trend-Day Tell Down", style = shape.labeldown, location = location.absolute, color = NORD15, text = "TD", textcolor = NORD6, size = size.tiny, display = compositeBreadthShowTrendTell ? display.all : display.none)
 
-// Session status badge — the persistence + regime readout, one cell at the
-// user-chosen corner, rebuilt only on the last bar. Side arrow + dwell share +
-// hold time answer Steenbarger's confirmation question ("has breadth HELD a
-// side all session?"); the volume line answers Raschke's ("what kind of day is
-// this?").
+// ─── Event markers: early shift + options-flow divergence ─────────────────────
+// Expansion-regime mute (Raschke's volume-conditionality, same rule that
+// colors the TICK extreme triangles): on a good-volume (expansion) day,
+// counter-trend breadth context is continuation fuel rather than exhaustion
+// — the multi-week review showed dissent diamonds printing into rising trend
+// days all afternoon. On expansion days the dissent MARKERS hide; the alerts
+// still fire per doctrine — read them against the badge's regime line before
+// acting. Neutral/light/unknown regimes show markers normally.
+bool compositeBreadthDissentMarkersMuted = compositeBreadthUseOpenVolRegime and compositeBreadthVolRegime == 1
+
+// Early-shift warning — yellow diamond when CUMTICK (the leading component)
+// has dissented against an established stance for the configured window. It
+// sits on the side the potential shift points TOWARD (below the line for a
+// possible upward flip, above for downward), offset past the TD labels so
+// nearby markers don't overlap.
+plotshape(series = compositeBreadthShowEarlyShift and not compositeBreadthDissentMarkersMuted and compositeBreadthEarlyShiftUp   and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset * 3.0 : na, title = "Early Shift Up Warning",   style = shape.diamond, location = location.absolute, color = color.new(color = NORD13, transp = 20), size = size.tiny, display = compositeBreadthShowEarlyShift ? display.all : display.none)
+plotshape(series = compositeBreadthShowEarlyShift and not compositeBreadthDissentMarkersMuted and compositeBreadthEarlyShiftDown and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset * 3.0 : na, title = "Early Shift Down Warning", style = shape.diamond, location = location.absolute, color = color.new(color = NORD13, transp = 20), size = size.tiny, display = compositeBreadthShowEarlyShift ? display.all : display.none)
+
+// Options-flow divergence — orange diamond when PCCE has been grinding
+// against an established stance (see the PCCE section). Same side convention
+// as the early shift (marker on the side the divergence points toward),
+// offset one step further out so coincident events stay readable.
+plotshape(series = compositeBreadthPcceShowDivergence and not compositeBreadthDissentMarkersMuted and compositeBreadthPcceDivergenceBull and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine - compositeBreadthTickExtremeOffset * 4.0 : na, title = "Options Flow Divergence Bullish", style = shape.diamond, location = location.absolute, color = color.new(color = NORD12, transp = 20), size = size.tiny, display = compositeBreadthPcceShowDivergence ? display.all : display.none)
+plotshape(series = compositeBreadthPcceShowDivergence and not compositeBreadthDissentMarkersMuted and compositeBreadthPcceDivergenceBear and not na(compositeBreadthDisplayLine) ? compositeBreadthDisplayLine + compositeBreadthTickExtremeOffset * 4.0 : na, title = "Options Flow Divergence Bearish", style = shape.diamond, location = location.absolute, color = color.new(color = NORD12, transp = 20), size = size.tiny, display = compositeBreadthPcceShowDivergence ? display.all : display.none)
+
+// ─── Status badge ─────────────────────────────────────────────────────────────
+// The persistence + regime readout, one cell at the user-chosen corner,
+// rebuilt only on the last bar. Side arrow + dwell share + hold time answer
+// Steenbarger's confirmation question ("has breadth HELD a side all
+// session?"); the volume line answers Raschke's ("what kind of day is
+// this?"); the PCCE segment adds the options-sentiment stretch read.
 var table compositeBreadthStatusTable = table.new(position = compositeBreadthStatusBadgePosition, columns = 1, rows = 1)
 if compositeBreadthShowStatusBadge and barstate.islast
     string compositeBreadthSideText = compositeBreadthZeroSideSign == 1 ? "▲" : compositeBreadthZeroSideSign == -1 ? "▼" : "—"
@@ -1427,19 +1942,49 @@ if compositeBreadthShowStatusBadge and barstate.islast
     // extended, take targets seriously" context doesn't expire at the next bar.
     string compositeBreadthVoldRangeText = not (compositeBreadthVoldBeyondHighFired or compositeBreadthVoldBeyondLowFired) ? "" :
          " · VOLD >30d" + (compositeBreadthVoldBeyondHighFired ? " ▲" : "") + (compositeBreadthVoldBeyondLowFired ? " ▼" : "")
+    // Dissent readout — built from the SAME per-component dissent booleans
+    // the consensus tier counts, so the badge can never name a dissenter the
+    // tier doesn't see (or vice versa). No consensus gate: a lone voter
+    // dissenting keeps consensus at 1.0 (nothing to agree about) but still
+    // deserves to be named here.
+    string compositeBreadthDissenters = ""
+    if compositeBreadthVoldDissents
+        compositeBreadthDissenters += "VOLD "
+    if compositeBreadthAddDissents
+        compositeBreadthDissenters += "ADD "
+    if compositeBreadthPctVwapDissents
+        compositeBreadthDissenters += "VWAP "
+    if compositeBreadthCumTickDissents
+        compositeBreadthDissenters += "CUMTICK "
+    string compositeBreadthDissentText = compositeBreadthDissenters != "" ?
+         " · dissent: " + compositeBreadthDissenters : ""
+    // PCCE options-sentiment segment — the latest valid print (held through
+    // gaps_on na bars so the readout doesn't blink) plus a stretch tag when
+    // it sits beyond the threshold vs its trailing baseline. Stretch is
+    // computed here, on the last bar only — its sole consumer.
+    string compositeBreadthPcceText = ""
+    if compositeBreadthPcceEnabled and not na(compositeBreadthPcceSessionLast)
+        float compositeBreadthPcceStretch = not na(compositeBreadthPcceBaselineMean) and
+             not na(compositeBreadthPcceBaselineDev) and compositeBreadthPcceBaselineDev > 0.0 ?
+             (compositeBreadthPcceSessionLast - compositeBreadthPcceBaselineMean) / compositeBreadthPcceBaselineDev : na
+        string compositeBreadthPcceTag = na(compositeBreadthPcceStretch) ? "" :
+             compositeBreadthPcceStretch >= compositeBreadthPcceStretchThreshold ? " ▲puts" :
+             compositeBreadthPcceStretch <= -compositeBreadthPcceStretchThreshold ? " ▼calls" : ""
+        compositeBreadthPcceText := " · PCCE " + str.tostring(value = compositeBreadthPcceSessionLast, format = "#.##") + compositeBreadthPcceTag
     color compositeBreadthBadgeTextColor = compositeBreadthZeroSideSign == 1 ? NORD8 :
          compositeBreadthZeroSideSign == -1 ? NORD11 : NORD4
     table.cell(
          table_id = compositeBreadthStatusTable,
          column = 0,
          row = 0,
-         text = compositeBreadthSideText + compositeBreadthDwellText + compositeBreadthHoldText + compositeBreadthRegimeText + compositeBreadthVoldRangeText,
+         text = compositeBreadthSideText + compositeBreadthDwellText + compositeBreadthHoldText + compositeBreadthRegimeText + compositeBreadthVoldRangeText + compositeBreadthDissentText + compositeBreadthPcceText,
          text_color = compositeBreadthBadgeTextColor,
          text_size = compositeBreadthStatusBadgeTextSize,
          bgcolor = color.new(color = NORD1, transp = 20)
      )
 
-// Feed-health badge — one persistent label updated in-place each bar via
+// ─── Feed-health badge ────────────────────────────────────────────────────────
+// One persistent label updated in-place each bar via
 // label.set_*() (more efficient than the delete+recreate pattern; TradingView
 // docs recommend this when the label persists across the whole chart life).
 // Created once on the first bar where any feed is missing; hidden by setting
@@ -1472,15 +2017,22 @@ if barstate.islast
         label.set_color    (id = compositeBreadthFeedHealthLabel, color = color.new(color = NORD11, transp = 100))
         label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = color.new(color = NORD6, transp = 100))
 
-// Additional alerts on the smoothed composite line. The ±50 impulse alerts
-// sit intentionally INSIDE the ±60 extended level: ±50 is "strong directional
-// breadth engaged" (confirmation of strength), ±60 is "abnormally extended"
-// (exhaustion context) — two different reads, two different levels.
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+// Alerts on the smoothed composite line. The ±50 impulse alerts are "strong
+// directional breadth engaged" (confirmation of strength) — a different read
+// from the adaptive extended levels, which mark "beyond a typical day's
+// range" (exhaustion context). Doctrine: display toggles never mute alerts.
 alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses above Signal", message = "Composite breadth crossed above signal — upward momentum building.")
 alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses below Signal", message = "Composite breadth crossed below signal — downward momentum building.")
-alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 =  50.0), title = "Composite crosses +50 (impulse up)",   message = "Composite breadth crossed above +50 — bullish breadth impulse.")
-alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = -50.0), title = "Composite crosses −50 (impulse down)", message = "Composite breadth crossed below −50 — bearish breadth impulse.")
-alertcondition(condition = compositeBreadthAnyFeedMissing and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS, title = "CBI: Feed(s) missing", message = "One or more required breadth feeds have not delivered after the post-open grace window. Check the Pine logs panel and the feed-health badge for details.")
+// The ±50 impulse alerts carry a consensus gate (review fix 2026-07-14):
+// the old squeezed line made ±50 structurally unreachable during a split
+// vote, so "impulse" implicitly meant strong AND agreed. Removing the
+// squeeze silently widened saved alerts to "strong weighted stance
+// regardless of agreement" — the explicit ≥ 0.7 gate (at most one
+// dissenter) restores the original semantics on the unsqueezed line.
+alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 =  50.0) and compositeBreadthConsensus >= 0.7, title = "Composite crosses +50 (impulse up)",   message = "Composite breadth crossed above +50 with component agreement — bullish breadth impulse.")
+alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = -50.0) and compositeBreadthConsensus >= 0.7, title = "Composite crosses −50 (impulse down)", message = "Composite breadth crossed below −50 with component agreement — bearish breadth impulse.")
+alertcondition(condition = compositeBreadthCoreFeedMissing and compositeBreadthBarsSinceSessionOpen >= CBI_FEED_HEALTH_GRACE_BARS, title = "CBI: Feed(s) missing", message = "One or more required breadth feeds have not delivered after the post-open grace window. Check the Pine logs panel and the feed-health badge for details.")
 
 // TICK extreme alerts — Barry's ±985 audio-alert workflow (the threshold
 // input exists FOR this alert: 985 sits just inside his ±1000 lines so the
@@ -1510,6 +2062,19 @@ alertcondition(condition = compositeBreadthVoldBeyondLow,  title = "VOLD beyond 
 // possible fire is minFlipMinutes into the session — no open-noise gate needed.
 alertcondition(condition = compositeBreadthPersistentFlipUp,   title = "Composite persistent flip UP",   message = "Composite breadth crossed above zero after a persistent hold below — potential regime change, not chop.")
 alertcondition(condition = compositeBreadthPersistentFlipDown, title = "Composite persistent flip DOWN", message = "Composite breadth crossed below zero after a persistent hold above — potential regime change, not chop.")
+
+// Early-shift alerts — CUMTICK (the leading component) has held the opposite
+// side of an established stance for the dissent window. Fires BEFORE the
+// composite crosses zero — the divergence warning, not the flip itself.
+alertcondition(condition = compositeBreadthEarlyShiftUp,   title = "Early shift warning UP",   message = "CUMTICK has held the opposite side of an established bearish composite stance — breadth rotating under the downtrend. Early warning, not a flip: check PCTABOVEVWAP recrossing 50 and watch for the persistent flip.")
+alertcondition(condition = compositeBreadthEarlyShiftDown, title = "Early shift warning DOWN", message = "CUMTICK has held the opposite side of an established bullish composite stance — breadth rotating under the uptrend. Early warning, not a flip: check PCTABOVEVWAP recrossing 50 and watch for the persistent flip.")
+
+// Options-flow divergence alerts — equity-only put/call grinding against an
+// established stance for the dissent window. Context warnings, not signals:
+// the research ceiling for aggregate put/call is context, so treat these as
+// a prompt to check VOLD/CUMTICK, not as entries.
+alertcondition(condition = compositeBreadthPcceDivergenceBear, title = "Options flow divergence BEARISH", message = "Equity put/call (PCCE) has been rising against an established bullish composite stance — puts accumulating under the uptrend. Context warning, not a signal: check VOLD and CUMTICK, and watch for the early-shift or persistent flip.")
+alertcondition(condition = compositeBreadthPcceDivergenceBull, title = "Options flow divergence BULLISH", message = "Equity put/call (PCCE) has been falling against an established bearish composite stance — put pressure unwinding under the downtrend. Context warning, not a signal: check VOLD and CUMTICK, and watch for the early-shift or persistent flip.")
 
 // Trend-day tell alerts — extreme first-hour TICK with VOLD and ADD agreeing.
 // One-shot per session; fires whether or not the TD marker is displayed.
