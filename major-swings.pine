@@ -172,13 +172,18 @@ LineStyleMode brokenLevelStyle = input.enum(defval = LineStyleMode.DASHED, title
 bool useWeightBasedWidth = input.bool(defval = true, title = "Strength-Based Line Width", tooltip = "When on, line width (1-3) reflects swing strength: recency plus volume and sweep bonuses. When off, all levels use the fixed width below.", group = GROUP_LEVELS)
 int fixedLineWidth = input.int(defval = 2, title = "Fixed Line Width", minval = 1, maxval = 5, tooltip = "Line width used for all swing levels when Strength-Based Line Width is off.", group = GROUP_LEVELS)
 
-// Rendering rebuilds once per closed bar to keep the live bar static. The
-// `not hasRenderedFrame` escape covers loading a chart while the market is
-// open: there `islastconfirmedhistory` is true only on the bar *before* the
-// realtime bar (where islast is false), so without it nothing would draw
-// until the current bar closes.
-var bool hasRenderedFrame = false
-bool shouldRefreshRender = barstate.islast and (confirmedBar or barstate.islastconfirmedhistory or not hasRenderedFrame)
+// Rendering refreshes once per BAR plus a self-heal path — not once per
+// tick. The projections only move when bar_index advances and the anchors
+// only change on confirmed bars, so per-tick refreshes were pure waste
+// (profiler: ~60% of runtime in this block). The stamp is set to the NEXT
+// bar's index on the confirming tick: committed state then equals bar_index
+// for every tick of the following bar (skip — one int compare per tick),
+// while any bar_index JUMP (feed re-sync backfill, the freeze this gate's
+// predecessor fixed) breaks the equality and the first tick after the gap
+// redraws immediately. Intrabar stamp assignments roll back, so only the
+// confirm-tick value commits.
+var int lastRenderedBar = na
+bool shouldRefreshRender = barstate.islast and (na(lastRenderedBar) or bar_index != lastRenderedBar or barstate.isconfirmed)
 
 f_lineStyle(LineStyleMode styleMode) =>
     styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
@@ -204,7 +209,7 @@ var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 
 if shouldRefreshRender
-    hasRenderedFrame := true
+    lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
     for lineObj in renderedLines
         line.delete(id = lineObj)
     array.clear(id = renderedLines)

@@ -68,9 +68,10 @@ const string GROUP_PIVOTS = "📍 Floor Pivots"
 bool showPivots = input.bool(defval = true, title = "Show Floor Pivots", tooltip = "Shows classic floor pivots from the selected higher timeframe. These are widely used intraday support and resistance reference levels.", group = GROUP_PIVOTS)
 bool showPivotLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each pivot level.", group = GROUP_PIVOTS)
 PivotResolution pivotResolutionInput = input.enum(defval = PivotResolution.DAY_1, title = "Resolution", tooltip = "Higher timeframe used to calculate the floor pivot set.", group = GROUP_PIVOTS)
-bool showPivotMidLevels = input.bool(defval = true, title = "Show Mid-Pivots", tooltip = "Adds midpoint pivot levels between PP/R1, R1/R2, PP/S1, and S1/S2. These are secondary reference levels.", group = GROUP_PIVOTS)
+bool showPivotMidLevels = input.bool(defval = false, title = "Show Mid-Pivots", tooltip = "Adds midpoint pivot levels between PP/R1, R1/R2, PP/S1, and S1/S2. These are secondary reference levels.", group = GROUP_PIVOTS)
 bool showCamarilla = input.bool(defval = false, title = "Show Camarilla Pivots", tooltip = "Adds Camarilla H3/H4/L3/L4 levels (Slade formula). Popular intraday alternative to floor pivots, especially as breakout/reversal levels.", group = GROUP_PIVOTS)
-color pivotLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Pivot Color", tooltip = "Base line color for the pivot ladder. Stronger levels render slightly more opaque, weaker levels slightly more transparent.", group = GROUP_PIVOTS)
+color pivotLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Pivot Color", tooltip = "Base line color for the pivot ladder. Stronger levels render slightly more opaque, weaker levels slightly more transparent — except at 100% transparency, which stays fully invisible instead of being re-boosted by the strength offset.", group = GROUP_PIVOTS)
+int pivotLineWidth = input.int(defval = 2, title = "Pivot Width", minval = 1, maxval = 10, tooltip = "Line width for every floor-pivot and Camarilla level. Level strength shows through opacity, not width.", group = GROUP_PIVOTS)
 
 string pivotResolution = switch pivotResolutionInput
     PivotResolution.HOURS_4   => "240"
@@ -87,8 +88,8 @@ string pivotResolution = switch pivotResolutionInput
     PivotResolution.MONTHS_12 => "12M"
     => "D"
 
-// Single source of truth for pivot-family level weights: line width and
-// opacity both derive from these values.
+// Single source of truth for pivot-family level weights — opacity derives
+// from these values (width is the flat Pivot Width input).
 f_pivotWeight(string pivotLevelName) =>
     switch pivotLevelName
         "PP" => 4
@@ -102,14 +103,26 @@ f_pivotWeight(string pivotLevelName) =>
         "L4" => 2
         => 1
 
+// Premarket readiness: the session-modified HTF series has no bar for the
+// new period until the regular session trades, so during premarket the PRIOR
+// completed period sits at offset 0 — the old fixed [1] offset served the
+// period BEFORE it (day-before-yesterday pivots at 07:00, jumping to the
+// right set only at 09:30). Both offsets are requested and the completed one
+// is picked per bar: offset 0 counts as completed once its close time has
+// passed (works for every resolution — a Tuesday-premarket weekly bar is
+// still forming and correctly stays on [1], a Monday-premarket one is last
+// week's completed bar and reads from [0]). The postmarket guard keeps the
+// day's levels from flipping to tomorrow's set at 16:00 — the switch to the
+// new set happens at the next premarket open.
 var float pivotPeriodHigh = na
 var float pivotPeriodLow = na
 var float pivotPeriodClose = na
 if confirmedBar and showPivots
-    [requestedPivotPeriodHigh, requestedPivotPeriodLow, requestedPivotPeriodClose] = request.security(symbol = sharedRegularSymbol, timeframe = pivotResolution, expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
-    pivotPeriodHigh := requestedPivotPeriodHigh
-    pivotPeriodLow := requestedPivotPeriodLow
-    pivotPeriodClose := requestedPivotPeriodClose
+    [currentPeriodHigh, currentPeriodLow, currentPeriodClose, currentPeriodCloseTime, priorPeriodHigh, priorPeriodLow, priorPeriodClose] = request.security(symbol = sharedRegularSymbol, timeframe = pivotResolution, expression = [high, low, close, time_close, high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    bool pivotPeriodZeroCompleted = not na(currentPeriodCloseTime) and time >= currentPeriodCloseTime and not session.ispostmarket
+    pivotPeriodHigh := pivotPeriodZeroCompleted ? currentPeriodHigh : priorPeriodHigh
+    pivotPeriodLow := pivotPeriodZeroCompleted ? currentPeriodLow : priorPeriodLow
+    pivotPeriodClose := pivotPeriodZeroCompleted ? currentPeriodClose : priorPeriodClose
 
 float pivotPoint = (pivotPeriodHigh + pivotPeriodLow + pivotPeriodClose) / 3.0
 float pivotRange = pivotPeriodHigh - pivotPeriodLow
@@ -146,115 +159,127 @@ bool showPreviousDayHighLevel = input.bool(defval = true, title = "Show High", t
 bool showPreviousDayLowLevel = input.bool(defval = true, title = "Show Low", tooltip = "Plots the previous day's low for each trading day.", group = GROUP_PDH)
 bool showPreviousDayCloseLevel = input.bool(defval = true, title = "Show Close", tooltip = "Plots the previous day's official daily close. For many futures symbols on TradingView daily data, this is the exchange settlement once the day is finalized.", group = GROUP_PDH)
 color previousDayHighColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "PDH Color", tooltip = "Line color for the Previous Day High.", group = GROUP_PDH)
-int previousDayHighWidth = input.int(defval = 1, title = "PDH Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day High.", group = GROUP_PDH)
+int previousDayHighWidth = input.int(defval = 2, title = "PDH Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day High.", group = GROUP_PDH)
 color previousDayLowColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "PDL Color", tooltip = "Line color for the Previous Day Low.", group = GROUP_PDH)
-int previousDayLowWidth = input.int(defval = 1, title = "PDL Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day Low.", group = GROUP_PDH)
+int previousDayLowWidth = input.int(defval = 2, title = "PDL Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day Low.", group = GROUP_PDH)
 color previousDayCloseColor = input.color(defval = NORD3, title = "PDC Color", tooltip = "Line color for the Previous Day Close.", group = GROUP_PDH)
-int previousDayCloseWidth = input.int(defval = 1, title = "PDC Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day Close.", group = GROUP_PDH)
+int previousDayCloseWidth = input.int(defval = 2, title = "PDC Width", minval = 1, maxval = 5, tooltip = "Line width for the Previous Day Close.", group = GROUP_PDH)
 
+// Same completed-period offset selection as the pivot request — during
+// premarket yesterday's session is offset 0 (no daily bar has opened for
+// today yet), during regular hours it is offset 1.
 var float prevDayHigh = na
 var float prevDayLow = na
 var float prevDayClose = na
 if confirmedBar and showPreviousDay
-    [requestedPrevDayHigh, requestedPrevDayLow, requestedPrevDayClose] = request.security(symbol = sharedRegularSymbol, timeframe = "D", expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
-    prevDayHigh := requestedPrevDayHigh
-    prevDayLow := requestedPrevDayLow
-    prevDayClose := requestedPrevDayClose
+    [currentDayHigh, currentDayLow, currentDayClose, currentDayCloseTime, priorDayHigh, priorDayLow, priorDayClose] = request.security(symbol = sharedRegularSymbol, timeframe = "D", expression = [high, low, close, time_close, high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    bool prevDayZeroCompleted = not na(currentDayCloseTime) and time >= currentDayCloseTime and not session.ispostmarket
+    prevDayHigh := prevDayZeroCompleted ? currentDayHigh : priorDayHigh
+    prevDayLow := prevDayZeroCompleted ? currentDayLow : priorDayLow
+    prevDayClose := prevDayZeroCompleted ? currentDayClose : priorDayClose
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
-// Draws each level from the current session start to a small right extension,
-// with the legend labels anchored at the session-start bar so each day's
-// level names sit at the left end of their lines. Pivot line width and
-// opacity scale with level weight so PP/S1/R1 read stronger than the outer
-// rungs.
+// Draws each level from the trading day's first bar to a right extension
+// past the current bar, with the legend labels anchored at either end of
+// the line (Label Position input). Level strength renders through opacity
+// alone — PP/S1/R1 read more opaque than the outer rungs — while width is a
+// single user input for the whole ladder.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_RENDER = "⚙️ Render"
 
 int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all level labels.", group = GROUP_RENDER)
 int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
-int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts each label above its line by the chosen number of minimum ticks.", group = GROUP_RENDER)
-// Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
-// the extend input stays at 400 to keep a safe margin from that limit.
-int renderExtendBars = input.int(defval = 4, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right session-anchored levels extend beyond the current bar.", group = GROUP_RENDER)
+int labelDistanceTicks = input.int(defval = 0, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts each label above its line by the chosen number of minimum ticks.", group = GROUP_RENDER)
+// Levels are drawn with time-based x-coordinates, which Pine does not cap
+// at 500 future bars the way bar_index drawings are.
+int renderExtendBars = input.int(defval = 20, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right session-anchored levels extend beyond the current bar.", group = GROUP_RENDER)
 color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by level labels.", group = GROUP_RENDER)
+string labelAlignInput = input.string(defval = "Left", title = "Label Position", options = ["Left", "Right"], tooltip = "Left anchors each level's name at the session-start end of its line (the very beginning of the trading day). Right anchors it at the projected right end of the line, past the current bar. The horizontal-adjust input nudges from either anchor.", group = GROUP_RENDER)
 
-// Session-start anchor every rendered level draws from. Anchored to the first
-// REGULAR-session bar (session.isfirstbar_regular), not the daily-bar time
-// change: time("D") flips on the first bar of the CALENDAR day, which on an
-// extended-hours chart is a pre-market bar (04:00 ET on stocks) — the day's
-// levels would start drawing inside the overnight session. The _regular
-// variant fires at the regular-session open on both RTH-only and extended
-// charts, keeping the anchor consistent with the session-modified ticker the
-// level VALUES are requested from.
-bool isNewSession = session.isfirstbar_regular
-bool confirmedNewSession = confirmedBar and isNewSession
-var int currentSessionStartBar = bar_index
-if confirmedNewSession
-    currentSessionStartBar := bar_index
-// Rendering rebuilds once per closed bar to keep the live bar static. The
-// `not hasRenderedFrame` escape covers loading a chart while the market is
-// open: there `islastconfirmedhistory` is true only on the bar *before* the
-// realtime bar (where islast is false), so without it nothing would draw
-// until the current bar closes.
-var bool hasRenderedFrame = false
-bool shouldRefreshRender = barstate.islast and (confirmedBar or barstate.islastconfirmedhistory or not hasRenderedFrame)
+// Every rendered level draws from the REGULAR-session open — 09:30 ET of
+// the current trading day — expressed as a TIME and drawn with
+// xloc.bar_time. That way premarket bars already show the day's ladder (the
+// completed-period values above are final by then) but the lines themselves
+// begin exactly at the (possibly still-future) 09:30 open instead of
+// stretching back across the overnight session or dangling from yesterday's
+// open. Time-anchored x-coordinates also have no 500-bar future limit.
+int sessionOpenTimeNy = timestamp(timezone = "America/New_York", year = year(time, "America/New_York"), month = month(time, "America/New_York"), day = dayofmonth(time, "America/New_York"), hour = 9, minute = 30)
+int renderBarMs = timeframe.in_seconds() * 1000
+int renderRightTime = time + renderExtendBars * renderBarMs
+// Rendering refreshes once per BAR plus a self-heal path — not once per
+// tick. The projections only move when bar_index advances and the anchors
+// only change on confirmed bars, so per-tick refreshes were pure waste
+// (profiler: ~60% of runtime in this block). The stamp is set to the NEXT
+// bar's index on the confirming tick: committed state then equals bar_index
+// for every tick of the following bar (skip — one int compare per tick),
+// while any bar_index JUMP (feed re-sync backfill, the freeze this gate's
+// predecessor fixed) breaks the equality and the first tick after the gap
+// redraws immediately. Intrabar stamp assignments roll back, so only the
+// confirm-tick value commits.
+var int lastRenderedBar = na
+bool shouldRefreshRender = barstate.islast and (na(lastRenderedBar) or bar_index != lastRenderedBar or barstate.isconfirmed)
 
 f_lineStyle(string styleName) =>
     styleName == "Dashed" ? line.style_dashed : styleName == "Dotted" ? line.style_dotted : line.style_solid
 
-f_levelLineWidth(int levelWeight) =>
-    levelWeight >= 3 ? 3 : levelWeight == 2 ? 2 : 1
-
+// Strength renders as opacity around the user's base transparency. A fully
+// transparent input (100) passes through untouched — the old strength boost
+// subtracted from it (100 → 80 on strong levels), which made the ladder
+// impossible to hide with the color picker alone.
 f_pivotDisplayColor(int levelWeight) =>
-    adjustedTransp = levelWeight >= 3 ? math.max(0, color.t(color = pivotLevelColor) - 20) : levelWeight == 2 ? math.max(0, color.t(color = pivotLevelColor) - 8) : math.min(90, color.t(color = pivotLevelColor) + 10)
+    baseTransp = color.t(color = pivotLevelColor)
+    adjustedTransp = baseTransp >= 100 ? 100 : levelWeight >= 3 ? math.max(0, baseTransp - 20) : levelWeight == 2 ? math.max(0, baseTransp - 8) : math.min(90, baseTransp + 10)
     color.new(color = pivotLevelColor, transp = adjustedTransp)
 
 f_labelY(float levelPrice) =>
     // Every legend label sits ABOVE its own line, lifted by the configured
-    // tick distance. The anchor style (label_lower_left) places the text body
-    // above and to the right of this point.
+    // tick distance. The lower-corner anchor styles place the text body
+    // above this point, reading inward from the chosen end of the line.
     levelPrice + syminfo.mintick * labelDistanceTicks
 
-// Legend labels anchor at the session-start bar — the left end of every
-// rendered line — so the day's level names read at the start of the session.
-// The horizontal-adjust input still nudges them in bars from that anchor.
+// Legend labels anchor at the chosen end of each line: Left = the
+// session-start bar (the very beginning of the trading day), Right = the
+// projected right end past the current bar. The horizontal-adjust input
+// nudges from either anchor, and the matching lower-left/lower-right label
+// style keeps the text above the line reading inward from its anchor.
 f_labelX() =>
-    currentSessionStartBar + labelHorizontalAdjustBars
+    labelAlignInput == "Right" ? renderRightTime + labelHorizontalAdjustBars * renderBarMs :
+     sessionOpenTimeNy + labelHorizontalAdjustBars * renderBarMs
+
+levelLabelStyle = labelAlignInput == "Right" ? label.style_label_lower_right : label.style_label_lower_left
 
 // Draw helpers skip na prices: unavailable levels (early history, missing HTF
 // data) would otherwise still create invisible objects that count against the
 // max_lines/labels_count budgets.
-f_drawPivotLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, string styleName, int sessionStartBar) =>
+f_drawPivotLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, string styleName, int sessionStartTime) =>
     if not na(levelPrice)
         int pivotWeight = f_pivotWeight(pivotLevelName = labelText)
-        line newLine = line.new(x1 = sessionStartBar, y1 = levelPrice, x2 = bar_index + renderExtendBars, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = f_pivotDisplayColor(levelWeight = pivotWeight), width = f_levelLineWidth(levelWeight = pivotWeight), style = f_lineStyle(styleName = styleName))
+        line newLine = line.new(x1 = sessionStartTime, y1 = levelPrice, x2 = renderRightTime, y2 = levelPrice, xloc = xloc.bar_time, extend = extend.none, color = f_pivotDisplayColor(levelWeight = pivotWeight), width = pivotLineWidth, style = f_lineStyle(styleName = styleName))
         array.push(id = lines, value = newLine)
         if showPivotLabels
-            // style_label_lower_left anchors the label's LOWER-LEFT corner at
-            // (x, y): the text starts exactly at the session-start bar and
-            // sits fully ABOVE its line, reading to the right. (style_left
-            // vertically centers the text on the line; style_none centers it
-            // on the anchor, hanging half of it into the prior session.)
-            // Fully transparent background keeps the clean text-only look.
-            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_lower_left, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
+            // The lower-left/lower-right label style (per the Label
+            // Position input) anchors that corner at (x, y): the text sits
+            // fully ABOVE its line and reads inward from its end of the
+            // line. Fully transparent background keeps the text-only look.
+            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_time, yloc = yloc.price, style = levelLabelStyle, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
             array.push(id = labels, value = newLabel)
 
-f_drawPreviousDayLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, int levelWidth, string styleName, int sessionStartBar) =>
+f_drawPreviousDayLevel(array<line> lines, array<label> labels, float levelPrice, string labelText, color levelColor, int levelWidth, string styleName, int sessionStartTime) =>
     if not na(levelPrice)
-        line newLine = line.new(x1 = sessionStartBar, y1 = levelPrice, x2 = bar_index + renderExtendBars, y2 = levelPrice, xloc = xloc.bar_index, extend = extend.none, color = levelColor, width = levelWidth, style = f_lineStyle(styleName = styleName))
+        line newLine = line.new(x1 = sessionStartTime, y1 = levelPrice, x2 = renderRightTime, y2 = levelPrice, xloc = xloc.bar_time, extend = extend.none, color = levelColor, width = levelWidth, style = f_lineStyle(styleName = styleName))
         array.push(id = lines, value = newLine)
         if showPreviousDayLabels
             // Same lower-left corner anchoring as the pivot labels — see the
             // comment in f_drawPivotLevel.
-            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_lower_left, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
+            label newLabel = label.new(x = f_labelX(), y = f_labelY(levelPrice = levelPrice), text = labelText, xloc = xloc.bar_time, yloc = yloc.price, style = levelLabelStyle, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left)
             array.push(id = labels, value = newLabel)
 
 var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 
 if shouldRefreshRender
-    hasRenderedFrame := true
+    lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
     for lineObj in renderedLines
         line.delete(id = lineObj)
     array.clear(id = renderedLines)
@@ -263,33 +288,33 @@ if shouldRefreshRender
     array.clear(id = renderedLabels)
 
     if showPivots
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS4, labelText = "S4", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS3, labelText = "S3", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS2, labelText = "S2", styleName = "Solid", sessionStartBar = currentSessionStartBar)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS4, labelText = "S4", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS3, labelText = "S3", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS2, labelText = "S2", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPivotMidLevels
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidS1S2, labelText = "M-S1S2", styleName = "Dotted", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS1, labelText = "S1", styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidS1S2, labelText = "M-S1S2", styleName = "Dotted", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotS1, labelText = "S1", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPivotMidLevels
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidPPS1, labelText = "M-PPS1", styleName = "Dotted", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotPoint, labelText = "PP", styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidPPS1, labelText = "M-PPS1", styleName = "Dotted", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotPoint, labelText = "PP", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPivotMidLevels
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidPPR1, labelText = "M-PPR1", styleName = "Dotted", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR1, labelText = "R1", styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidPPR1, labelText = "M-PPR1", styleName = "Dotted", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR1, labelText = "R1", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPivotMidLevels
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidR1R2, labelText = "M-R1R2", styleName = "Dotted", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR2, labelText = "R2", styleName = "Solid", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR3, labelText = "R3", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
-        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR4, labelText = "R4", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotMidR1R2, labelText = "M-R1R2", styleName = "Dotted", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR2, labelText = "R2", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR3, labelText = "R3", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
+        f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = pivotR4, labelText = "R4", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
         if showCamarilla
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH4, labelText = "H4", styleName = "Solid", sessionStartBar = currentSessionStartBar)
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH3, labelText = "H3", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL3, labelText = "L3", styleName = "Dashed", sessionStartBar = currentSessionStartBar)
-            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL4, labelText = "L4", styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH4, labelText = "H4", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaH3, labelText = "H3", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL3, labelText = "L3", styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)
+            f_drawPivotLevel(lines = renderedLines, labels = renderedLabels, levelPrice = camarillaL4, labelText = "L4", styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
 
     if showPreviousDay
         if showPreviousDayHighLevel
-            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayHigh, labelText = "PDH", levelColor = previousDayHighColor, levelWidth = previousDayHighWidth, styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayHigh, labelText = "PDH", levelColor = previousDayHighColor, levelWidth = previousDayHighWidth, styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPreviousDayLowLevel
-            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayLow, labelText = "PDL", levelColor = previousDayLowColor, levelWidth = previousDayLowWidth, styleName = "Solid", sessionStartBar = currentSessionStartBar)
+            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayLow, labelText = "PDL", levelColor = previousDayLowColor, levelWidth = previousDayLowWidth, styleName = "Solid", sessionStartTime = sessionOpenTimeNy)
         if showPreviousDayCloseLevel
-            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayClose, labelText = "PDC", levelColor = previousDayCloseColor, levelWidth = previousDayCloseWidth, styleName = "Dashed", sessionStartBar = currentSessionStartBar)
+            f_drawPreviousDayLevel(lines = renderedLines, labels = renderedLabels, levelPrice = prevDayClose, labelText = "PDC", levelColor = previousDayCloseColor, levelWidth = previousDayCloseWidth, styleName = "Dashed", sessionStartTime = sessionOpenTimeNy)

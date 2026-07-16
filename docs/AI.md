@@ -1042,10 +1042,13 @@ enum TrendDir
      engine): zero-line persistence (dwell/persistent-flip), early-shift
      warning (CUMTICK dissent vs established stance), PCCE options-sentiment
      layer (equity-only put/call stretch + divergence; gated dynamic
-     request — zero cost when disabled), adaptive 30-day extended levels
-     (computation gated on toggle), opening-volume regime classifier,
-     first-hour trend-day tell, session status badge (table on
-     `barstate.islast`), configurable session-divider lines
+     request — zero cost when disabled), Lowry 90% Days capitulation state
+     machine (Desmond dual-leg arm/fire/veto on gated UPVOL/DNVOL requests),
+     last-hour continuation gate (Gao intraday momentum, expansion-regime
+     gated, no extra feeds), adaptive 30-day extended levels (computation
+     gated on toggle), opening-volume regime classifier, first-hour
+     trend-day tell, session status badge (table on `barstate.islast`),
+     configurable session-divider lines
    - Uses `request.security()` against the USI breadth feeds
 
 2. **`fundamental-view-indicator.pine`**
