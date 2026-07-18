@@ -583,23 +583,23 @@ bool compositeBreadthShowSessionDivider = input.bool(
  )
 
 color compositeBreadthSessionDividerColor = input.color(
-     defval = color.new(color = NORD3, transp = 40),
+     defval = color.new(color = NORD3, transp = 0),
      title = "Divider Color",
      tooltip = "Session divider line color (transparency supported via the picker).",
      group = GROUP_COMPOSITE_BREADTH_DIVIDER
  )
 
 int compositeBreadthSessionDividerWidth = input.int(
-     defval = 8,
+     defval = 2,
      title = "Divider Width",
      minval = 1,
      maxval = 10,
-     tooltip = "Session divider line width in pixels. The full default width is safe because the dividers are anchored between bars, not on them.",
+     tooltip = "Session divider line width in pixels. Any width up to the max is safe because the dividers are anchored between bars, not on them.",
      group = GROUP_COMPOSITE_BREADTH_DIVIDER
  )
 
 string compositeBreadthSessionDividerStyle = input.string(
-     defval = "Solid",
+     defval = "Dashed",
      title = "Divider Style",
      options = ["Solid", "Dashed", "Dotted"],
      tooltip = "Session divider line style.",
@@ -2416,38 +2416,27 @@ if compositeBreadthShowStatusBadge and barstate.islast
      )
 
 // ─── Feed-health badge ────────────────────────────────────────────────────────
-// One persistent label updated in-place each bar via
-// label.set_*() (more efficient than the delete+recreate pattern; TradingView
-// docs recommend this when the label persists across the whole chart life).
-// Created once on the first bar where any feed is missing; hidden by setting
-// transparency to 100 when everything is healthy so we don't churn handles.
-var label compositeBreadthFeedHealthLabel = na
+// Single-cell TABLE fixed to the bottom-right corner (2026-07-18 rework). The
+// old price-anchored label sat at y = 95 in composite units, so on the first
+// bars after the open — while the USI feeds warm up and the composite is still
+// hugging zero — it PINNED the pane's auto-scale to ±95 and flattened the line
+// exactly when the early movement matters most. A table is screen furniture:
+// it never enters the auto-scale, never moves with the data, and never shifts
+// as bars advance. Cleared outright when every feed is healthy.
+var table compositeBreadthFeedHealthTable = table.new(position = position.bottom_right, columns = 1, rows = 1)
 if barstate.islast
     if compositeBreadthAnyFeedMissing
-        string compositeBreadthFeedHealthRenderText = "⚠ CBI feeds missing: " + f_compositeBreadthMissingFeedsText()
-        color compositeBreadthFeedHealthLabelColor = color.new(color = NORD11, transp = 20)
-        if na(compositeBreadthFeedHealthLabel)
-            compositeBreadthFeedHealthLabel := label.new(
-                 x = bar_index,
-                 y = CBI_SCALE_MAX * 0.95,
-                 text = compositeBreadthFeedHealthRenderText,
-                 xloc = xloc.bar_index,
-                 yloc = yloc.price,
-                 color = compositeBreadthFeedHealthLabelColor,
-                 textcolor = NORD6,
-                 style = label.style_label_left,
-                 size = size.normal
-             )
-        else
-            label.set_xy       (id = compositeBreadthFeedHealthLabel, x = bar_index, y = CBI_SCALE_MAX * 0.95)
-            label.set_text     (id = compositeBreadthFeedHealthLabel, text = compositeBreadthFeedHealthRenderText)
-            label.set_color    (id = compositeBreadthFeedHealthLabel, color = compositeBreadthFeedHealthLabelColor)
-            label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = NORD6)
-    else if not na(compositeBreadthFeedHealthLabel)
-        // All feeds healthy — hide via full transparency instead of
-        // deleting+recreating each render.
-        label.set_color    (id = compositeBreadthFeedHealthLabel, color = color.new(color = NORD11, transp = 100))
-        label.set_textcolor(id = compositeBreadthFeedHealthLabel, textcolor = color.new(color = NORD6, transp = 100))
+        table.cell(
+             table_id = compositeBreadthFeedHealthTable,
+             column = 0,
+             row = 0,
+             text = "⚠ CBI feeds missing: " + f_compositeBreadthMissingFeedsText(),
+             text_color = NORD6,
+             text_size = size.normal,
+             bgcolor = color.new(color = NORD11, transp = 20)
+         )
+    else
+        table.clear(table_id = compositeBreadthFeedHealthTable, start_column = 0, start_row = 0)
 
 // ─── Alerts ───────────────────────────────────────────────────────────────────
 // Alerts on the smoothed composite line. The ±50 impulse alerts are "strong

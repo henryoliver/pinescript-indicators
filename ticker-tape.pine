@@ -113,7 +113,7 @@ showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Or
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all). Tape display only — it never filters block-trade counting.", group = GROUP_GENERAL)
-intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Lower = faster + less memory. Live tape and recent block markers stay fully responsive; bars older than this window won't render block markers and won't seed historical ticks into the tape.", group = GROUP_GENERAL)
+intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Kept LOW on purpose — block markers don't need deep tick history: each marker is minted ONCE as a chart label when its bar closes and stays alive for the whole session without ever being recalculated from tick data. This window only limits how far back the tape rows and markers can be re-seeded after a script reload (settings change, chart refresh, reconnect) — Pine drawings don't survive reloads, and TradingView caps served intrabar history anyway. Raise it if you want a deeper marker backfill on fresh loads.", group = GROUP_GENERAL)
 largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
@@ -123,12 +123,12 @@ defaultTextColor = input.color(defval = color.new(color = NORD4, transp = 20), t
 askTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Ask Text", tooltip = "Text color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
 askBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 90), title = "Ask BG", tooltip = "Background color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
 aboveAskTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Above Ask Text", tooltip = "Text color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
-aboveAskBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 50), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
+aboveAskBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
 aboveAskBold = input.bool(defval = true, title = "Bold", tooltip = "Render aggressive buy-side prints in bold.", inline = "above_ask", group = GROUP_GENERAL)
 bidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Bid Text", tooltip = "Text color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
 bidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Bid BG", tooltip = "Background color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
 belowBidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Below Bid Text", tooltip = "Text color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
-belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 50), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
+belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBold = input.bool(defval = true, title = "Bold", tooltip = "Render aggressive sell-side prints in bold.", inline = "below_bid", group = GROUP_GENERAL)
 
 const string GROUP_TABLE = "📋 Table"
@@ -136,7 +136,7 @@ const string GROUP_TABLE = "📋 Table"
 // Table Settings
 TablePosition tablePosition = input.enum(defval = TablePosition.TOP_RIGHT, title = "Table Position", tooltip = "Where the ticker tape table is anchored on the chart.", group = GROUP_TABLE)
 textSize = input.int(defval = 12, title = "Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Font size used for the table.", group = GROUP_TABLE)
-fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], tooltip = "Font family used for all table text. Monospace keeps the padded columns perfectly aligned; the default font can drift slightly because characters vary in width.", group = GROUP_TABLE)
+fontFamily = input.string(defval = font.family_default, title = "Font Family", options = [font.family_default, font.family_monospace], tooltip = "Font family used for ALL table text — every column, headers and section labels included. Monospace keeps the padded columns at a constant pixel width so the table never shifts; with the default proportional font the COND column can drift slightly because letters vary in width.", group = GROUP_TABLE)
 headerTextAlign = input.string(defval = text.align_center, title = "Header Text Alignment", options = [text.align_left, text.align_center, text.align_right], tooltip = "Text alignment for header row", group = GROUP_TABLE)
 timeColumnAlign = input.string(defval = text.align_center, title = "Time Column Alignment", options = [text.align_left, text.align_center, text.align_right], tooltip = "Text alignment for the TIME column.", inline = "col_align1", group = GROUP_TABLE)
 priceColumnAlign = input.string(defval = text.align_center, title = "Price Column Alignment", options = [text.align_left, text.align_center, text.align_right], tooltip = "Text alignment for the PRICE column.", inline = "col_align1", group = GROUP_TABLE)
@@ -146,9 +146,9 @@ condColumnAlign = input.string(defval = text.align_center, title = "Cond Column 
 const string GROUP_LAYOUT = "📐 Layout"
 
 // Layout Settings
-headerHeight = input.float(defval = 2.0, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows.", group = GROUP_LAYOUT)
-dataRowHeight = input.float(defval = 2.0, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of each tape data row.", group = GROUP_LAYOUT)
-sizePadChars = input.int(defval = 5, title = "Size Column Width (chars)", minval = 4, maxval = 15, tooltip = "Character width reserved for the SIZE column. Columns auto-fit their content, and every cell is padded to this fixed character count so the column cannot shift as prints scroll. Prints longer than this simply widen the column; raise it if that happens often.", group = GROUP_LAYOUT)
+headerHeight = input.float(defval = 2.5, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows.", group = GROUP_LAYOUT)
+dataRowHeight = input.float(defval = 2.5, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of each tape data row.", group = GROUP_LAYOUT)
+sizePadChars = input.int(defval = 4, title = "Size Column Width (chars)", minval = 1, maxval = 10, tooltip = "Character width reserved for the SIZE column. Columns auto-fit their content, and every cell is padded to this fixed character count so the column cannot shift as prints scroll. Prints longer than this simply widen the column; raise it if that happens often.", group = GROUP_LAYOUT)
 frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, tooltip = "Width of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
 frameColor = input.color(defval = color.new(color = NORD0, transp = 0), title = "", tooltip = "Color of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
 borderWidth = input.int(defval = 0, title = "Border Width", minval = 0, maxval = 10, tooltip = "Width of cell borders.", inline = "border", group = GROUP_LAYOUT)
@@ -161,7 +161,7 @@ showRetail = input.bool(defval = true, title = "Show Retail/Amateur", tooltip = 
 retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, tooltip = "Maximum number of retail/amateur prints shown in the table.", group = GROUP_RETAIL)
 retailHeaderBg = input.color(defval = color.new(color = NORD2, transp = 80), title = "Retail Header BG", tooltip = "Background color for the retail section label.", group = GROUP_RETAIL)
 retailMinSize = input.int(defval = 0, title = "Retail Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the retail/amateur section.", group = GROUP_RETAIL)
-retailMaxSize = input.int(defval = 0, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section. Set to 0 to include every print below the institutional minimum, so no size range falls between the two sections.", group = GROUP_RETAIL)
+retailMaxSize = input.int(defval = 999, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section. Default is the institutional minimum minus one (999 vs 1000) so the two sections tile the size range with no overlap and no gap — keep it in sync if you change the institutional minimum. Set to 0 to include every print below the institutional minimum.", group = GROUP_RETAIL)
 
 const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
 
@@ -179,7 +179,7 @@ const string GROUP_BLOCK = "🐋 Block Trades"
 // and adjust it day to day (lower on slow days, higher on busy days). His corpus gives
 // futures numbers only (NQ/ES: 20+ contracts); for QQQ day trading 1,000+ shares is a
 // reasonable "above amateur size" floor since retail prints are typically <=100 shares.
-blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade. Set just above amateur size for the instrument and adjust day to day (QQQ: 1,000+ shares is a sensible floor).", group = GROUP_BLOCK)
+blockSizeThreshold = input.int(defval = 10000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade. Set just above amateur size for the instrument and adjust day to day (default 10,000 shares, tuned for QQQ).", group = GROUP_BLOCK)
 directionalBlockColors = input.bool(defval = true, title = "Directional Marker Colors", tooltip = "Color the marker by which side the block prints hit: buy-side (at/above the ask) vs sell-side (at/below the bid). When the bar's buy and sell blocks tie, the neutral color is used.", group = GROUP_BLOCK)
 blockTradeColor = input.color(defval = NORD4, title = "Neutral", tooltip = "Marker color when directional coloring is off or the bar's buy/sell blocks tie.", inline = "block_colors", group = GROUP_BLOCK)
 blockBuyColor = input.color(defval = NORD8, title = "Buy", tooltip = "Marker color when the bar's block prints skew to the buy side (at/above the ask).", inline = "block_colors", group = GROUP_BLOCK)
@@ -258,9 +258,13 @@ priceFormat = switch priceDecimals
 // Per-column pad targets (in characters). Every cell in a column — header included —
 // is padded to the same character count, so the auto-sized column locks to a constant
 // width that fits the content instead of scaling with the chart.
+// Character padding equals PIXEL width only in a monospace font — which is why
+// monospace is the Font Family DEFAULT. In the proportional font the COND column
+// (the only alphabetic one) can drift slightly as labels change; digit columns are
+// safe either way because fonts use tabular (equal-width) figures.
 int timePadChars = math.max(4, str.length(string = str.format_time(time = timenow, format = timeFormat, timezone = syminfo.timezone)))
 int pricePadChars = math.max(5, str.length(string = str.tostring(value = close, format = priceFormat)) + 1)
-int condPadChars = 11 // longest condition label: "above price"
+int condPadChars = 11 // longest condition label: "above price" / "below price"
 
 // Convert table position enum to Pine position constant
 tablePos = switch tablePosition
@@ -365,6 +369,7 @@ f_padText(string value, int targetLength, string textAlign) =>
 f_tapeCell(int column, int row, string cellText, float cellHeight, color textColor, string textAlign, color cellBg, textFormatting) =>
     // width = 0 auto-sizes the column to its content; the fixed-length padded text
     // keeps that content-derived width constant across updates and chart resizes.
+    // Every cell honors the Font Family input — no per-column font overrides.
     table.cell(table_id = tapeTable, column = column, row = row, text = cellText, width = 0, height = cellHeight, text_color = textColor, text_halign = textAlign, text_size = textSize, text_font_family = fontFamily, text_formatting = textFormatting, bgcolor = cellBg)
 
 f_renderTickRow(int tableRow, TickData currentTick) =>
@@ -549,10 +554,24 @@ bool showBlockTradeGlyph = blockTradesActive and blockState.count > 0
 bool inCloseFadeWindow = fadeIntoClose and not na(time(timeframe = timeframe.period, session = closeFadeSession, timezone = "America/New_York"))
 int blockTradeTransparency = inCloseFadeWindow ? math.max(f_blockTradeTransparency(blockCount = blockState.count), 80) : f_blockTradeTransparency(blockCount = blockState.count)
 color blockMarkerColor = not directionalBlockColors ? blockTradeColor : blockState.buyCount > blockState.sellCount ? blockBuyColor : blockState.sellCount > blockState.buyCount ? blockSellColor : blockTradeColor
-plotchar(series = showBlockTradeGlyph, title = "Block Trades", char = "■", location = location.belowbar, color = color.new(color = blockMarkerColor, transp = blockTradeTransparency), size = size.tiny)
-// Expose the per-bar count in the data window so the exact number stays readable
-// (Barry's rule: read the count, not the marker intensity).
-plot(series = blockTradesActive ? blockState.count : 0, title = "Block Trades In Bar", display = display.data_window)
+// display.pane keeps the glyph out of the data window / crosshair popup — the
+// marker is chart furniture; the COUNT plot below is the numeric readout.
+// The plotchar only covers the FORMING bar (live color/opacity updates are free
+// on a plot); at bar confirm the glyph is re-minted ONCE as a label object below.
+plotchar(series = showBlockTradeGlyph and not barstate.isconfirmed, title = "Block Trades (live bar)", char = "■", location = location.belowbar, color = color.new(color = blockMarkerColor, transp = blockTradeTransparency), size = size.tiny, display = display.pane)
+// Confirmed-bar markers are LABELS, not plot values: the chart engine retains a
+// label for the life of the script run, so markers stay on screen all session
+// even though tick data is only fetched for the small intrabar window — no
+// recalculation ever touches them. Minted exactly once per bar (isconfirmed
+// fires on the single closing execution), so there is no intrabar create/delete
+// churn. Oldest markers drop past max_labels_count (500).
+if showBlockTradeGlyph and barstate.isconfirmed
+    label.new(x = bar_index, y = na, yloc = yloc.belowbar, text = "■", style = label.style_none, textcolor = color.new(color = blockMarkerColor, transp = blockTradeTransparency), size = size.tiny)
+// Expose the per-bar count as a number (Barry's rule: read the count, not the
+// marker intensity). Not drawn in the pane — it lives in the Data Window panel,
+// the status line, and the crosshair/long-press popup, which all list plots by
+// their display flags. This is the only numeric output, so the popup stays clean.
+plot(series = blockTradesActive ? blockState.count : 0, title = "Block Trades In Bar", display = display.data_window + display.status_line)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚡ PERFORMANCE
