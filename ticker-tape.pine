@@ -146,8 +146,8 @@ condColumnAlign = input.string(defval = text.align_center, title = "Cond Column 
 const string GROUP_LAYOUT = "📐 Layout"
 
 // Layout Settings
-headerHeight = input.float(defval = 2.5, title = "Header Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows.", group = GROUP_LAYOUT)
-dataRowHeight = input.float(defval = 2.5, title = "Data Row Height", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Height of each tape data row.", group = GROUP_LAYOUT)
+headerHeight = input.float(defval = 0.0, title = "Header Row Height", minval = 0.0, maxval = 10.0, step = 0.5, tooltip = "Height of the section header rows. 0 (default) auto-sizes the row to its text — a CONSTANT pixel height driven by the font size, same logic as the column widths, so resizing the chart window never stretches or squeezes the table. Any other value is a % of the chart window height and scales with it.", group = GROUP_LAYOUT)
+dataRowHeight = input.float(defval = 0.0, title = "Data Row Height", minval = 0.0, maxval = 10.0, step = 0.5, tooltip = "Height of each tape data row. 0 (default) auto-sizes the row to its text — a CONSTANT pixel height driven by the font size, same logic as the column widths, so resizing the chart window never stretches or squeezes the table. Any other value is a % of the chart window height and scales with it.", group = GROUP_LAYOUT)
 sizePadChars = input.int(defval = 4, title = "Size Column Width (chars)", minval = 1, maxval = 10, tooltip = "Character width reserved for the SIZE column. Columns auto-fit their content, and every cell is padded to this fixed character count so the column cannot shift as prints scroll. Prints longer than this simply widen the column; raise it if that happens often.", group = GROUP_LAYOUT)
 frameWidth = input.int(defval = 0, title = "Frame Width", minval = 0, maxval = 10, tooltip = "Width of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
 frameColor = input.color(defval = color.new(color = NORD0, transp = 0), title = "", tooltip = "Color of the outer table frame.", inline = "frame", group = GROUP_LAYOUT)
@@ -369,6 +369,9 @@ f_padText(string value, int targetLength, string textAlign) =>
 f_tapeCell(int column, int row, string cellText, float cellHeight, color textColor, string textAlign, color cellBg, textFormatting) =>
     // width = 0 auto-sizes the column to its content; the fixed-length padded text
     // keeps that content-derived width constant across updates and chart resizes.
+    // height works the same way: 0 (the default) auto-sizes the row to its text,
+    // so row height is pinned to the font size instead of the window height —
+    // non-zero heights are a % of the chart window and scale with it.
     // Every cell honors the Font Family input — no per-column font overrides.
     table.cell(table_id = tapeTable, column = column, row = row, text = cellText, width = 0, height = cellHeight, text_color = textColor, text_halign = textAlign, text_size = textSize, text_font_family = fontFamily, text_formatting = textFormatting, bgcolor = cellBg)
 
@@ -452,7 +455,7 @@ f_renderHeader(int row, color headerBg) =>
     f_tapeCell(column = 2, row = row, cellText = f_padText(value = "SIZE", targetLength = sizePadChars, textAlign = headerTextAlign), cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
     f_tapeCell(column = 3, row = row, cellText = f_padText(value = "COND", targetLength = condPadChars, textAlign = headerTextAlign), cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
 
-f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk) =>
+f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk, bool countBlock) =>
     // Inlined f_hasValidQuotes + f_syntheticDirection + f_classifyDirection — one combined hot-path block.
     bool hasValidQuotes = not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
     float previousPrice = tapeState.tapePrice
@@ -463,11 +466,11 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
     // Inlined f_isDuplicateLastRecordedTick.
     bool isDuplicatePrint = tickTime == lastRecordedTick.time and tickDirection == lastRecordedTick.direction and tickPrice == lastRecordedTick.price and tickVolume == lastRecordedTick.volume
 
-    // Block trades qualify on size alone and count BEFORE the duplicate check:
-    // identical back-to-back prints (same ms/price/size — one sweep filling several
-    // resting orders) are real on a busy tape, and each is its own block. Tape-only
-    // filters (minimum size, aggressive-only, section ranges) never gate this.
-    if blockTradesActive and tickVolume >= blockSizeThreshold
+    // Incremental block counting covers ONLY the degraded no-tick-data fallback
+    // (countBlock = true). With real 1T data the BLOCK TRADES section recounts
+    // the whole bar from its own tick array on every execution — idempotent —
+    // so counting those prints here as well would double them.
+    if blockTradesActive and countBlock and tickVolume >= blockSizeThreshold
         f_recordBlockTradeState(state = blockState, direction = tickDirection)
 
     if not isDuplicatePrint
@@ -501,6 +504,7 @@ if barstate.isnew
     tableLayoutInitialized := false
 
 // 📰 LOWER-TF TICKS
+bool lowerTfTicksChangedThisExec = false
 if tapeEnabled or blockTradesActive
     int availableTickCount = tickPrices.size()
     float currentTailPrice = availableTickCount > 0 ? tickPrices.get(index = availableTickCount - 1) : na
@@ -508,23 +512,85 @@ if tapeEnabled or blockTradesActive
     int currentTailTime = availableTickCount > 0 ? tickTimes.get(index = availableTickCount - 1) : na
     bool tailTickChanged = availableTickCount > 0 and f_hasTailChanged(state = tailTracker, tailPrice = currentTailPrice, tailVolume = currentTailVolume, tailTime = currentTailTime)
     bool newTicksThisExec = availableTickCount > tapeState.processedTickCount or tailTickChanged
+    lowerTfTicksChangedThisExec := newTicksThisExec
 
     if newTicksThisExec
-        int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
-        // Process all new lower-TF prints so block markers and section routing stay stable on the live bar.
-        for tickIndex = processStartIndex to availableTickCount - 1
-            float currentTickPrice = tickPrices.get(index = tickIndex)
-            float currentTickVolume = tickVolumes.get(index = tickIndex)
-            int currentTickTime = tickTimes.get(index = tickIndex)
-            float currentTickBid = tickBids.get(index = tickIndex)
-            float currentTickAsk = tickAsks.get(index = tickIndex)
+        // The per-tick pipeline below feeds ONLY the tape table (block counting
+        // lives in the idempotent per-bar rescan), so it is skipped wholesale in
+        // Block Trades Only mode — the bookkeeping after it still runs.
+        if tapeEnabled
+            int processStartIndex = availableTickCount > tapeState.processedTickCount ? tapeState.processedTickCount : math.max(availableTickCount - 1, 0)
 
-            bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
+            // ⏩ HISTORICAL FAST-FORWARD — output-identical seeding shortcut.
+            // On a historical bar the whole array is new, and only the LAST
+            // rowsActive prints per section can survive into the table — every
+            // earlier print would be stored and then popped by the bar's own
+            // later prints. Scan BACKWARD counting section-eligible candidates
+            // (mirroring the store filters exactly) until both sections hold 2×
+            // their row cap (margin absorbs duplicate suppression), then process
+            // forward from that index only. The synthetic-direction chain stays
+            // exact because tapePrice is seeded with the tick right before the
+            // jump-in point. Worst case (sparse matches) the scan reaches index
+            // 0 and processing is identical to the full pass. Realtime bars keep
+            // the incremental path untouched.
+            if barstate.ishistory and processStartIndex == 0 and availableTickCount > 0
+                int instCandidatesNeeded = instRowsActive > 0 ? instRowsActive * 2 : 0
+                int retailCandidatesNeeded = retailRowsActive > 0 ? retailRowsActive * 2 : 0
+                int instCandidatesFound = 0
+                int retailCandidatesFound = 0
+                int fastForwardIndex = 0
+                for backIndex = availableTickCount - 1 to 0
+                    if instCandidatesFound >= instCandidatesNeeded and retailCandidatesFound >= retailCandidatesNeeded
+                        fastForwardIndex := backIndex + 1
+                        break
+                    float backVolume = tickVolumes.get(index = backIndex)
+                    float backPrice = tickPrices.get(index = backIndex)
+                    int backTime = tickTimes.get(index = backIndex)
+                    bool backComplete = not na(backPrice) and not na(backVolume) and not na(backTime) and backPrice > 0 and backVolume > 0 and backTime > 0
+                    if backComplete and backVolume >= minimumSize
+                        bool backEligible = true
+                        if showAggressiveOnly
+                            // Mirrors the store path: aggressive is any directional
+                            // print NOT sitting exactly on its own quote.
+                            float backBid = tickBids.get(index = backIndex)
+                            float backAsk = tickAsks.get(index = backIndex)
+                            bool backHasQuotes = not na(backBid) and not na(backAsk) and backBid > 0 and backAsk > 0
+                            int backDirection = backHasQuotes ? (backPrice >= backAsk ? 1 : backPrice <= backBid ? -1 : 0) : 0
+                            if backDirection == 0 and backIndex > 0
+                                float backPreviousPrice = tickPrices.get(index = backIndex - 1)
+                                backDirection := na(backPreviousPrice) ? 0 : backPrice > backPreviousPrice ? 1 : backPrice < backPreviousPrice ? -1 : 0
+                            backEligible := backDirection > 0 ? not (backHasQuotes and backPrice == backAsk) : backDirection < 0 ? not (backHasQuotes and backPrice == backBid) : false
+                        if backEligible
+                            bool backInInstitutional = showInstitutional and backVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or backVolume <= institutionalMaxSize)
+                            if backInInstitutional
+                                instCandidatesFound += 1
+                            else if showRetail and backVolume >= retailMinSize and (retailMaxSize <= 0 or backVolume <= retailMaxSize)
+                                retailCandidatesFound += 1
+                if fastForwardIndex > 0
+                    float fastForwardSeedPrice = tickPrices.get(index = fastForwardIndex - 1)
+                    if not na(fastForwardSeedPrice) and fastForwardSeedPrice > 0
+                        tapeState.tapePrice := fastForwardSeedPrice
+                    processStartIndex := fastForwardIndex
 
-            // Minimum-size filtering happens inside f_processAndStoreTick so it only
-            // affects the tape display, never the block-trade count.
-            if isCompleteRecord
-                f_processAndStoreTick(tickPrice = currentTickPrice, tickVolume = currentTickVolume, tickTime = currentTickTime, tickBid = currentTickBid, tickAsk = currentTickAsk)
+            // Process the remaining lower-TF prints so section routing stays stable
+            // on the live bar. The bound guard matters: a fast-forward past the
+            // whole array (both sections already satisfied) must skip the loop —
+            // Pine iterates DESCENDING when start > end, which would read out of
+            // bounds here.
+            if processStartIndex <= availableTickCount - 1
+                for tickIndex = processStartIndex to availableTickCount - 1
+                    float currentTickPrice = tickPrices.get(index = tickIndex)
+                    float currentTickVolume = tickVolumes.get(index = tickIndex)
+                    int currentTickTime = tickTimes.get(index = tickIndex)
+                    float currentTickBid = tickBids.get(index = tickIndex)
+                    float currentTickAsk = tickAsks.get(index = tickIndex)
+
+                    bool isCompleteRecord = not na(currentTickPrice) and not na(currentTickVolume) and not na(currentTickTime) and currentTickPrice > 0 and currentTickVolume > 0 and currentTickTime > 0
+
+                    // Minimum-size filtering happens inside f_processAndStoreTick so it only
+                    // affects the tape display, never the block-trade count.
+                    if isCompleteRecord
+                        f_processAndStoreTick(tickPrice = currentTickPrice, tickVolume = currentTickVolume, tickTime = currentTickTime, tickBid = currentTickBid, tickAsk = currentTickAsk, countBlock = false)
 
         // Update the last processed tick count to prevent reprocessing
         tapeState.processedTickCount := availableTickCount
@@ -540,7 +606,7 @@ if tapeEnabled or blockTradesActive
         float realtimeVolumeDelta = math.max(volume - nz(source = realtimeBarState.volume), 0)
         bool realtimePrintReady = realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
         if realtimePrintReady and noFreshLowerTfUpdate
-            f_processAndStoreTick(tickPrice = close, tickVolume = realtimeVolumeDelta, tickTime = timenow, tickBid = bid, tickAsk = ask)
+            f_processAndStoreTick(tickPrice = close, tickVolume = realtimeVolumeDelta, tickTime = timenow, tickBid = bid, tickAsk = ask, countBlock = true)
         f_updateRealtimeBarState(state = realtimeBarState, barVolume = volume, barPrice = close, barUpdateTime = timenow)
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -550,6 +616,44 @@ if tapeEnabled or blockTradesActive
 // (at/above ask = buy-side, at/below bid = sell-side). Into-the-close prints are
 // faded because they are mostly position-squaring, not directional.
 // ═════════════════════════════════════════════════════════════════════════════
+// PER-BAR RECOUNT — the count is a pure function of the CURRENT bar's tick
+// array, recomputed from scratch whenever that array changes. Nothing is carried between
+// executions or bars, so no reprocessing, tail revision, feed lag, or reload
+// quirk can ever double-count a print or sum counts across bars: from the bar's
+// open to its close the value is exactly the number of prints >= the threshold
+// seen so far in THIS bar. The varip blockState only carries the degraded
+// no-tick-data fallback counts (skipped here: the array is empty and
+// lowerTfDataSeen never latches on those symbols, so this overwrite is inert).
+// First tick of the bar with no quotes reads neutral (no previous in-bar price).
+// Gated on the change flag: an execution where the tick array didn't change
+// (quote/timer updates) would recount to the exact same numbers — the varip
+// state already holds them, so the scan is skipped.
+if blockTradesActive and lowerTfTicksChangedThisExec and (lowerTfDataSeen or tickPrices.size() > 0)
+    int rescanCount = 0
+    int rescanBuyCount = 0
+    int rescanSellCount = 0
+    int rescanTickCount = tickPrices.size()
+    if rescanTickCount > 0
+        for rescanIndex = 0 to rescanTickCount - 1
+            float rescanVolume = tickVolumes.get(index = rescanIndex)
+            if not na(rescanVolume) and rescanVolume >= blockSizeThreshold
+                float rescanPrice = tickPrices.get(index = rescanIndex)
+                float rescanBid = tickBids.get(index = rescanIndex)
+                float rescanAsk = tickAsks.get(index = rescanIndex)
+                bool rescanHasQuotes = not na(rescanBid) and not na(rescanAsk) and rescanBid > 0 and rescanAsk > 0
+                int rescanDirection = rescanHasQuotes ? (rescanPrice >= rescanAsk ? 1 : rescanPrice <= rescanBid ? -1 : 0) : 0
+                if rescanDirection == 0 and rescanIndex > 0
+                    float rescanPreviousPrice = tickPrices.get(index = rescanIndex - 1)
+                    rescanDirection := na(rescanPreviousPrice) ? 0 : rescanPrice > rescanPreviousPrice ? 1 : rescanPrice < rescanPreviousPrice ? -1 : 0
+                rescanCount += 1
+                if rescanDirection > 0
+                    rescanBuyCount += 1
+                else if rescanDirection < 0
+                    rescanSellCount += 1
+    blockState.count := rescanCount
+    blockState.buyCount := rescanBuyCount
+    blockState.sellCount := rescanSellCount
+
 bool showBlockTradeGlyph = blockTradesActive and blockState.count > 0
 bool inCloseFadeWindow = fadeIntoClose and not na(time(timeframe = timeframe.period, session = closeFadeSession, timezone = "America/New_York"))
 int blockTradeTransparency = inCloseFadeWindow ? math.max(f_blockTradeTransparency(blockCount = blockState.count), 80) : f_blockTradeTransparency(blockCount = blockState.count)
