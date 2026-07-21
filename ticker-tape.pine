@@ -73,6 +73,7 @@ type TickData
     int   time      // Timestamp (milliseconds)
     int   direction // 1 = buy/up, -1 = sell/down, 0 = neutral/unknown
     int   condition // COND_* code (replaces bid/ask — classification baked in at store time)
+    bool  iceberg = false // 🧊 same-size-repeat tag, baked in at store time (institutional prints only)
 
 type BlockTradeState
     int count = 0
@@ -114,21 +115,21 @@ timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = 
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all). Tape display only — it never filters block-trade counting.", group = GROUP_GENERAL)
 intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Kept LOW on purpose — block markers don't need deep tick history: each marker is minted ONCE as a chart label when its bar closes and stays alive for the whole session without ever being recalculated from tick data. This window only limits how far back the tape rows and markers can be re-seeded after a script reload (settings change, chart refresh, reconnect) — Pine drawings don't survive reloads, and TradingView caps served intrabar history anyway. Raise it if you want a deeper marker backfill on fresh loads.", group = GROUP_GENERAL)
-largeOrderSize = input.int(defval = 50000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
+largeOrderSize = input.int(defval = 10000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBold = input.bool(defval = true, title = "Bold", tooltip = "Render highlighted large orders in bold.", inline = "large", group = GROUP_GENERAL)
-backgroundColor = input.color(defval = NORD0, title = "Table Background", tooltip = "Background color for the tape table.", group = GROUP_GENERAL)
+backgroundColor = input.color(defval = color.new(color = NORD0, transp = 100), title = "Table Background", tooltip = "Background color for the tape table. Default is fully transparent — raise the opacity for a solid panel.", group = GROUP_GENERAL)
 defaultTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Default Text", tooltip = "Default text color for neutral table cells.", group = GROUP_GENERAL)
 askTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Ask Text", tooltip = "Text color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
 askBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 90), title = "Ask BG", tooltip = "Background color for trades printed at the ask.", inline = "ask", group = GROUP_GENERAL)
 aboveAskTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Above Ask Text", tooltip = "Text color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
-aboveAskBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
+aboveAskBackgroundColor = input.color(defval = color.new(color = NORD8, transp = 80), title = "Above Ask BG", tooltip = "Background color for aggressive buy-side prints.", inline = "above_ask", group = GROUP_GENERAL)
 aboveAskBold = input.bool(defval = true, title = "Bold", tooltip = "Render aggressive buy-side prints in bold.", inline = "above_ask", group = GROUP_GENERAL)
 bidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Bid Text", tooltip = "Text color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
 bidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Bid BG", tooltip = "Background color for trades printed at the bid.", inline = "bid", group = GROUP_GENERAL)
 belowBidTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Below Bid Text", tooltip = "Text color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
-belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
+belowBidBackgroundColor = input.color(defval = color.new(color = NORD11, transp = 80), title = "Below Bid BG", tooltip = "Background color for aggressive sell-side prints.", inline = "below_bid", group = GROUP_GENERAL)
 belowBidBold = input.bool(defval = true, title = "Bold", tooltip = "Render aggressive sell-side prints in bold.", inline = "below_bid", group = GROUP_GENERAL)
 
 const string GROUP_TABLE = "📋 Table"
@@ -179,13 +180,49 @@ const string GROUP_BLOCK = "🐋 Block Trades"
 // and adjust it day to day (lower on slow days, higher on busy days). His corpus gives
 // futures numbers only (NQ/ES: 20+ contracts); for QQQ day trading 1,000+ shares is a
 // reasonable "above amateur size" floor since retail prints are typically <=100 shares.
-blockSizeThreshold = input.int(defval = 10000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade. Set just above amateur size for the instrument and adjust day to day (default 10,000 shares, tuned for QQQ).", group = GROUP_BLOCK)
+blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade. Set just above amateur size for the instrument and adjust day to day (default 1,000 shares, tuned for QQQ).", group = GROUP_BLOCK)
 directionalBlockColors = input.bool(defval = true, title = "Directional Marker Colors", tooltip = "Color the marker by which side the block prints hit: buy-side (at/above the ask) vs sell-side (at/below the bid). When the bar's buy and sell blocks tie, the neutral color is used.", group = GROUP_BLOCK)
 blockTradeColor = input.color(defval = NORD4, title = "Neutral", tooltip = "Marker color when directional coloring is off or the bar's buy/sell blocks tie.", inline = "block_colors", group = GROUP_BLOCK)
 blockBuyColor = input.color(defval = NORD8, title = "Buy", tooltip = "Marker color when the bar's block prints skew to the buy side (at/above the ask).", inline = "block_colors", group = GROUP_BLOCK)
 blockSellColor = input.color(defval = NORD11, title = "Sell", tooltip = "Marker color when the bar's block prints skew to the sell side (at/below the bid).", inline = "block_colors", group = GROUP_BLOCK)
 fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so markers inside the window below are rendered faded.", inline = "close_fade", group = GROUP_BLOCK)
 closeFadeSession = input.session(defval = "1530-1600", title = "", tooltip = "Session window (America/New_York) treated as into-the-close.", inline = "close_fade", group = GROUP_BLOCK)
+
+const string GROUP_PROFLOW = "📡 Pro Flow"
+
+// Pro Flow Settings
+// Barry's recency + preponderance read: pro prints only count if they happened
+// "within the last 10-12 minutes or so", and the signal is which side has MORE,
+// never any single print.
+showProFlow = input.bool(defval = true, title = "Show Pro Flow Readout", tooltip = "Adds a summary row right below the INSTITUTIONAL / PRO section label with the rolling buy vs sell count of institutional prints inside the window (▲ = buy-side, ▼ = sell-side; neutral prints don't count). Reads the institutional section's stream, so Show Institutional must be on for prints to route into it.", group = GROUP_PROFLOW)
+proFlowWindowMinutes = input.int(defval = 12, title = "Window (minutes)", minval = 1, maxval = 120, step = 1, tooltip = "Rolling window for the readout. Barry's recency rule: pro prints older than ~10-12 minutes don't count.", group = GROUP_PROFLOW)
+proFlowHeaderBg = input.color(defval = color.new(color = NORD3, transp = 80), title = "Readout BG", tooltip = "Background color for the pro-flow readout row.", group = GROUP_PROFLOW)
+
+const string GROUP_ICEBERG = "🧊 Iceberg Detection"
+
+// Iceberg Settings
+// Web canon, not Barry's — his corpus explicitly declines to chase hidden size.
+// Henry runs it ON by default (2026-07-21).
+showIceberg = input.bool(defval = true, title = "Show Iceberg Tags", tooltip = "Tags an institutional print when the SAME exact size has printed at least Min Repeats times inside the window — the classic footprint of one participant slicing a parent order into equal chunks. Detection runs at store time on institutional prints only. The tag highlight overrides the large-order highlight when both apply.", group = GROUP_ICEBERG)
+icebergMinRepeats = input.int(defval = 3, title = "Min Repeats", minval = 2, step = 1, tooltip = "How many same-size institutional prints inside the window (the current one included) it takes to tag.", inline = "iceberg_rule", group = GROUP_ICEBERG)
+icebergWindowMinutes = input.int(defval = 5, title = "Window (min)", minval = 1, maxval = 60, step = 1, tooltip = "Lookback for counting same-size repeats. Icebergs slice on a cadence of seconds to a couple of minutes, so this stays tighter than the pro-flow window.", inline = "iceberg_rule", group = GROUP_ICEBERG)
+icebergTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Iceberg Text", tooltip = "Text color for tagged iceberg prints.", inline = "iceberg_style", group = GROUP_ICEBERG)
+icebergBackgroundColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Iceberg BG", tooltip = "Background color for tagged iceberg prints.", inline = "iceberg_style", group = GROUP_ICEBERG)
+icebergBold = input.bool(defval = true, title = "Bold", tooltip = "Render tagged iceberg prints in bold.", inline = "iceberg_style", group = GROUP_ICEBERG)
+
+const string GROUP_ALERTS = "🔔 Alerts"
+
+// Alert Settings
+// All of these fire through alert() — create ONE chart alert on this indicator
+// with condition "Any alert() function call" and they all route through it.
+// Every alert is realtime-only and real-1T-data-only: the degraded no-tick-data
+// fallback aggregates volume deltas and must never masquerade as a print.
+alertBlockPrints = input.bool(defval = false, title = "Block Prints", tooltip = "Fires when a new block-size print (>= Block Size Threshold) lands in the current bar, with side, size, price, and the bar's running block count.", group = GROUP_ALERTS)
+alertInstitutionalPrints = input.bool(defval = false, title = "Institutional Prints", tooltip = "Fires when a print lands in the institutional tape section. Same size filters and aggressive-only setting as the table — what pings is exactly what appears.", group = GROUP_ALERTS)
+alertWhaleCluster = input.bool(defval = false, title = "Whale Cluster", tooltip = "Barry: 'One whale? Not so much. Two whales, three whales... off to the races.' Fires ONCE when the count of block-printing bars inside the rolling bar window first reaches the minimum; re-arms after the window drops back below it.", group = GROUP_ALERTS)
+whaleClusterMinBars = input.int(defval = 3, title = "Cluster: Block Bars", minval = 2, step = 1, tooltip = "How many bars with block prints inside the window make a cluster. Must be <= the window or it can never fire.", inline = "cluster", group = GROUP_ALERTS)
+whaleClusterWindowBars = input.int(defval = 5, title = "of Last N Bars", minval = 2, maxval = 50, step = 1, tooltip = "Rolling bar window for the cluster count (forming bar included).", inline = "cluster", group = GROUP_ALERTS)
+alertIceberg = input.bool(defval = false, title = "Iceberg Prints", tooltip = "Fires when an institutional print gets the iceberg tag. Requires Show Iceberg Tags.", group = GROUP_ALERTS)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧮 DATA & CALCULATIONS
@@ -196,7 +233,12 @@ bool blockTradesActive = featureMode != FeatureMode.TAPE_ONLY
 int retailRowsActive = tapeEnabled and showRetail ? retailRows : 0
 int instRowsActive = tapeEnabled and showInstitutional ? institutionalRows : 0
 bool showGap = tapeEnabled and showInstitutional and showRetail
-int totalRows = tapeEnabled ? math.max(1, (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0)) : 1
+int totalRows = tapeEnabled ? math.max(1, (showProFlow ? 1 : 0) + (showRetail ? (2 + retailRowsActive) : 0) + (showGap ? 1 : 0) + (showInstitutional ? (2 + instRowsActive) : 0)) : 1
+
+// 📡 One shared rolling store of institutional prints serves both the pro-flow
+// readout and iceberg detection; retention = the widest enabled window.
+int flowRetentionMs = 60000 * math.max(showProFlow ? proFlowWindowMinutes : 0, showIceberg ? icebergWindowMinutes : 0)
+bool flowTrackingActive = tapeEnabled and flowRetentionMs > 0
 
 // DATA FETCHING
 // Request tick-level data from lower timeframe (1T = 1 tick)
@@ -239,12 +281,24 @@ if tapeEnabled or blockTradesActive
 varip array<TickData> institutionalTicks = array.new<TickData>()
 varip array<TickData> retailTicks = array.new<TickData>()
 
+// 📡 Rolling institutional-print store (chronological, parallel arrays; pruned
+// to flowRetentionMs). Feeds the pro-flow readout and iceberg detection.
+varip array<int> proFlowTimes = array.new<int>()
+varip array<int> proFlowDirs = array.new<int>()
+varip array<float> proFlowSizes = array.new<float>()
+
 varip TapeProcessingState tapeState = TapeProcessingState.new()
 varip LastRecordedTick lastRecordedTick = LastRecordedTick.new()
 varip TailTracker tailTracker = TailTracker.new()
 varip RealtimeBarState realtimeBarState = RealtimeBarState.new()
 varip BlockTradeState blockState = BlockTradeState.new()
 var bool tableLayoutInitialized = false
+
+// 🔔 Alert state. The block watermark tracks the last count already announced —
+// historical executions sync it silently, so a reload never replays pings for
+// prints that were already on the tape. The cluster latch fires once per cluster.
+varip int alertedBlockCount = 0
+varip bool clusterAlertLatched = false
 
 // PRECOMPUTED VALUES & HELPERS
 // Build price format string
@@ -329,11 +383,23 @@ f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
     if ticks.size() > maxRows
         ticks.pop()
 
+f_pruneFlow(array<int> flowTimes, array<int> flowDirs, array<float> flowSizes, int cutoffTime) =>
+    // The store is chronological, so pruning is pop-from-the-front until in-window.
+    while flowTimes.size() > 0 and flowTimes.get(index = 0) < cutoffTime
+        flowTimes.shift()
+        flowDirs.shift()
+        flowSizes.shift()
+
+f_conditionText(int tickCondition) =>
+    tickCondition == COND_AT_ASK ? "at ask" : tickCondition == COND_ABOVE_ASK ? "above ask" : tickCondition == COND_ABOVE_PRICE ? "above price" : tickCondition == COND_AT_BID ? "at bid" : tickCondition == COND_BELOW_BID ? "below bid" : tickCondition == COND_BELOW_PRICE ? "below price" : "mid"
+
 f_storeTick(float tickPrice, float tickVolume, int tickTime, int tickDirection, int tickCondition) =>
     // Inlined f_inRange — saves two function frames per stored tick.
     bool inInstitutionalRange = showInstitutional and tickVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or tickVolume <= institutionalMaxSize)
     bool inRetailRange = showRetail and not inInstitutionalRange and tickVolume >= retailMinSize and (retailMaxSize <= 0 or tickVolume <= retailMaxSize)
     bool passesSectionFilter = inInstitutionalRange or inRetailRange
+    bool storedInstitutional = false
+    int icebergRepeats = 0
     if passesSectionFilter
         TickData newTick = TickData.new(
             price = tickPrice,
@@ -343,10 +409,25 @@ f_storeTick(float tickPrice, float tickVolume, int tickTime, int tickDirection, 
             condition = tickCondition
         )
         if inInstitutionalRange and instRowsActive > 0
+            // 📡 Record into the rolling flow store. Prune by TICK time, not wall
+            // time, so backfill seeding detects across the whole fetched history.
+            if flowTrackingActive
+                f_pruneFlow(flowTimes = proFlowTimes, flowDirs = proFlowDirs, flowSizes = proFlowSizes, cutoffTime = tickTime - flowRetentionMs)
+                proFlowTimes.push(value = tickTime)
+                proFlowDirs.push(value = tickDirection)
+                proFlowSizes.push(value = tickVolume)
+                if showIceberg
+                    int icebergCutoff = tickTime - icebergWindowMinutes * 60000
+                    for flowIndex = 0 to proFlowSizes.size() - 1
+                        if proFlowTimes.get(index = flowIndex) >= icebergCutoff and proFlowSizes.get(index = flowIndex) == tickVolume
+                            icebergRepeats += 1
+                    if icebergRepeats >= icebergMinRepeats
+                        newTick.iceberg := true
             f_insertSortedTick(ticks = institutionalTicks, newTick = newTick, maxRows = instRowsActive)
+            storedInstitutional := true
         else if inRetailRange and retailRowsActive > 0
             f_insertSortedTick(ticks = retailTicks, newTick = newTick, maxRows = retailRowsActive)
-    passesSectionFilter
+    [passesSectionFilter, storedInstitutional, icebergRepeats]
 
 f_blockTradeTransparency(int blockCount) =>
     int opacityPercent = math.min(blockCount * 20, 100)
@@ -376,34 +457,22 @@ f_tapeCell(int column, int row, string cellText, float cellHeight, color textCol
     table.cell(table_id = tapeTable, column = column, row = row, text = cellText, width = 0, height = cellHeight, text_color = textColor, text_halign = textAlign, text_size = textSize, text_font_family = fontFamily, text_formatting = textFormatting, bgcolor = cellBg)
 
 f_renderTickRow(int tableRow, TickData currentTick) =>
-    string conditionText = "mid"
+    int tickCondition = currentTick.condition
+    string conditionText = f_conditionText(tickCondition = tickCondition)
     color tickTextColor = defaultTextColor
     color tickBgColor = backgroundColor
     bool useBold = false
-    int tickCondition = currentTick.condition
 
     if tickCondition == COND_AT_ASK
-        conditionText := "at ask"
         tickTextColor := askTextColor
         tickBgColor := askBackgroundColor
-    else if tickCondition == COND_ABOVE_ASK
-        conditionText := "above ask"
-        tickTextColor := aboveAskTextColor
-        tickBgColor := aboveAskBackgroundColor
-    else if tickCondition == COND_ABOVE_PRICE
-        conditionText := "above price"
+    else if tickCondition == COND_ABOVE_ASK or tickCondition == COND_ABOVE_PRICE
         tickTextColor := aboveAskTextColor
         tickBgColor := aboveAskBackgroundColor
     else if tickCondition == COND_AT_BID
-        conditionText := "at bid"
         tickTextColor := bidTextColor
         tickBgColor := bidBackgroundColor
-    else if tickCondition == COND_BELOW_BID
-        conditionText := "below bid"
-        tickTextColor := belowBidTextColor
-        tickBgColor := belowBidBackgroundColor
-    else if tickCondition == COND_BELOW_PRICE
-        conditionText := "below price"
+    else if tickCondition == COND_BELOW_BID or tickCondition == COND_BELOW_PRICE
         tickTextColor := belowBidTextColor
         tickBgColor := belowBidBackgroundColor
 
@@ -418,6 +487,14 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
         tickTextColor := largeOrderTextColor
         tickBgColor := largeOrderBackgroundColor
         if largeOrderBold
+            useBold := true
+
+    // 🧊 The iceberg tag wins over the large-order highlight — a same-size repeat
+    // is the rarer, more specific tell.
+    if showIceberg and currentTick.iceberg
+        tickTextColor := icebergTextColor
+        tickBgColor := icebergBackgroundColor
+        if icebergBold
             useBold := true
 
     string timeText = f_padText(value = str.format_time(time = currentTick.time, format = timeFormat, timezone = syminfo.timezone), targetLength = timePadChars, textAlign = timeColumnAlign)
@@ -486,9 +563,20 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
             // Aggressive = slippage prints only: above the ask / below the bid, or the no-quote price fallback.
             bool isAggressivePrint = tickCondition == COND_ABOVE_ASK or tickCondition == COND_BELOW_BID or tickCondition == COND_ABOVE_PRICE or tickCondition == COND_BELOW_PRICE
             if not showAggressiveOnly or isAggressivePrint
-                bool storedTick = f_storeTick(tickPrice = tickPrice, tickVolume = tickVolume, tickTime = tickTime, tickDirection = tickDirection, tickCondition = tickCondition)
+                [storedTick, storedInstitutional, icebergRepeats] = f_storeTick(tickPrice = tickPrice, tickVolume = tickVolume, tickTime = tickTime, tickDirection = tickDirection, tickCondition = tickCondition)
                 if storedTick
                     f_updateLastRecordedTick(state = lastRecordedTick, recordedPrice = tickPrice, recordedVolume = tickVolume, recordedTime = tickTime, recordedDirection = tickDirection)
+                // 🔔 Print alerts — realtime only, real 1T data only (the degraded
+                // fallback aggregates volume deltas and must never masquerade as an
+                // institutional print or an iceberg slice in a notification).
+                if barstate.isrealtime and lowerTfDataSeen and storedInstitutional
+                    string alertSide = tickDirection > 0 ? "buy" : tickDirection < 0 ? "sell" : "neutral"
+                    string alertSize = str.tostring(value = tickVolume, format = "#,###")
+                    string alertPrice = str.tostring(value = tickPrice, format = priceFormat)
+                    if alertInstitutionalPrints
+                        alert(message = syminfo.ticker + " institutional print: " + alertSide + " " + alertSize + " @ " + alertPrice + " (" + f_conditionText(tickCondition = tickCondition) + ")", freq = alert.freq_all)
+                    if alertIceberg and icebergRepeats >= icebergMinRepeats
+                        alert(message = syminfo.ticker + " possible iceberg: " + alertSize + " printed " + str.tostring(value = icebergRepeats) + "x in " + str.tostring(value = icebergWindowMinutes) + "m, last @ " + alertPrice, freq = alert.freq_all)
     tapeState.tapePrice := tickPrice
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -628,6 +716,12 @@ if tapeEnabled or blockTradesActive
 // Gated on the change flag: an execution where the tick array didn't change
 // (quote/timer updates) would recount to the exact same numbers — the varip
 // state already holds them, so the scan is skipped.
+// 🔔 Newest qualifying block print seen by this execution's rescan — feeds the
+// block alert message. na when the rescan didn't run (no alert fires then either:
+// the count can only have changed on an execution where it did run).
+float newestBlockVolume = na
+float newestBlockPrice = na
+int newestBlockDirection = 0
 if blockTradesActive and lowerTfTicksChangedThisExec and (lowerTfDataSeen or tickPrices.size() > 0)
     int rescanCount = 0
     int rescanBuyCount = 0
@@ -650,9 +744,45 @@ if blockTradesActive and lowerTfTicksChangedThisExec and (lowerTfDataSeen or tic
                     rescanBuyCount += 1
                 else if rescanDirection < 0
                     rescanSellCount += 1
+                newestBlockVolume := rescanVolume
+                newestBlockPrice := rescanPrice
+                newestBlockDirection := rescanDirection
     blockState.count := rescanCount
     blockState.buyCount := rescanBuyCount
     blockState.sellCount := rescanSellCount
+
+// 🔔 BLOCK ALERT — watermark compare against the idempotent per-bar count.
+// Historical executions (initial load included) sync the watermark silently, so
+// a reload never replays pings for prints already on the tape; realtime
+// increments fire, and the new bar's reset re-syncs downward. Real 1T data only —
+// the fallback's aggregated deltas can fabricate blocks, so they never alert.
+if blockTradesActive
+    if not barstate.isrealtime
+        alertedBlockCount := blockState.count
+    else
+        if blockState.count > alertedBlockCount and alertBlockPrints and lowerTfDataSeen
+            string blockAlertSide = newestBlockDirection > 0 ? "buy-side" : newestBlockDirection < 0 ? "sell-side" : "neutral"
+            string blockAlertDetail = na(newestBlockVolume) ? "" : ": " + str.tostring(value = newestBlockVolume, format = "#,###") + " @ " + str.tostring(value = newestBlockPrice, format = priceFormat)
+            alert(message = syminfo.ticker + " block print (" + blockAlertSide + ")" + blockAlertDetail + " — " + str.tostring(value = blockState.count) + " block(s) this bar", freq = alert.freq_all)
+        alertedBlockCount := blockState.count
+
+// 🔔 WHALE CLUSTER (Barry: "Two whales, three whales... off to the races") —
+// count bars with at least one block print inside the rolling window, forming
+// bar included. The latch fires once per cluster and re-arms only after the
+// window drops back below the minimum; historical executions prime it so a
+// reload never re-announces a cluster that was already in force.
+bool barHasBlocks = blockTradesActive and blockState.count > 0
+int clusterBlockBars = math.round(number = nz(source = math.sum(source = barHasBlocks ? 1.0 : 0.0, length = whaleClusterWindowBars)))
+bool whaleClusterActive = blockTradesActive and clusterBlockBars >= whaleClusterMinBars
+if not barstate.isrealtime
+    clusterAlertLatched := whaleClusterActive
+else
+    if whaleClusterActive and not clusterAlertLatched
+        if alertWhaleCluster and lowerTfDataSeen
+            alert(message = syminfo.ticker + " whale cluster: " + str.tostring(value = clusterBlockBars) + " of the last " + str.tostring(value = whaleClusterWindowBars) + " bars printed block trades", freq = alert.freq_once_per_bar)
+        clusterAlertLatched := true
+    else if not whaleClusterActive
+        clusterAlertLatched := false
 
 bool showBlockTradeGlyph = blockTradesActive and blockState.count > 0
 bool inCloseFadeWindow = fadeIntoClose and not na(time(timeframe = timeframe.period, session = closeFadeSession, timezone = "America/New_York"))
@@ -675,7 +805,7 @@ if showBlockTradeGlyph and barstate.isconfirmed
 // marker intensity). Not drawn in the pane — it lives in the Data Window panel,
 // the status line, and the crosshair/long-press popup, which all list plots by
 // their display flags. This is the only numeric output, so the popup stays clean.
-plot(series = blockTradesActive ? blockState.count : 0, title = "Block Trades In Bar", display = display.data_window + display.status_line)
+plot(series = blockTradesActive ? blockState.count : 0, title = "Block Trades In Bar", precision = 0, display = display.data_window + display.status_line)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚡ PERFORMANCE
@@ -687,6 +817,7 @@ if barstate.islast and tapeEnabled
     int instTickCount = array.size(id = institutionalTicks)
     int retailTickCount = array.size(id = retailTicks)
     int cursorRow = 0
+    int proFlowRow = na
     int instLabelRow = na
     int instHeaderRow = na
     int instStartRow = na
@@ -698,6 +829,14 @@ if barstate.islast and tapeEnabled
     if showInstitutional
         instLabelRow := cursorRow
         cursorRow += 1
+
+    // Pro-flow readout sits right below the INSTITUTIONAL / PRO section label
+    // (top of the table when that section is hidden).
+    if showProFlow
+        proFlowRow := cursorRow
+        cursorRow += 1
+
+    if showInstitutional
         instHeaderRow := cursorRow
         cursorRow += 1
         instStartRow := cursorRow
@@ -716,6 +855,8 @@ if barstate.islast and tapeEnabled
         cursorRow += retailRowsActive
 
     if not tableLayoutInitialized
+        if showProFlow
+            table.merge_cells(table_id = tapeTable, start_column = 0, start_row = proFlowRow, end_column = 3, end_row = proFlowRow)
         if showInstitutional
             table.merge_cells(table_id = tapeTable, start_column = 0, start_row = instLabelRow, end_column = 3, end_row = instLabelRow)
         if showGap
@@ -724,12 +865,34 @@ if barstate.islast and tapeEnabled
             table.merge_cells(table_id = tapeTable, start_column = 0, start_row = retailLabelRow, end_column = 3, end_row = retailLabelRow)
         tableLayoutInitialized := true
 
+    if showProFlow
+        // 📡 Prune by WALL time here (the readout must decay even when no new
+        // prints arrive), then count the window by side. Neutral prints don't count.
+        if flowTrackingActive
+            f_pruneFlow(flowTimes = proFlowTimes, flowDirs = proFlowDirs, flowSizes = proFlowSizes, cutoffTime = timenow - flowRetentionMs)
+        int flowBuyCount = 0
+        int flowSellCount = 0
+        int flowCutoff = timenow - proFlowWindowMinutes * 60000
+        int flowStoredCount = proFlowTimes.size()
+        if flowStoredCount > 0
+            for flowIndex = 0 to flowStoredCount - 1
+                if proFlowTimes.get(index = flowIndex) >= flowCutoff
+                    int flowDirection = proFlowDirs.get(index = flowIndex)
+                    if flowDirection > 0
+                        flowBuyCount += 1
+                    else if flowDirection < 0
+                        flowSellCount += 1
+        string proFlowText = "PRO FLOW " + str.tostring(value = proFlowWindowMinutes) + "m" + PAD_NBSP + PAD_NBSP + "▲ " + str.tostring(value = flowBuyCount) + PAD_NBSP + "/" + PAD_NBSP + "▼ " + str.tostring(value = flowSellCount)
+        f_tapeCell(column = 0, row = proFlowRow, cellText = proFlowText, cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = proFlowHeaderBg, textFormatting = text.format_none)
+
     if showInstitutional
         f_tapeCell(column = 0, row = instLabelRow, cellText = "INSTITUTIONAL / PRO", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = institutionalHeaderBg, textFormatting = text.format_none)
         f_renderHeader(row = instHeaderRow, headerBg = backgroundColor)
 
     if showGap
-        f_tapeCell(column = 0, row = gapRow, cellText = "", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = backgroundColor, textFormatting = text.format_none)
+        // NBSP, not "" — an empty cell auto-sizes to ZERO height and the divider
+        // collapses, gluing the institutional rows to the retail section label.
+        f_tapeCell(column = 0, row = gapRow, cellText = PAD_NBSP, cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = backgroundColor, textFormatting = text.format_none)
 
     if showRetail
         f_tapeCell(column = 0, row = retailLabelRow, cellText = "RETAIL / AMATEUR", cellHeight = dataRowHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = retailHeaderBg, textFormatting = text.format_none)
