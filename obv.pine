@@ -66,7 +66,9 @@ if barstate.islast and cumulativeVolume == 0
 // accumulation tell (Technique 1). The MA slope drives the line color the same
 // way the MACD signal line is colored in macd-waves — the up and down shades are
 // the same blue family, so the line reads as one color while still showing its
-// lean. EMA turns faster for intraday; Barry's stated preference is the 20 SMA.
+// lean. Barry's setting is the 20 SMA and he warns against faster MAs here
+// ("real fast ones ... go above and below it a lot") — the SMA's lag is the
+// accepted price of accuracy, so the EMA option is a deviation, not his tweak.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_SIGNAL = "〰️ Signal MA"
 const string TT_SIGNAL_BB = "Only applies when 'SMA + Bollinger Bands' is selected. Sets the band distance from the MA in standard deviations."
@@ -85,8 +87,8 @@ signalMaLength = input.int(defval = 20, title = "Length", minval = 1,
 signalBbMult = input.float(defval = 2.0, title = "BB StdDev", minval = 0.001, maxval = 50, step = 0.5,
      tooltip = TT_SIGNAL_BB, group = GROUP_SIGNAL, display = display.none)
 
-var bool signalEnabled = signalMaType != "None"
-var bool signalIsBB = signalMaType == "SMA + Bollinger Bands"
+bool signalEnabled = signalMaType != "None"
+bool signalIsBB = signalMaType == "SMA + Bollinger Bands"
 
 // Helper function to compute the selected MA type over a source series.
 f_signalMa(float maSource, int maLength, simple string maType) =>
@@ -117,12 +119,12 @@ color signalColor = signalRising ? SIGNAL_UP_COLOR : SIGNAL_DOWN_COLOR
 // ═════════════════════════════════════════════════════════════════════════════
 plot(series = obv, title = "OBV", color = OBV_LINE_COLOR, linewidth = 2)
 plot(series = signalMa, title = "Signal MA", color = signalColor, linewidth = 4,
-     display = signalEnabled ? display.all : display.none, editable = signalEnabled)
+     display = signalEnabled ? display.all : display.none)
 
 // Bollinger Bands — only drawn in 'SMA + Bollinger Bands' mode.
 bbUpperPlot = plot(series = signalIsBB ? signalMa + signalStDev : na, title = "Upper Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none, editable = signalIsBB)
+     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
 bbLowerPlot = plot(series = signalIsBB ? signalMa - signalStDev : na, title = "Lower Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none, editable = signalIsBB)
+     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
 fill(plot1 = bbUpperPlot, plot2 = bbLowerPlot, color = signalIsBB ? color.new(color = NORD8, transp = 92) : na,
-     title = "Bollinger Bands Background Fill", display = signalIsBB ? display.all : display.none, editable = signalIsBB)
+     title = "Bollinger Bands Background Fill", display = signalIsBB ? display.all : display.none)

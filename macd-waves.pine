@@ -61,7 +61,11 @@ f_ma(float maSource, int maLength, simple string maType) =>
 float macd = f_ma(maSource = macdSource, maLength = macdFastLength, maType = macdOscMAType) - f_ma(maSource = macdSource, maLength = macdSlowLength, maType = macdOscMAType)
 float signal = f_ma(maSource = macd, maLength = macdSignalLength, maType = macdSignalMAType)
 
-color signalColor = signal > signal[1] ? TREND_UP_COLOR : TREND_DOWN_COLOR
+// Signal slope drives the color; hold the last direction on flat bars so it
+// doesn't flicker (same treatment as the stochastic %D and the obv signal MA).
+var bool signalRising = true
+signalRising := signal > signal[1] ? true : signal < signal[1] ? false : signalRising
+color signalColor = signalRising ? TREND_UP_COLOR : TREND_DOWN_COLOR
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌊 WAVES
