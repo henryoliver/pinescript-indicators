@@ -31,9 +31,13 @@ const color NORD13 = #EBCB8B
 const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
-// Commitment tiers — the source methodology has three levels beyond noise:
-//   |%| < 0.2 = noise ("not convincing" — treat as neutral)
-//   0.2–0.5  = drift; the color starts to count, conviction doesn't
+// Commitment tiers — the source methodology has three levels beyond noise.
+// Boundary semantics follow the source wording exactly: ".2% OR LESS is not
+// convincing" puts a reading at exactly ±0.2% in the noise tier (color counts
+// therefore use STRICT >), while "once they GET TO .5%" and "a FULL 1%" make
+// the serious and committed cutoffs inclusive:
+//   |%| ≤ 0.2 = noise (".2% or less is not convincing" — treat as neutral)
+//   > 0.2–< 0.5 = drift; the color starts to count, conviction doesn't
 //   ≥ 0.5    = serious ("I take their color more seriously")
 //   ≥ 1.0    = committed ("committed to its bullish/bearish posture")
 const float QW_NOISE_THRESHOLD       = 0.2
@@ -126,9 +130,17 @@ int qwTextSize = input.int(
      group = GROUP_QW_TABLE
  )
 
+bool qwSortRows = input.bool(
+     defval = true,
+     title = "Sort Rows by % Change",
+     tooltip = "Sort each group's rows by net percent change, descending — green at the top, red at the bottom, the way the source methodology sets its quote window ('I always have it sorted by percent net change… it's very important that you do set it this way'). The market-selection read falls straight out of the ordering: on a directional day, trade the leaders at the top (or laggards at the bottom), not the middle. Display-only — the regime verdict and the cash↔futures pair check always run on the fixed symbol order. Sorts on the primary baseline; in 'Both' mode that is vs CLOSE. Off = fixed symbol order (SPY/QQQ/DIA/IWM etc.).",
+     group = GROUP_QW_TABLE
+ )
+
 color qwTableBgColor = input.color(
      defval = color.new(color = NORD0, transp = 20),
      title = "Background",
+     tooltip = "Table background. Default is Polar Night at 20% transparency so the chart stays readable behind the window.",
      group = GROUP_QW_TABLE
  )
 
@@ -145,6 +157,7 @@ color qwTableBorderColor = input.color(
      defval = color.new(color = NORD1, transp = 70),
      title = "Border Color",
      inline = "qw_table_border",
+     tooltip = "Width and color of the inner cell borders. Width 0 removes them.",
      group = GROUP_QW_TABLE
  )
 
@@ -161,6 +174,7 @@ color qwTableFrameColor = input.color(
      defval = color.new(color = NORD2, transp = 50),
      title = "Frame Color",
      inline = "qw_table_frame",
+     tooltip = "Width and color of the outer table frame. Width 0 removes it.",
      group = GROUP_QW_TABLE
  )
 
@@ -195,7 +209,74 @@ bool qwIgnoreCommoditySectors = input.bool(
 bool qwShowRegime = input.bool(
      defval = true,
      title = "Show Regime Verdict",
-     tooltip = "Synthesizes five checks (cash bifurcation, futures bifurcation, sector bifurcation, cash↔futures misalignment, data gap) into a single tradability call: COMMITTED / MILD / LOW CONV / BIFURCATED / DATA GAP.",
+     tooltip = "Synthesizes five checks (cash bifurcation, futures bifurcation, sector bifurcation, cash↔futures misalignment, data gap) into a single tradability call: COMMITTED / MILD / LOW CONV / BIFURCATED / DATA GAP. Standalone banner mode: leave this ON and turn OFF Show Cash/Futures/Sectors — the verdict then renders alone as a borderless colored banner sized by Banner Text Size.",
+     group = GROUP_QW_REGIME
+ )
+
+int qwRegimeBannerTextSize = input.int(
+     defval = 14,
+     title = "Banner Text Size",
+     minval = 0,
+     maxval = 36,
+     tooltip = "Text size of the verdict when it renders as the STANDALONE banner (Show Regime on, all three groups hidden). 0 = follow the table Text Size. The regime row inside the full table always follows the table Text Size.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeTextColor = input.color(
+     defval = NORD0,
+     title = "Text",
+     tooltip = "Verdict text color, used verbatim. Default is dark Polar Night — every default state background below is a light/mid Nord tone, so dark text keeps high contrast across all of them.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeCommittedUpColor = input.color(
+     defval = NORD8,
+     title = "Committed ↑",
+     inline = "qw_regime_committed",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeCommittedDownColor = input.color(
+     defval = NORD11,
+     title = "↓",
+     inline = "qw_regime_committed",
+     tooltip = "Background for the COMMITTED verdict, up / down. All state colors are used VERBATIM — pick transparency in the swatch itself if wanted; conviction strength reads from the detail number, not from opacity.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeMildUpColor = input.color(
+     defval = NORD7,
+     title = "Mild ↑",
+     inline = "qw_regime_mild",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeMildDownColor = input.color(
+     defval = NORD12,
+     title = "↓",
+     inline = "qw_regime_mild",
+     tooltip = "Background for the MILD verdict, up / down. Used verbatim.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeLowConvColor = input.color(
+     defval = NORD4,
+     title = "Low Conviction",
+     tooltip = "Background for LOW CONV. Used verbatim.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeBifurcatedColor = input.color(
+     defval = NORD13,
+     title = "Bifurcated",
+     tooltip = "Background for BIFURCATED. Used verbatim.",
+     group = GROUP_QW_REGIME
+ )
+
+color qwRegimeDataGapColor = input.color(
+     defval = NORD15,
+     title = "Data Gap",
+     tooltip = "Background for DATA GAP. Used verbatim.",
      group = GROUP_QW_REGIME
  )
 
@@ -244,7 +325,7 @@ f_qwPctTextColor(float pctChange) =>
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD8 : NORD11, transp = 0)
         else if math.abs(number = pctChange) >= QW_SERIOUS_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 0)
-        else if math.abs(number = pctChange) >= QW_NOISE_THRESHOLD
+        else if math.abs(number = pctChange) > QW_NOISE_THRESHOLD
             pctTextColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 45)
         else
             pctTextColor := color.new(color = NORD3, transp = 0)
@@ -253,18 +334,19 @@ f_qwPctTextColor(float pctChange) =>
 f_qwFormatPct(float pctChange) =>
     na(pctChange) ? "—" : str.format("{0,number,+0.00;-0.00}%", pctChange)
 
-// Threshold comparisons are inclusive (>= and <=), matching the methodology
-// boundaries: |%| < 0.2 = noise (strict <), >= 0.2 = drift, >= 0.5 = serious,
-// >= 1.0 = committed. A value exactly at a boundary belongs to the higher
-// tier — and display coloring uses the same inclusive cutoffs, so counting
-// and coloring always agree.
-f_qwCountAboveThreshold(array<QwReading> readings, float threshold, bool wantPositive, bool excludeCommodity) =>
+// Boundary semantics per tier (see the constants comment): the NOISE cutoff is
+// inclusive-noise (".2% or less is not convincing" → a color only counts
+// STRICTLY beyond ±0.2), while serious/committed are inclusive ("once they get
+// to .5%", "a full 1%"). Callers pass inclusiveBoundary = false for the noise
+// tier and true for serious/committed. Display coloring uses the same
+// boundaries, so counting and coloring always agree.
+f_qwCountAboveThreshold(array<QwReading> readings, float threshold, bool wantPositive, bool excludeCommodity, bool inclusiveBoundary) =>
     int total = 0
     for reading in readings
         if not (excludeCommodity and reading.isCommodity) and not na(reading.pctChange)
-            if wantPositive and reading.pctChange >= threshold
+            if wantPositive and (inclusiveBoundary ? reading.pctChange >= threshold : reading.pctChange > threshold)
                 total += 1
-            else if not wantPositive and reading.pctChange <= -threshold
+            else if not wantPositive and (inclusiveBoundary ? reading.pctChange <= -threshold : reading.pctChange < -threshold)
                 total += 1
     total
 
@@ -275,6 +357,8 @@ f_qwGroupSize(array<QwReading> readings, bool excludeCommodity) =>
             total += 1
     total
 
+// Bifurcation always runs on COLORS, i.e. the noise tier — comparisons are
+// therefore strict (a reading at exactly ±0.2% is noise, not a color).
 f_qwIsBifurcated(array<QwReading> readings, float threshold, float minorityFraction, bool excludeCommodity) =>
     int greenCount = 0
     int redCount = 0
@@ -282,9 +366,9 @@ f_qwIsBifurcated(array<QwReading> readings, float threshold, float minorityFract
     for reading in readings
         if not (excludeCommodity and reading.isCommodity) and not na(reading.pctChange)
             total += 1
-            if reading.pctChange >= threshold
+            if reading.pctChange > threshold
                 greenCount += 1
-            else if reading.pctChange <= -threshold
+            else if reading.pctChange < -threshold
                 redCount += 1
     greenCount > 0 and redCount > 0 and total > 0 and
          math.min(greenCount, redCount) / float(total) > minorityFraction
@@ -309,6 +393,30 @@ f_qwNetMeanVsClose(array<QwReading> readings) =>
             pctSum += reading.pctChangeVsClose
             total += 1
     total > 0 ? pctSum / total : na
+
+// Display sort — net percent change descending, the source methodology's
+// canonical quote-window ordering (green at the top, red at the bottom).
+// Returns a sorted COPY: verdict math and the index-paired cash↔futures
+// misalignment loop keep reading the fixed-order arrays. Insertion sort
+// because array.sort() has no UDT comparator; groups are 4–11 elements.
+// na readings sink to the bottom so dead feeds don't float between colors.
+f_qwSortedForDisplay(array<QwReading> readings) =>
+    array<QwReading> sorted = array.copy(id = readings)
+    int sortedSize = array.size(id = sorted)
+    if sortedSize > 1
+        for sortIndex = 1 to sortedSize - 1
+            QwReading currentReading = array.get(id = sorted, index = sortIndex)
+            int insertIndex = sortIndex - 1
+            while insertIndex >= 0
+                QwReading comparedReading = array.get(id = sorted, index = insertIndex)
+                bool shouldShift = not na(currentReading.pctChange) and
+                     (na(comparedReading.pctChange) or currentReading.pctChange > comparedReading.pctChange)
+                if not shouldShift
+                    break
+                array.set(id = sorted, index = insertIndex + 1, value = comparedReading)
+                insertIndex -= 1
+            array.set(id = sorted, index = insertIndex + 1, value = currentReading)
+    sorted
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Build readings for each group using fixed-symbol requests so Pine doesn't
@@ -381,16 +489,16 @@ for qwPairIndex = 0 to math.min(array.size(id = qwCashReadings), array.size(id =
     QwReading qwPairCash    = array.get(id = qwCashReadings, index = qwPairIndex)
     QwReading qwPairFutures = array.get(id = qwFuturesReadings, index = qwPairIndex)
     if not na(qwPairCash.pctChangeVsClose) and not na(qwPairFutures.pctChangeVsClose) and
-         math.abs(number = qwPairCash.pctChangeVsClose)    >= QW_NOISE_THRESHOLD and
-         math.abs(number = qwPairFutures.pctChangeVsClose) >= QW_NOISE_THRESHOLD and
+         math.abs(number = qwPairCash.pctChangeVsClose)    > QW_NOISE_THRESHOLD and
+         math.abs(number = qwPairFutures.pctChangeVsClose) > QW_NOISE_THRESHOLD and
          ((qwPairCash.pctChangeVsClose > 0.0) != (qwPairFutures.pctChangeVsClose > 0.0))
         qwCashFuturesMisaligned := true
 
 int qwSectorTotal         = f_qwGroupSize(readings = qwSectorReadings, excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorGreensRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorRedsRaw       = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorGreensSerious = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors)
-int qwSectorRedsSerious   = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors)
+int qwSectorGreensRaw     = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors, inclusiveBoundary = false)
+int qwSectorRedsRaw       = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_NOISE_THRESHOLD,   wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors, inclusiveBoundary = false)
+int qwSectorGreensSerious = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = true,  excludeCommodity = qwIgnoreCommoditySectors, inclusiveBoundary = true)
+int qwSectorRedsSerious   = f_qwCountAboveThreshold(readings = qwSectorReadings, threshold = QW_SERIOUS_THRESHOLD, wantPositive = false, excludeCommodity = qwIgnoreCommoditySectors, inclusiveBoundary = true)
 
 float qwDominantSeriousFraction = qwSectorTotal > 0 ?
      math.max(qwSectorGreensSerious, qwSectorRedsSerious) / float(qwSectorTotal) : 0.0
@@ -473,24 +581,26 @@ int qwGreensDelta = na(qwGreensAtOpen) or qwSectorTotal == 0 ? na : qwSectorGree
 int qwRedsDelta   = na(qwRedsAtOpen)   or qwSectorTotal == 0 ? na : qwSectorRedsRaw   - qwRedsAtOpen
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Regime verdict synthesis.
+// Regime verdict synthesis. State colors are the regime INPUT colors verbatim
+// (the old conviction-transparency ramp is gone — it washed the banner out at
+// low fractions and fought the color picker's own opacity slider; conviction
+// strength reads from the detail number instead).
 // ─────────────────────────────────────────────────────────────────────────────
-int qwCommitTransp = 80 - int(math.min(1.0, qwDominantSeriousFraction) * 55.0)
 string qwRegimeText = "· LOW CONV"
-color qwRegimeColor = color.new(color = NORD3, transp = qwCommitTransp)
+color qwRegimeColor = qwRegimeLowConvColor
 // DATA GAP overrides everything else — never promote partial data to a verdict.
 if qwDataGap
     qwRegimeText  := "× DATA GAP"
-    qwRegimeColor := color.new(color = NORD12, transp = 20)
+    qwRegimeColor := qwRegimeDataGapColor
 else if qwCashBifurcated or qwFuturesBifurcated or qwSectorsBifurcated or qwCashFuturesMisaligned
     qwRegimeText  := "÷ BIFURCATED"
-    qwRegimeColor := color.new(color = NORD13, transp = 45)
+    qwRegimeColor := qwRegimeBifurcatedColor
 else if qwDominantSeriousFraction >= QW_COMMITTED_FRACTION
     qwRegimeText  := qwSectorsLeanGreen ? "+ COMMITTED ↑" : "+ COMMITTED ↓"
-    qwRegimeColor := qwSectorsLeanGreen ? color.new(color = NORD8, transp = qwCommitTransp) : color.new(color = NORD11, transp = qwCommitTransp)
+    qwRegimeColor := qwSectorsLeanGreen ? qwRegimeCommittedUpColor : qwRegimeCommittedDownColor
 else if qwDominantSeriousFraction >= QW_MILD_FRACTION
     qwRegimeText  := qwSectorsLeanGreen ? "~ MILD ↑" : "~ MILD ↓"
-    qwRegimeColor := qwSectorsLeanGreen ? color.new(color = NORD7, transp = qwCommitTransp) : color.new(color = NORD12, transp = qwCommitTransp)
+    qwRegimeColor := qwSectorsLeanGreen ? qwRegimeMildUpColor : qwRegimeMildDownColor
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Render — single table, two columns, sections separated by header rows.
@@ -501,6 +611,7 @@ var table qwTable = na
 var int qwTableRows = na
 var int qwTableColumnsState = na
 var string qwTablePositionState = ""
+var bool qwTableBannerState = false
 
 // bothColumns renders a third cell (vs-close) so the "Both" baseline mode can
 // show the two % columns side by side, the way the source quote window keeps
@@ -560,34 +671,36 @@ f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed, bo
              text_size = qwTextSize,
              bgcolor = rowBg)
 
-string qwRegimeTooltip =
+// var: the guide is a pure literal — build it once, not on every tick.
+var string qwRegimeTooltip =
      "🧭 REGIME GUIDE\n" +
      "\n" +
      "+ COMMITTED\n" +
      "No index split anywhere, and at least 75% of counted sectors are moving seriously (0.5%+) in one direction.\n" +
-     "This is the cleanest trend environment.\n" +
+     "This is the cleanest trend environment. Playbook: trade with the direction and trust trends to run — on the strongest days, hold part of the position for extended wave counts (7–9 waves).\n" +
      "\n" +
      "~ MILD\n" +
      "No index split, but only 50-75% of sectors are moving seriously.\n" +
-     "There is participation, but not broad enough to treat as a fully confident regime.\n" +
+     "There is participation, but not broad enough to treat as a fully confident regime. Playbook: trade the dominant direction with more conservative exits.\n" +
      "\n" +
      "· LOW CONV\n" +
      "Less than half the counted sectors are moving seriously.\n" +
      "Movement may be drift, chop, or weak rotation rather than a trustworthy trend day.\n" +
      "\n" +
      "÷ BIFURCATED\n" +
-     "Internal disagreement. Indexes get zero tolerance: any cash index or futures index that is red while the others are green (or vice versa, beyond the 0.2% noise floor) splits the group.\n" +
+     "Internal disagreement — a neutral market, not bearish or bullish, until the indexes resolve one color. Indexes get zero tolerance: any cash index or futures index that is red while the others are green (or vice versa, beyond the 0.2% noise floor) splits the group.\n" +
      "Also fires when more than 25% of counted sectors are the minority color, or when any cash/futures pair of the same market (SPY/ES, QQQ/NQ, DIA/YM, IWM/RTY) points in opposite directions vs prior close.\n" +
+     "Playbook: take profits quickly (do not expect trends to last) or do not trade at all — this is the picture of a choppy day.\n" +
      "\n" +
      "× DATA GAP\n" +
      "At least one enabled group returned too few usable readings — zero, or below half of the expected symbol count.\n" +
      "Do not trust the verdict when part of the intermarket picture is missing.\n" +
      "\n" +
      "📐 COMMITMENT RULES\n" +
-     "Below 0.2% = noise\n" +
-     "0.2-0.5% = drift (color counts, conviction doesn't)\n" +
-     "0.5-1% = serious\n" +
-     "Above 1% = committed\n" +
+     "0.2% or less = noise (not convincing — treated as zero)\n" +
+     "Over 0.2% to 0.5% = drift (color counts, conviction doesn't)\n" +
+     "0.5-1% = serious (the color is taken seriously)\n" +
+     "1% and above = committed to its bullish/bearish posture\n" +
      "\n" +
      "📊 DETAIL NUMBER\n" +
      "Normal mode shows seriously-moving (0.5%+) sectors on the dominant side / total counted sectors.\n" +
@@ -595,6 +708,11 @@ string qwRegimeTooltip =
 
 if barstate.islast
     int qwRow = 0
+    // Display copies, optionally sorted by % change descending (methodology
+    // ordering). Verdict math above never touches these.
+    array<QwReading> qwCashDisplay    = qwSortRows ? f_qwSortedForDisplay(readings = qwCashReadings)    : qwCashReadings
+    array<QwReading> qwFuturesDisplay = qwSortRows ? f_qwSortedForDisplay(readings = qwFuturesReadings) : qwFuturesReadings
+    array<QwReading> qwSectorDisplay  = qwSortRows ? f_qwSortedForDisplay(readings = qwSectorReadings)  : qwSectorReadings
     bool qwRegimeOnlyView = qwShowRegime and not qwShowCash and not qwShowFutures and not qwShowSectors
     bool qwShowRegimeHeader = qwShowRegime and not qwRegimeOnlyView
     // "Both" baseline mode adds a third column (vs-open | vs-close) plus a
@@ -609,22 +727,27 @@ if barstate.islast
          (qwShowSectors ? 1 + array.size(id = qwSectorReadings) : 0) +
          (qwShowRegimeHeader ? 2 : 0)
 
-    if na(qwTable) or qwTableRows != qwVisibleRows or qwTableColumnsState != qwTableColumns or qwTablePositionState != qwTablePosition
+    // Banner mode (regime-only view) renders as a clean colored pill: NO cell
+    // borders, NO outer frame, fully transparent table background — the state
+    // color on the cells IS the banner. The full table keeps the Table-group
+    // border/frame inputs.
+    if na(qwTable) or qwTableRows != qwVisibleRows or qwTableColumnsState != qwTableColumns or qwTablePositionState != qwTablePosition or qwTableBannerState != qwRegimeOnlyView
         if not na(qwTable)
             table.delete(table_id = qwTable)
         qwTable := table.new(
              position = qwTablePosition,
              columns = qwTableColumns,
              rows = math.max(1, qwVisibleRows),
-             bgcolor = qwTableBgColor,
-             border_width = qwTableBorderWidth,
+             bgcolor = qwRegimeOnlyView ? color.new(color = NORD0, transp = 100) : qwTableBgColor,
+             border_width = qwRegimeOnlyView ? 0 : qwTableBorderWidth,
              border_color = qwTableBorderColor,
-             frame_width = qwTableFrameWidth,
+             frame_width = qwRegimeOnlyView ? 0 : qwTableFrameWidth,
              frame_color = qwTableFrameColor
          )
         qwTableRows := qwVisibleRows
         qwTableColumnsState := qwTableColumns
         qwTablePositionState := qwTablePosition
+        qwTableBannerState := qwRegimeOnlyView
 
     // Column labels — only needed when two % columns are on screen.
     if qwBothColumns
@@ -638,7 +761,7 @@ if barstate.islast
              bothColumns = qwBothColumns,
              headerValue2 = f_qwFormatPct(pctChange = qwCashNetVsClose))
         qwRow += 1
-        for cashReading in qwCashReadings
+        for cashReading in qwCashDisplay
             f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = cashReading, isDimmed = false, bothColumns = qwBothColumns)
             qwRow += 1
 
@@ -649,7 +772,7 @@ if barstate.islast
              bothColumns = qwBothColumns,
              headerValue2 = f_qwFormatPct(pctChange = qwFuturesNetVsClose))
         qwRow += 1
-        for futuresReading in qwFuturesReadings
+        for futuresReading in qwFuturesDisplay
             f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = futuresReading, isDimmed = false, bothColumns = qwBothColumns)
             qwRow += 1
 
@@ -695,7 +818,7 @@ if barstate.islast
              text_size = qwTextSize,
              bgcolor = color.new(color = NORD1, transp = 25))
         qwRow += 1
-        for sectorReading in qwSectorReadings
+        for sectorReading in qwSectorDisplay
             f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading, isDimmed = qwIgnoreCommoditySectors and sectorReading.isCommodity, bothColumns = qwBothColumns)
             qwRow += 1
 
@@ -708,18 +831,23 @@ if barstate.islast
                   qwSectorTotal,     qwSectorExpected) :
              str.format("{0}/{1}", math.max(qwSectorGreensSerious, qwSectorRedsSerious), qwSectorTotal)
         if qwRegimeOnlyView
-            table.cell(table_id = qwTable, column = 0, row = qwRow, text = qwRegimeText,
-                 text_color = color.new(color = NORD6, transp = 0),
+            // Standalone banner: padded verdict text, banner-size font, input
+            // text color on the solid state color. NBSP padding (plain spaces
+            // get trimmed in table cells) gives the pill breathing room since
+            // cells have no padding control.
+            int qwBannerTextSize = qwRegimeBannerTextSize == 0 ? qwTextSize : qwRegimeBannerTextSize
+            table.cell(table_id = qwTable, column = 0, row = qwRow, text = " " + qwRegimeText + " ",
+                 text_color = qwRegimeTextColor,
                  text_halign = text.align_center,
                  text_valign = text.align_center,
-                 text_size = qwTextSize,
+                 text_size = qwBannerTextSize,
                  bgcolor = qwRegimeColor,
                  tooltip = qwRegimeTooltip)
-            table.cell(table_id = qwTable, column = 1, row = qwRow, text = qwRegimeDetail,
-                 text_color = color.new(color = NORD6, transp = 0),
+            table.cell(table_id = qwTable, column = 1, row = qwRow, text = " " + qwRegimeDetail + " ",
+                 text_color = qwRegimeTextColor,
                  text_halign = text.align_center,
                  text_valign = text.align_center,
-                 text_size = qwTextSize,
+                 text_size = qwBannerTextSize,
                  bgcolor = qwRegimeColor,
                  tooltip = qwDataGap ?
                       "Per-group availability when a feed is missing: C=cash, F=futures, S=sectors. Format: received/expected." :
@@ -729,7 +857,7 @@ if barstate.islast
             f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "REGIME", headerValue = qwBothColumns ? "" : "Verdict", bothColumns = qwBothColumns, headerValue2 = "Verdict")
             qwRow += 1
             table.cell(table_id = qwTable, column = 0, row = qwRow, text = qwRegimeText,
-                 text_color = color.new(color = NORD6, transp = 0),
+                 text_color = qwRegimeTextColor,
                  text_halign = text.align_left,
                  text_valign = text.align_center,
                  text_size = qwTextSize,
@@ -740,7 +868,7 @@ if barstate.islast
                      text_size = qwTextSize,
                      bgcolor = qwRegimeColor)
             table.cell(table_id = qwTable, column = qwBothColumns ? 2 : 1, row = qwRow, text = qwRegimeDetail,
-                 text_color = color.new(color = NORD6, transp = 0),
+                 text_color = qwRegimeTextColor,
                  text_halign = text.align_right,
                  text_valign = text.align_center,
                  text_size = qwTextSize,

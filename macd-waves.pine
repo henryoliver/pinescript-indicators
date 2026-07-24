@@ -101,8 +101,11 @@ waveDownColor = input.color(defval = color.new(color = NORD11, transp = 10), tit
      tooltip = "Label color for waves counted under a down MOM trend.", group = GROUP_WAVES)
 waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40,
      tooltip = "Text size of the wave number labels.", group = GROUP_WAVES)
+liveNumberMarginAtr = input.float(defval = 0.0, title = "Live Number Margin (ATR ×)", minval = 0.0, step = 0.05,
+     tooltip = "Accuracy gate for the early realtime label. 0 = show on the first %K hook (earliest). Above 0, a wave number whose classification could still flip — the cycle's extreme has not yet crossed the previous same-side extreme — waits until flipping would take at least this many ATRs of further MACD travel; already-crossed numbers can never flip and always show immediately. Trades a little lead on fragile waves for a more accurate first impression. The debug SHOW/PIN logs print each wave's flip gap in ATRs — pick this value from that data.", group = GROUP_WAVES)
 
-float cycleD = ta.sma(source = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing), length = cycleDSmoothing)
+float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing)
+float cycleD = ta.sma(source = cycleK, length = cycleDSmoothing)
 bool crossedAbove45 = ta.crossover(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
 bool crossedAbove55 = ta.crossover(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
 bool crossedBelow55 = ta.crossunder(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
@@ -231,6 +234,135 @@ if cycleStartedThisBar and not na(endedCycleExtreme)
 f_waveTrendColor(int trendDirection) =>
     trendDirection == -1 ? waveDownColor : waveUpColor
 
+// Live-number safety (display only): within a half-cycle the extreme moves in
+// ONE direction, so its classification against the previous same-side extreme
+// can flip AT MOST ONCE — and only by crossing it (log-proven 2026-07-23:
+// every early-number miss was exactly one uncrossed→crossed flip; no shown
+// number ever flipped back). Already crossed = stable forever; still inside =
+// the shown number flips if the wave travels the remaining gap. The margin
+// input requires the gap to be at least Margin × ATR at the MOMENT of first
+// show (the show latch below evaluates it on the trigger tick — the gap only
+// shrinks as the cycle develops, so pre-latching safety on the wide early-
+// cycle gap would let every fragile number through). A wave blocked at its
+// hook re-qualifies only by crossing (turning stable), which shows the
+// post-flip — final — number.
+float waveAtr = ta.atr(length = 14)
+float liveSameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme
+bool liveNumberStable = na(liveSameSideExtreme) or (cycleZone == 1 ? cycleExtreme > liveSameSideExtreme : cycleExtreme <= liveSameSideExtreme)
+float liveFlipGap = liveNumberStable ? na : cycleZone == 1 ? liveSameSideExtreme - cycleExtreme : cycleExtreme - liveSameSideExtreme
+float liveFlipGapAtr = liveFlipGap / waveAtr
+bool liveNumberSafe = liveNumberStable or liveNumberMarginAtr == 0.0 or liveFlipGapAtr >= liveNumberMarginAtr
+
+// Live turn latch (display only, same sticky tick-time gate as ma-waves): the
+// live label may show intrabar as soon as %K — the cycle's fast line, which
+// leads the %D that closes the window — hooks against the open half-cycle.
+// varip, because a latch that rolled back per tick would un-show on the next
+// tick; sticky is the point — an un-hook can't hide the label, it keeps
+// tracking the provisional extreme and morphs into the pin instead. The latch
+// is zone-signed so a hook latched for one half-cycle can never light up
+// another; it resets when a boundary confirms. Skipped on provisional-cross
+// ticks: cycleZone would read the new window before the cross has held a close.
+// Reload caveat (accepted, same trade as ma-waves): varip state is per-tick, so
+// a hook that existed only intrabar doesn't reproduce after a reload —
+// historical bars run one closing tick, so on replay the label first shows on
+// the first closed bar whose %K hooks. Visibility wins live; the pin is
+// identical either way.
+varip int liveTurnLatch = 0
+if not cycleStartedThisBar and cycleZone != 0
+    if cycleZone == 1 ? cycleK < cycleK[1] : cycleK > cycleK[1]
+        liveTurnLatch := cycleZone
+// Show latch — the visibility decision, sticky per half-cycle: the label
+// first draws on a tick where the %K turn has latched AND the number is safe
+// RIGHT NOW (stable, or flip gap ≥ margin); from then on it can't un-show.
+varip bool liveShowLatch = false
+if not cycleStartedThisBar and cycleZone != 0 and liveTurnLatch == cycleZone and liveNumberSafe
+    liveShowLatch := true
+
+// ── Debug logs — realtime-vs-final accuracy instrumentation for the latch.
+// Every half-cycle snapshots what the live label FIRST showed (bar, number,
+// anchor) on the tick the latch fires, counts every morph while live, and the
+// pin logs the comparison plus running totals — the tuning readout for how
+// accurate the early display is. varip: the first show happens intrabar, so
+// the snapshot must survive tick rollback. All writes are gated on the toggle
+// so the layer costs nothing when off.
+const string GROUP_DEBUG = "🧪 Debug"
+debugLogsEnabled = input.bool(defval = true, title = "Log Realtime vs Final Plot",
+     tooltip = "Emits Pine Logs (editor → Pine Logs pane) comparing the early realtime label to the final pinned wave. CONFIG = one self-describing header at load, HOOK = first %K turn (earliest possible show), CROSS = the wave number settling (classification crossed), HOOK-FADE/CROSS-FADE = the intrabar event failed to hold through its bar's close, SHOW = first appearance, MORPH = shown number changed while live, PIN = pinned wave vs first-shown (match/miss, anchor drift, lead bars, hook→show lag, old close gate), RETRO = retrace-breaker re-label preview vs pin, FINAL = resting anchor after migration, TOTALS = running accuracy. Turn off outside tuning sessions.", group = GROUP_DEBUG)
+debugLogRealtimeOnly = input.bool(defval = false, title = "Log Realtime Bars Only",
+     tooltip = "Suppress log lines on historical bars so a full live session isn't pushed out of Pine Logs' 10,000-entry cap by the load-time replay. State and TOTALS still accumulate through history (the CONFIG line carries the historical baseline). Turn ON for all-day live capture runs.", group = GROUP_DEBUG)
+bool debugLogActive = debugLogsEnabled and (not debugLogRealtimeOnly or barstate.isrealtime)
+varip int debugFirstShowBar = na        // bar the live label first drew on (na = not shown yet this half-cycle)
+varip bool debugFirstShowOnClose = false
+varip int debugFirstShowNumber = na
+varip int debugFirstShowAnchorBar = na
+varip bool debugFirstShowStable = false  // classification already crossed at first show (can never flip)
+varip float debugFirstShowGapAtr = na    // if unstable: ATRs of travel that would flip the shown number
+varip int debugLastShownNumber = na
+varip int debugLastShownAnchorBar = na
+varip int debugNumberMorphCount = 0
+varip int debugAnchorMorphCount = 0
+varip bool debugRetroPreviewed = false
+varip int debugCloseGateFirstBar = na   // where the pre-latch close gate would have first shown
+varip int debugHookBar = na             // first %K-turn latch tick of the half-cycle
+varip bool debugHookOnClose = false
+varip bool debugHookFadeLogged = false
+varip int debugCrossBar = na            // first tick the classification settled (unstable → stable)
+varip bool debugCrossOnClose = false
+varip bool debugSeenUnstable = false
+var int debugCycleStartBar = na         // bar of the last confirmed boundary
+var int debugEndedFirstShowAnchorBar = na  // ended cycle's first-show anchor, for the FINAL log
+var int debugPinnedWaveCount = 0
+var int debugNumberMatchCount = 0
+var int debugAnchorMatchCount = 0
+var int debugLeadBarsSum = 0
+
+// ── Tick-time event detection: the raw per-cycle timeline (HOOK → CROSS →
+// SHOW → PIN, each timestamped by Pine Logs) that offline analysis rebuilds
+// ANY margin's gate decisions from, independent of the margin set on the
+// chart. The FADE twins measure realtime-vs-reload divergence: an intrabar
+// event that failed to hold through its bar's close won't reproduce on replay.
+if debugLogsEnabled and cycleZone != 0
+    if na(debugHookBar) and liveTurnLatch == cycleZone
+        debugHookBar := bar_index
+        debugHookOnClose := barstate.isconfirmed
+        if debugLogActive
+            log.info("HOOK wave {0} @ bar {1}{2} (+{3}b into cycle) | %K {4} vs prev {5} | {6}",
+                 liveWaveNumber, bar_index, barstate.isconfirmed ? " (on close)" : " (intrabar)",
+                 bar_index - debugCycleStartBar,
+                 math.round(number = cycleK, precision = 1), math.round(number = cycleK[1], precision = 1),
+                 liveNumberStable ? "stable" : str.format("flip gap {0} ATR", math.round(number = liveFlipGapAtr, precision = 2)))
+    if not cycleStartedThisBar
+        if not liveNumberStable
+            debugSeenUnstable := true
+        else if debugSeenUnstable and na(debugCrossBar)
+            debugCrossBar := bar_index
+            debugCrossOnClose := barstate.isconfirmed
+            if debugLogActive
+                log.info("CROSS number settled as {0} @ bar {1}{2} (+{3}b into cycle)",
+                     liveWaveNumber, bar_index, barstate.isconfirmed ? " (on close)" : " (intrabar)",
+                     bar_index - debugCycleStartBar)
+    // Fade checks skip boundary confirms: cycleZone already reads the NEW
+    // window there, so the direction tests would grade the old cycle's events
+    // against the wrong side (the PIN is the truth for that cycle anyway).
+    if barstate.isconfirmed and not cycleStartedThisBar
+        if debugHookBar == bar_index and not debugHookOnClose and not debugHookFadeLogged and
+             not (cycleZone == 1 ? cycleK < cycleK[1] : cycleK > cycleK[1])
+            debugHookFadeLogged := true
+            if debugLogActive
+                log.info("HOOK-FADE @ bar {0} — intrabar %K turn did not hold to the close (latch stays; a reload will hook later)", bar_index)
+        if debugCrossBar == bar_index and not debugCrossOnClose and not liveNumberStable
+            debugCrossBar := na
+            if debugLogActive
+                log.info("CROSS-FADE @ bar {0} — intrabar crossing rolled back before the close", bar_index)
+
+// One self-describing header when the load-time replay hands off to realtime,
+// carrying the historical accuracy baseline so a realtime-only capture still
+// has its reference numbers.
+if debugLogsEnabled and barstate.islastconfirmedhistory
+    log.info("CONFIG {0} {1} | margin {2} ATR | realtime-only {3} | history baseline: {4} waves, number {5}/{4}, anchor {6}/{4}",
+         syminfo.tickerid, timeframe.period, liveNumberMarginAtr, debugLogRealtimeOnly,
+         debugPinnedWaveCount, debugNumberMatchCount, debugAnchorMatchCount)
+
 // Helper function to create the cycle label on first use or move it afterwards.
 // High-cycle labels sit above the extreme, low-cycle labels below it.
 f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, string labelText, color labelTextColor, bool isHighCycle) =>
@@ -246,11 +378,11 @@ f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, str
     updatedLabel
 
 // Cycle label — the wave number at the half-cycle's extreme MACD value, colored
-// by the wave's trend. Every wave — impulse and retrace alike — draws once a
-// CLOSED bar confirms the MACD has turned away from the extreme (the extreme
-// bar is no longer the closing bar), hides again while a new extreme is being
-// driven, and is pinned (or backfilled) at the final extreme when the
-// half-cycle ends on the %D cross. After the pin the label migrates with the
+// by the wave's trend. Every wave — impulse and retrace alike — draws on the
+// first tick %K hooks against the half-cycle (the sticky latch above), from
+// then on tracks the provisional extreme and number live, and is pinned (or
+// backfilled) at the final extreme when the half-cycle ends on the %D cross.
+// After the pin the label migrates with the
 // MACD line to the swing's true turn (the line lags the %D cross), so it
 // always ends up ON the visual extreme even when that bar belongs to the next
 // window.
@@ -270,9 +402,9 @@ var float pinnedExtremeValue = na  // the label's current (possibly migrated) va
 var bool pinnedExtremeMigrating = false
 var int pinnedAnchorBar = na       // the pin's ORIGINAL anchor, kept so the next
 var float pinnedAnchorValue = na   // pin's ordering guard can revert an overshoot
-// Same close-only gate as the live label below: an intrabar %D cross can
-// recede before the close, so the pinned label waits for the confirming tick.
-// Wave STATE above is untouched — it still updates every tick and rolls back.
+// The PIN stays close-gated: an intrabar %D cross can recede before the
+// close, so the pinned label waits for the confirming tick. Wave STATE above
+// is untouched — it still updates every tick and rolls back.
 if cycleStartedThisBar and barstate.isconfirmed
     if not na(endedCycleExtreme)
         color endedWaveColor = f_waveTrendColor(trendDirection = endedWaveTrend)
@@ -293,6 +425,9 @@ if cycleStartedThisBar and barstate.isconfirmed
         // original anchor; original anchors are strictly time-ordered by the
         // window partition, which restores the count's left-to-right order.
         if not na(prevWaveLabel) and not na(pinnedAnchorBar) and label.get_x(id = prevWaveLabel) >= pinAnchorBar
+            if debugLogActive
+                log.info("ORDER-GUARD wave {0} snapped back from bar {1} to bar {2}",
+                     prevWaveNumber, label.get_x(id = prevWaveLabel), pinnedAnchorBar)
             label.set_xy(id = prevWaveLabel, x = pinnedAnchorBar, y = pinnedAnchorValue)
         cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
              labelBarIndex = pinAnchorBar, labelPrice = pinAnchorValue,
@@ -306,12 +441,75 @@ if cycleStartedThisBar and barstate.isconfirmed
         pinnedExtremeMigrating := true
         pinnedAnchorBar := pinAnchorBar
         pinnedAnchorValue := pinAnchorValue
-    cycleExtremeLabel := na  // the next label belongs to the new half-cycle
-// Only touch the labels on a bar's closing tick: intrabar the MACD turn
-// away from the extreme is unconfirmed (the line can resume into a new extreme
-// before the close), so drawing on live ticks flashes false wave numbers. On
-// the closing tick the extreme tracking above has already seen the bar's final
-// MACD value, so a stale extreme bar means the turn held through the close.
+        // Debug: the pin is the moment of truth — compare it against what the
+        // live label first showed and keep the running accuracy totals.
+        if debugLogsEnabled
+            if not na(debugFirstShowBar)
+                int debugLeadBars = bar_index - debugFirstShowBar
+                bool debugNumberMatched = debugFirstShowNumber == endedWaveNumber
+                bool debugAnchorMatched = debugFirstShowAnchorBar == pinAnchorBar
+                debugPinnedWaveCount += 1
+                debugNumberMatchCount += debugNumberMatched ? 1 : 0
+                debugAnchorMatchCount += debugAnchorMatched ? 1 : 0
+                debugLeadBarsSum += debugLeadBars
+                if debugLogActive
+                    log.info("PIN wave {0} @ bar {1} | first shown as {2}, {3} bars early{4} ({5}) → number {6} | anchor drift {7} bars → {8} | morphs number={9} anchor={10} | hook→show {11} bars | old close gate: {12}",
+                         endedWaveNumber, bar_index, debugFirstShowNumber, debugLeadBars,
+                         debugFirstShowOnClose ? " (on a close)" : " (intrabar)",
+                         debugFirstShowStable ? "stable" : str.format("unstable, gap {0} ATR", math.round(number = debugFirstShowGapAtr, precision = 2)),
+                         debugNumberMatched ? "MATCH" : "MISS",
+                         pinAnchorBar - debugFirstShowAnchorBar,
+                         debugAnchorMatched ? "MATCH" : "MISS",
+                         debugNumberMorphCount, debugAnchorMorphCount,
+                         na(debugHookBar) ? "n/a" : str.tostring(value = debugFirstShowBar - debugHookBar),
+                         na(debugCloseGateFirstBar) ? "never fired" : str.format("{0} bars later", debugCloseGateFirstBar - debugFirstShowBar))
+                    log.info("TOTALS {0} waves | first-shown number right {1}/{0} | first anchor exact {2}/{0} | avg lead {3} bars",
+                         debugPinnedWaveCount, debugNumberMatchCount, debugAnchorMatchCount,
+                         math.round(number = 1.0 * debugLeadBarsSum / debugPinnedWaveCount, precision = 1))
+            else if debugLogActive
+                log.info("PIN wave {0} @ bar {1} | never shown live — {2}{3}",
+                     endedWaveNumber, bar_index,
+                     liveTurnLatch == 0 ? "no %K hook" : not liveShowLatch ? "margin gate (never safe while hooked)" : "migration hold",
+                     na(debugHookBar) ? "" : str.format(" (hooked @ bar {0})", debugHookBar))
+            if (endedWaveRetro or debugRetroPreviewed) and debugLogActive
+                log.info("RETRO prev wave → 1: previewed live={0} pinned={1} ({2})",
+                     debugRetroPreviewed, endedWaveRetro, debugRetroPreviewed == endedWaveRetro ? "MATCH" : "MISS")
+    // Mint the new half-cycle's label now, blank — the only label.new in the
+    // script, so the tick-time draw below never creates or deletes a drawing
+    // intrabar (same lifecycle as ma-waves): it only set_*s this object once
+    // the latch fires, and a blank label renders as nothing.
+    cycleExtremeLabel := label.new(x = bar_index, y = macd, text = "",
+         style = cycleZone == 1 ? label.style_label_down : label.style_label_up,
+         color = color.new(color = color.gray, transp = 100),
+         textcolor = f_waveTrendColor(trendDirection = liveWaveTrend), size = waveLabelSize)
+    liveTurnLatch := 0
+    liveShowLatch := false
+    // Debug: hand the ended cycle's first-show anchor to the FINAL log, then
+    // reset the per-half-cycle snapshot for the new window.
+    debugEndedFirstShowAnchorBar := debugFirstShowAnchorBar
+    debugFirstShowBar := na
+    debugFirstShowOnClose := false
+    debugFirstShowNumber := na
+    debugFirstShowAnchorBar := na
+    debugFirstShowStable := false
+    debugFirstShowGapAtr := na
+    debugLastShownNumber := na
+    debugLastShownAnchorBar := na
+    debugNumberMorphCount := 0
+    debugAnchorMorphCount := 0
+    debugRetroPreviewed := false
+    debugCloseGateFirstBar := na
+    debugHookBar := na
+    debugHookOnClose := false
+    debugHookFadeLogged := false
+    debugCrossBar := na
+    debugCrossOnClose := false
+    debugSeenUnstable := false
+    debugCycleStartBar := bar_index
+// Pinned-label migration stays on closing ticks: intrabar the MACD's turn away
+// from the old extreme is unconfirmed (the line can resume into a new extreme
+// before the close), and a migration step is a commitment — the label only
+// stops for good on a confirmed failure to extend.
 if barstate.isconfirmed
     // Pinned-label migration (see the vars above). Runs on the pin bar too:
     // the crossing bar already belongs to the new window, so it is the first
@@ -321,30 +519,79 @@ if barstate.isconfirmed
             pinnedExtremeValue := macd
             label.set_xy(id = prevWaveLabel, x = bar_index, y = pinnedExtremeValue)
         else
+            // Debug: the resting spot after migration is the wave's true final
+            // plot — the last revision the early display is measured against.
+            if debugLogActive
+                log.info("FINAL wave {0} rests @ bar {1} | {2} bars past its pin anchor | first live anchor was bar {3}",
+                     prevWaveNumber, label.get_x(id = prevWaveLabel),
+                     label.get_x(id = prevWaveLabel) - pinnedAnchorBar,
+                     na(debugEndedFirstShowAnchorBar) ? "n/a" : str.tostring(value = debugEndedFirstShowAnchorBar))
             pinnedExtremeMigrating := false
-    // Live display gate: the label shows only once a closed bar has failed to
-    // extend the cycle's extreme — the earliest closed-bar evidence that the
-    // extreme is a turning point rather than the running edge of the move. It
-    // re-arms whenever a later bar takes the extreme out, so a label can never
-    // sit on an extreme the market is actively breaking. While the pinned
-    // label is still migrating the old swing hasn't finished, so the new
-    // window's label would mark a wave that hasn't started — it waits.
-    bool liveLabelDrawn = not na(displayExtreme) and displayExtremeBar != bar_index and not pinnedExtremeMigrating
-    if liveLabelDrawn
-        cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
-             labelBarIndex = displayExtremeBar, labelPrice = displayExtreme,
-             labelText = str.tostring(value = liveWaveNumber),
-             labelTextColor = liveWaveColor, isHighCycle = cycleZone == 1)
-    else if not na(cycleExtremeLabel)
-        // The closing bar took the extreme out — hide until it holds again.
-        label.delete(id = cycleExtremeLabel)
-        cycleExtremeLabel := na
-    // While the live extreme provisionally breaks the trend as a retrace, the
-    // last pinned label previews wave 1 of the new trend; it reverts otherwise.
-    if not na(prevWaveLabel)
-        bool previewRetro = liveLabelDrawn and liveWaveRetro
-        label.set_text(id = prevWaveLabel, text = previewRetro ? "1" : str.tostring(value = prevWaveNumber))
-        label.set_textcolor(id = prevWaveLabel, textcolor = previewRetro ? liveWaveColor : prevWaveColor)
+    // Debug: where the pre-latch close gate (one closed bar failing to extend
+    // the extreme, migration done) would have first shown this half-cycle's
+    // label — quantifies how many bars the latch buys per wave.
+    if debugLogsEnabled and na(debugCloseGateFirstBar) and not cycleStartedThisBar and
+         not na(displayExtreme) and displayExtremeBar != bar_index and not pinnedExtremeMigrating
+        debugCloseGateFirstBar := bar_index
+// Live label — tick-time under the sticky %K-turn latch: it draws on the
+// first tick %K hooks against the half-cycle and from then on tracks the
+// provisional extreme and number every tick, morphing into the pin at the
+// boundary instead of ever hiding — once shown, a resumed move migrates and
+// renumbers the label rather than flashing it off. While the pinned label is
+// still migrating the old swing hasn't finished, so the new window's label
+// would mark a wave that hasn't started — the latch remembers the hook and
+// the label appears the moment migration stops. On provisional-cross ticks
+// nothing is drawn, so Pine's rollback reverts the label to its last
+// confirmed state and a receding cross leaves no trace.
+bool liveLabelDrawn = not cycleStartedThisBar and liveShowLatch and
+     not na(displayExtreme) and not pinnedExtremeMigrating and not na(cycleExtremeLabel)
+if liveLabelDrawn
+    cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
+         labelBarIndex = displayExtremeBar, labelPrice = displayExtreme,
+         labelText = str.tostring(value = liveWaveNumber),
+         labelTextColor = liveWaveColor, isHighCycle = cycleZone == 1)
+    // Debug: snapshot the FIRST appearance, then track every visible revision
+    // — a shown number that later changes is exactly the false-signal the
+    // latch is tuned against, so each one is logged; anchor moves are the
+    // expected extend-morph and are only counted.
+    if debugLogsEnabled
+        if na(debugFirstShowBar)
+            debugFirstShowBar := bar_index
+            debugFirstShowOnClose := barstate.isconfirmed
+            debugFirstShowNumber := liveWaveNumber
+            debugFirstShowAnchorBar := displayExtremeBar
+            debugFirstShowStable := liveNumberStable
+            debugFirstShowGapAtr := liveFlipGapAtr
+            debugLastShownNumber := liveWaveNumber
+            debugLastShownAnchorBar := displayExtremeBar
+            if debugLogActive
+                log.info("SHOW wave {0} @ bar {1}{2} (+{3}b into cycle) | anchor bar {4}, macd {5} | %K {6} %D {7} | {8}",
+                     liveWaveNumber, bar_index, barstate.isconfirmed ? " (on close)" : " (intrabar)",
+                     bar_index - debugCycleStartBar,
+                     displayExtremeBar, math.round(number = macd, precision = 4),
+                     math.round(number = cycleK, precision = 1), math.round(number = cycleD, precision = 1),
+                     liveNumberStable ? "stable" : str.format("flip gap {0} ATR", math.round(number = liveFlipGapAtr, precision = 2)))
+        else
+            if liveWaveNumber != debugLastShownNumber
+                debugNumberMorphCount += 1
+                if debugLogActive
+                    log.info("MORPH number {0} → {1} @ bar {2}{3}",
+                         debugLastShownNumber, liveWaveNumber, bar_index,
+                         barstate.isconfirmed ? " (on close)" : " (intrabar)")
+                debugLastShownNumber := liveWaveNumber
+            if displayExtremeBar != debugLastShownAnchorBar
+                debugAnchorMorphCount += 1
+                debugLastShownAnchorBar := displayExtremeBar
+// While the live extreme provisionally breaks the trend as a retrace, the
+// last pinned label previews wave 1 of the new trend; it reverts otherwise.
+if not na(prevWaveLabel)
+    bool previewRetro = liveLabelDrawn and liveWaveRetro
+    if debugLogsEnabled and previewRetro and not debugRetroPreviewed
+        debugRetroPreviewed := true
+        if debugLogActive
+            log.info("RETRO-PREVIEW prev wave showing as 1 @ bar {0}", bar_index)
+    label.set_text(id = prevWaveLabel, text = previewRetro ? "1" : str.tostring(value = prevWaveNumber))
+    label.set_textcolor(id = prevWaveLabel, textcolor = previewRetro ? liveWaveColor : prevWaveColor)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS

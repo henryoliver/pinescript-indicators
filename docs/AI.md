@@ -175,6 +175,8 @@ Every major section must use:
 - an uppercase strong name
 - a full-width divider block above it
 - a one- or two-line purpose description under the title when useful
+- divider lines of exactly `// ` followed by 77 `═` characters (80 columns
+  total) — this is the width every banner in the repo uses; do not eyeball it
 
 Examples:
 - `// 🧱 CONSTANTS`
@@ -362,6 +364,16 @@ Instead, organize by ownership:
 The only exceptions are code paths that are truly reused across multiple
 sections or Pine-language placement constraints.
 
+#### Sanctioned Exception: a Global 🎛️ Inputs Section
+
+A single global `🎛️ USER INPUT SETTINGS` section is permitted ONLY when a real
+Pine constraint forces it — the settings-dialog ordering must not follow the
+section order, or helpers consumed by multiple sections must be declared below
+the inputs they read. When a file uses this layout, it must document the
+constraint in a comment at the top of the section (ma-waves.pine does this).
+For any file without such a constraint, inputs stay section-local per the
+rules above.
+
 ### Group Constants Pattern
 
 **Always define group constants** for organizing inputs:
@@ -465,17 +477,24 @@ request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", 
 - All `label.*()`, `line.*()`, `box.*()` functions
 - **Even conditional expressions**: `plot(series = emaVisible ? ema : na, title = "EMA")`
 
-**Important exception for variadic built-ins:**
-- Functions such as `math.max()` and `math.min()` accept a variable number of arguments.
-- These functions cannot accept keyword arguments in Pine. Using names like
-  `number0 =` / `number1 =` causes `CE10119: Functions that accept a variable
-  number of arguments cannot accept keyword arguments`.
-- For variadic built-ins, use positional arguments:
+**The complete list of positional-argument exceptions** (everything else is
+keyword — this list is exhaustive, do not extend it ad hoc):
+
+1. **Variadic built-ins** — `math.max()`, `math.min()`, and the format
+   arguments of `str.format()`, `log.info()`, `log.warning()`, `log.error()`.
+   Pine rejects keywords on variadic parameters (`CE10119`). The format STRING
+   itself and any non-variadic parameters stay keyworded where Pine allows it.
+2. **`color.t()`** — positional single argument (established repo-wide form).
+3. **Type casts** — `int(x)`, `float(x)` (established repo-wide form).
+4. **`max_bars_back()`** — the first parameter cannot be keyworded (`var` is a
+   reserved word); the accepted repo form is both parameters positional:
+   `max_bars_back(macd, 200)`.
 
 ```pine
 // ✅ CORRECT
 float range = math.max(high - low, syminfo.mintick)
 int visibleStart = math.max(0, bar_index - lookbackBars + 1)
+log.warning("feed missing after {0} bars — {1}", graceBars, missingText)
 
 // ❌ WRONG
 float range = math.max(number0 = high - low, number1 = syminfo.mintick)
@@ -508,7 +527,7 @@ for tickIndex = 0 to prices.size() - 1
     tickPrice = prices.get(tickIndex)
     tickVolume = volumes.get(tickIndex)
     tickTime = times.get(tickIndex)
-    table.cell(table_id = tapeTable, column = 0, row = tickIndex, text = str.tostring(tickPrice))
+    table.cell(table_id = tapeTable, column = 0, row = tickIndex, text = str.tostring(value = tickPrice))
 ```
 
 **Variable Naming Guidelines:**
@@ -529,37 +548,37 @@ for tickIndex = 0 to prices.size() - 1
 
 ```pine
 // Helper function to create label cell
-f_labelCell(table t, int col, int row, string txt) =>
-    table.cell(table_id = t, column = col, row = row, text = txt,
+f_labelCell(table targetTable, int column, int row, string cellText) =>
+    table.cell(table_id = targetTable, column = column, row = row, text = cellText,
          text_color = labelColor, text_size = labelSize,
          text_halign = labelHalign, text_valign = labelValign,
          text_font_family = labelFontFamily, bgcolor = tableBackgroundColor)
 
 // Helper function to format large numbers
-f_formatNumber(float val) =>
-    if na(val)
+f_formatNumber(float rawValue) =>
+    if na(rawValue)
         "N/A"
-    else if val >= 1e12
-        str.format("{0, number, #.00}T", val / 1e12)
-    else if val >= 1e9
-        str.format("{0, number, #.00}B", val / 1e9)
-    else if val >= 1e6
-        str.format("{0, number, #.00}M", val / 1e6)
+    else if rawValue >= 1e12
+        str.format("{0, number, #.00}T", rawValue / 1e12)
+    else if rawValue >= 1e9
+        str.format("{0, number, #.00}B", rawValue / 1e9)
+    else if rawValue >= 1e6
+        str.format("{0, number, #.00}M", rawValue / 1e6)
     else
-        str.format("{0, number, #,###}", val)
+        str.format("{0, number, #,###}", rawValue)
 
 // Helper function to get earnings date string
 f_getEarningsDateString(int timestamp) =>
     if na(timestamp)
         "N/A"
     else
-        string monthName = switch month(timestamp)
+        string monthName = switch month(time = timestamp)
             1 => "Jan"
             2 => "Feb"
             3 => "Mar"
             // ... etc
             => "N/A"
-        str.format("{0} {1}", monthName, year(timestamp))
+        str.format("{0} {1}", monthName, year(time = timestamp))
 ```
 
 **Common Helper Function Patterns:**
@@ -578,7 +597,7 @@ when the compiler can infer the type from the assigned value.
 ```pine
 adjustedTransp = color.t(baseColor) - 20       // inferred as float
 isActive = close > open                         // inferred as bool
-tickerId = ticker.modify(syminfo.tickerid, session = session.regular) // inferred as string
+tickerId = ticker.modify(tickerid = syminfo.tickerid, session = session.regular) // inferred as string
 pivotHighArray = array.new<pivotPoint>()        // inferred as array<pivotPoint>
 murreyPlotStyle = line.style_solid              // inferred from built-in line style constant
 ```
@@ -752,12 +771,12 @@ float currEpsEstimate = request.earnings(ticker = syminfo.tickerid,
      field = earnings.estimate, ignore_invalid_symbol = true)
 
 // Event detection
-bool isEpsEvent = ta.change(currEpsActual) != 0 and not na(currEpsActual)
+bool isEpsEvent = ta.change(source = currEpsActual) != 0 and not na(currEpsActual)
 
 // Historical earnings using ta.valuewhen
-float epsQ0 = ta.valuewhen(isEpsEvent, currEpsActual, 0)  // Most recent
-float epsQ1 = ta.valuewhen(isEpsEvent, currEpsActual, 1)  // Previous quarter
-int epsTime0 = ta.valuewhen(isEpsEvent, time, 0)
+float epsQ0 = ta.valuewhen(condition = isEpsEvent, source = currEpsActual, occurrence = 0)  // Most recent
+float epsQ1 = ta.valuewhen(condition = isEpsEvent, source = currEpsActual, occurrence = 1)  // Previous quarter
+int epsTime0 = ta.valuewhen(condition = isEpsEvent, source = time, occurrence = 0)
 ```
 
 #### Security Data (Multi-symbol)
@@ -782,7 +801,7 @@ regular-session bar.
 
 ```pine
 // Forces regular-session data regardless of chart settings
-string regularSymbol = ticker.modify(syminfo.tickerid, session = session.regular)
+string regularSymbol = ticker.modify(tickerid = syminfo.tickerid, session = session.regular)
 
 // Daily H/L/C will always match the official regular-session bar
 [prevHigh, prevLow, prevClose] = request.security(
@@ -835,21 +854,26 @@ var color belowColor = input.color(defval = color.new(color = NORD4, transp = 40
 
 **Large numbers with M/B/T suffixes:**
 ```pine
-string mktCapStr = na(mktCap) ? "N/A" : str.tostring(mktCap, format.volume)
+string mktCapStr = na(mktCap) ? "N/A" : str.tostring(value = mktCap, format = format.volume)
 ```
 
 **Percentages:**
 ```pine
-string epsYoyStr = na(epsYoyVal) ? "XX" : str.format("{0}%", math.round(epsYoyVal, 1))
-string adrFormatted = str.format("{0, number, #.00}%", adrRounded * 100)
+string epsYoyStr = na(epsYoyVal) ? "N/A" : str.format("{0}%", math.round(number = epsYoyVal, precision = 1))
+string adrFormatted = na(adrRounded) ? "-" : str.format("{0, number, #.00}%", adrRounded * 100)
 ```
 
 **Currency:**
 ```pine
-string avgPrice = na(syminfo.target_price_average) ? "$0" :
-     str.format("${0}", math.round(syminfo.target_price_average, 2))
-string revenueVal = na(revenue) ? "XX" : str.tostring(revenue, format.currency)
+string avgPrice = na(syminfo.target_price_average) ? "N/A" :
+     str.format("${0}", math.round(number = syminfo.target_price_average, precision = 2))
+string revenueVal = na(revenue) ? "N/A" : str.tostring(value = revenue, format = format.currency)
 ```
+
+**na fallbacks must not impersonate data:** a missing price target rendered as
+`"$0"` reads as a real zero-dollar target. Use `"N/A"` (or `"-"`) for missing
+values, and guard EVERY formatted field — a single unguarded `str.format` on an
+na series renders a literal `NaN` in the table.
 
 ### Table Rendering Pattern
 
@@ -886,20 +910,20 @@ if barstate.islastconfirmedhistory
 
 **Helper function pattern:**
 ```pine
-f_labelCell(table t, int col, int row, string txt) =>
-    table.cell(table_id = t, column = col, row = row, text = txt,
+f_labelCell(table targetTable, int column, int row, string cellText) =>
+    table.cell(table_id = targetTable, column = column, row = row, text = cellText,
          text_color = labelColor, text_size = labelSize,
          text_halign = labelHalign, text_valign = labelValign,
          text_font_family = labelFontFamily, bgcolor = tableBackgroundColor)
 
-f_valueCell(table t, int col, int row, string txt) =>
-    table.cell(table_id = t, column = col, row = row, text = txt,
+f_valueCell(table targetTable, int column, int row, string cellText) =>
+    table.cell(table_id = targetTable, column = column, row = row, text = cellText,
          text_color = valueColor, text_size = valueSize,
          text_halign = valueHalign, text_valign = valueValign,
          text_font_family = valueFontFamily, bgcolor = tableBackgroundColor)
 
-f_emptyCell(table t, int col, int row) =>
-    table.cell(table_id = t, column = col, row = row, text = "",
+f_emptyCell(table targetTable, int column, int row) =>
+    table.cell(table_id = targetTable, column = column, row = row, text = "",
          bgcolor = tableBackgroundColor)
 ```
 
@@ -983,6 +1007,39 @@ enum TrendDir
 - Cross-cutting inputs belong in GENERAL, not in the section that "owns" the
   feature, if other sections above it need them
 - Helper functions called from a section must be defined before that section
+
+### 9. Never Rely on `var` (or UDT Fields) Persisting Across Realtime Ticks
+- On every realtime tick the script re-executes from the bar's last COMMITTED
+  state: plain variables and `var` assignments roll back; only `varip` SCALARS
+  and `array.push` survive across ticks.
+- Fields of an object held in a `varip` variable still roll back unless the
+  FIELD itself is declared `varip` inside the `type`. This repo has been bitten
+  by this exact class more than once (ticker-tape watermark, degraded-path
+  state) — when tick-to-tick persistence is needed, use varip scalars or
+  varip-declared fields, never plain fields on a varip object.
+- Corollary: a `var bool` "already fired" guard around `alert()` or `log.*` is
+  broken on realtime — the flag un-sets on the next tick while the alert/log
+  output does NOT roll back, so it fires once per tick until the bar closes.
+  Gate on `barstate.isconfirmed` or make the flag `varip`.
+
+### 10. Never Create or Delete Drawings on Intrabar Ticks
+- Intrabar ticks may only MODIFY (`set_*`) a live drawing object — never
+  `label.new`/`label.delete` (or line/box equivalents) outside a
+  `barstate.isconfirmed` path. Deletes commit while references roll back
+  (dangling ref), and at the `max_*_count` cap an intrabar creation
+  garbage-collects the oldest COMMITTED drawing, which does not roll back.
+- The repo lifecycle pattern: mint ONE object per logical cycle on a confirmed
+  tick (blank if it should start hidden), `set_*` only intrabar, hide via
+  `set_text("")`, reuse or delete it at the next confirmed boundary.
+
+### 11. Never Let Event Engines Fire on Unconfirmed Ticks by Default
+- Signal/state engines that feed alerts or markers evaluate on
+  `barstate.isconfirmed` unless tick-time behavior is a deliberate, documented
+  choice — an intrabar condition that reverts before the close otherwise fires
+  a phantom alert with no committed evidence on the chart.
+- When tick-time display IS deliberate (live wave labels), make the visibility
+  latch `varip`-sticky and document the reload caveat: intrabar-only state does
+  not reproduce on replay, because historical bars run a single closing tick.
 
 ---
 
@@ -1072,11 +1129,17 @@ enum TrendDir
      the %D cross)
 
 5. **`macd-waves.pine`**
-   - Advanced MACD with wave identification
-   - Identifies momentum waves based on MACD structure
+   - Barry Burns momentum MACD (5/20/30) with the MOM wave count
+   - Stochastic %D 45/55 half-cycle windows partition the count (plot-in-zone
+     engine); labels anchor on a display-only extreme layer with pin migration
+     and an ordering guard
+   - Live labels show tick-time via a sticky %K-hook latch plus an ATR-margin
+     accuracy gate; a 🧪 Debug layer emits Pine Logs (HOOK/CROSS/SHOW/PIN/…)
+     comparing realtime plots against the final pins
 
 6. **`stochastic.pine`**
-   - Barry Burns stochastic (5/2/3, 80/20 + 45 mid) with Second Chance patterns
+   - Barry Burns cycle stochastic (5/2/3, 80/20 + 45 mid) — bare cycle
+     indicator, no pattern engines in the file
 
 7. **`support-resistance.pine`**
    - Multi-indicator cluster map for support and resistance
@@ -1098,11 +1161,20 @@ enum TrendDir
     - Renders horizontal lines and zones for key GEX levels
     - Uses arrays to manage lines/labels/boxes
 
-11. **`quote-window.pine`** / **`ticker-tape.pine`** / **`hoi.pine`**
-    - Table-based information displays (quote panel, multi-symbol tape,
-      high-of-interest levels)
+11. **`quote-window.pine`**
+    - Table-based quote panel with regime/bifurcation/delta readouts
 
-12. **`obv.pine`**
+12. **`ticker-tape.pine`**
+    - Realtime time-and-sales tape + block-trade engine on
+      `request.security_lower_tf("1T")` with a degraded no-tick-data fallback,
+      iceberg detection, pro-flow readout, and gated alerts
+    - Intraday tool — a daily chart exhausts the lower-timeframe allotment
+
+13. **`hoi.pine`**
+    - Hindenburg Omen signal: new highs/lows breadth thresholds, positive-trend
+      and McClellan filters, rolling cluster-window confirmation
+
+14. **`obv.pine`**
     - On Balance Volume (Barry Burns methodology) — smart-money/accumulation
       detector in its own pane
     - OBV drawn thin/neutral (like the MACD line); a 20-period SIMPLE MA OF OBV
@@ -1130,20 +1202,29 @@ Before submitting any code changes, verify:
 
 - [ ] `//@version=6` at the top of file
 - [ ] Mozilla Public License header included
-- [ ] Emoji section headers in correct order (🧱 🧩 🎛️ 🧮)
-- [ ] Nord color constants defined (NORD0-NORD15)
+- [ ] Emoji banner sections, 80-column dividers, CONSTANTS → TYPE DEFINITIONS →
+      GENERAL → feature sections → PLOTS/RENDER last (a global 🎛️ inputs
+      section only under the documented sanctioned exception)
+- [ ] Nord color constants defined (NORD0-NORD15, all 16, never trimmed)
 - [ ] Group constants defined with emoji prefixes
-- [ ] ALL function parameters explicitly named (no positional arguments)
+- [ ] ALL function parameters explicitly named (positional ONLY for the four
+      documented exceptions: variadics, `color.t`, casts, `max_bars_back`)
 - [ ] ALL variables have meaningful names (no single letters except standard abbreviations)
 - [ ] Helper functions prefixed with `f_`
-- [ ] Inputs grouped with `group = GROUP_*`
-- [ ] Table/label/line creation in `barstate.islastconfirmedhistory` or `barstate.islast`
-- [ ] Tooltips provided for user-facing inputs
+- [ ] EVERY input has `group = GROUP_*` AND `tooltip =` (an inline pair may
+      share one tooltip on the pair)
+- [ ] Tables created once with `var`, populated in `barstate.islastconfirmedhistory`
+      or `barstate.islast`; per-event drawings minted ONLY on confirmed ticks
+- [ ] No `var`-guarded `alert()`/`log.*` on realtime paths (rollback re-fires
+      them per tick) — gate on `barstate.isconfirmed` or use `varip`
+- [ ] No `label.new`/`label.delete` (or line/box) on intrabar ticks — `set_*` only
 - [ ] Conditional coloring uses ternary operators
-- [ ] Number formatting appropriate for data type (volume, currency, percent)
+- [ ] Number formatting appropriate for data type; every formatted field
+      na-guarded, fallbacks are "N/A"/"-" (never "$0" or a printable NaN)
+- [ ] `ignore_invalid_symbol = true` on `request.security`/`request.financial` calls
 - [ ] Function signatures verified against Pine Script v6 Reference
 - [ ] No deprecated v4/v5 functions used
-- [ ] Repainting considerations addressed (lookahead, barmerge)
+- [ ] Repainting considerations addressed (lookahead, barmerge, varip reload caveat)
 - [ ] No forward references — all identifiers declared before first use
 - [ ] Session-modified tickers used consistently within each section
 - [ ] UDTs preferred over parallel arrays for related data
@@ -1179,6 +1260,10 @@ Before submitting any code changes, verify:
 - Use `str.format()` for complex formatting with placeholders
 - Use `str.tostring()` with format constants: `format.volume`, `format.currency`, `format.percent`
 - Use `math.round()` before formatting for decimal precision control
+- Triple-quoted multiline string literals (`"""..."""`) are VALID Pine v6 —
+  each code line becomes a text line (newlines inserted automatically, leading
+  indentation included literally); strings may hold up to 40,960 characters.
+  Do not flag them as syntax errors in review.
 
 ### Error Handling
 - Always handle `na` values with conditional checks
@@ -1197,5 +1282,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-04-10
+**Last Updated**: 2026-07-24
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`

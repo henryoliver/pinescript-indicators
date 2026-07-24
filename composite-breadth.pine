@@ -65,10 +65,15 @@ const color NORD15 = #B48EAD
 // requests, calculations, color prep, and plot-ready outputs.
 // ═════════════════════════════════════════════════════════════════════════════
 // One input group per layer so the settings panel mirrors the architecture:
-// engine groups first (Market/Weights/Signal), then each independent context
-// layer, then the pure-display groups. Every context layer is additive —
-// none of them touch the weighted sum, the consensus votes, or the EMAs —
-// and each can be disabled without affecting the composite.
+// Market (the one decision that re-routes every feed) first, then the
+// composite line's display config, then the engine groups (Weights/Signal),
+// then each independent context layer, then the pure-display groups. Every
+// context layer is additive — none of them touch the weighted sum, the
+// consensus votes, or the EMAs — and each can be disabled without affecting
+// the composite. Defaults doctrine (2026-07-24): the composite + signal pair
+// + zero line + time-of-day dimming ship ON; every context layer, marker
+// set, and other display extra ships OFF — opt in per chart.
+const string GROUP_COMPOSITE_BREADTH_LINE    = "🌊 Composite"
 const string GROUP_COMPOSITE_BREADTH_MARKET  = "🏛️ Market"
 const string GROUP_COMPOSITE_BREADTH_WEIGHTS = "⚖️ Weights"
 const string GROUP_COMPOSITE_BREADTH_SIGNAL  = "🧮 Signal"
@@ -173,6 +178,60 @@ string compositeBreadthMarket = input.string(
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
+// ─── Composite line ───────────────────────────────────────────────────────────
+// The composite line's own display config, first in the panel. Two color
+// modes: the consensus gradient (magnitude gradient through neutral grey +
+// agreement rendered as opacity — the 2026-07-13 volatility-rework rendering)
+// and a plain solid color for a minimal single-hue read. The two dim layers
+// (consensus + time-of-day) are gradient-mode features: solid means solid.
+bool compositeBreadthShowCompositeLine = input.bool(
+     defval = true,
+     title = "Show Composite Line",
+     tooltip = "Show/hide the composite line itself. DISPLAY-ONLY by necessity — the composite is the engine, not a layer: the signal legs, persistence state, markers, and every alert keep computing off the hidden line (e.g. hide it to read the pane as a pure signal-pair chart).",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+string compositeBreadthLineColorMode = input.string(
+     defval = "Consensus Gradient",
+     title = "Line Color Mode",
+     options = ["Consensus Gradient", "Solid"],
+     tooltip = "Consensus Gradient (default): the line walks NORD-red → neutral grey → NORD-cyan with magnitude, fades toward transparent near zero, and dims further on component disagreement and during the lunch/MOC windows — vivid means strong AND agreed. Solid: one flat color (picker below), no gradient, no magnitude fade, no dimming — the minimal read when the composite shares a pane with other plots.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+color compositeBreadthLineSolidColor = input.color(
+     defval = NORD4,
+     title = "Solid Line Color",
+     tooltip = "Line color used verbatim when the color mode is Solid — the picker owns hue AND opacity, nothing is baked on top. Ignored in Consensus Gradient mode.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+int compositeBreadthLineWidth = input.int(
+     defval = 3,
+     title = "Line Width",
+     minval = 1,
+     maxval = 10,
+     tooltip = "Composite line width in pixels.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+bool compositeBreadthShowTimeOfDayDim = input.bool(
+     defval = true,
+     title = "Time-of-Day Dimming",
+     tooltip = "Dim the composite line during the two structurally low-information windows: the lunch trough (12:00–13:30 ET — intraday volume/volatility minimum, VWAP-algo autopilot) and the MOC window (15:45–16:00 ET — market-on-close rebalancing contaminates the internals; CUMTICK is frozen and TICK extremes are suppressed there regardless of this toggle). Visual only: the composite math is unchanged, the dimmer line just reads as \"lower confidence now\". Gradient mode only.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+int compositeBreadthConsensusDimStrength = input.int(
+     defval = 45,
+     title = "Consensus Dim Strength",
+     minval = 0,
+     maxval = 90,
+     step = 5,
+     tooltip = "Extra line transparency at maximum component disagreement — consensus renders as OPACITY, not as a multiplier on the line (the old multiplier rescaled the whole line 30-70% every time one component's sign flickered). (1 − consensus) × this is added to the line's transparency: full agreement = vivid, split = pale. 0 turns consensus dimming off entirely. Stacks with time-of-day dimming, capped at 95 — lower one of the two if the lunch-window line goes too faint during disagreement. Gradient mode only.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
 // ─── Weights (30/25/20/25 = VOLD/ADD/PCTABOVEVWAP/CUMTICK) ────────────────────
 // Research synthesis: TRIN is a non-independent transformation of VOLD+ADD so
 // adding it would double-count. VOLD and ADD are correlated siblings (net
@@ -240,44 +299,102 @@ float compositeBreadthCumTickWeight = input.float(
  )
 
 // ─── Signal / smoothing ───────────────────────────────────────────────────────
-bool compositeBreadthShowSignalLine = input.bool(
+// Signal PAIR (2026-07-24 rework of the single signal line): a fast trigger
+// MA and a slow baseline MA on the smoothed composite, both session-
+// reseeding. Defaults = 10-minute EMA / 20-minute SMA — the "9/20 setup"
+// anchored in MINUTES, with the fast leg nudged 9 → 10 so it divides the
+// 2-MINUTE bar exactly (this indicator lives on a dedicated 2-min internals
+// chart — Barry's documented practice: "I like two-minute bars … that's
+// what I use on this"): on 2-min the pair renders as 5 EMA / 10 SMA bars
+// exactly, on 1-min as 10 EMA / 20 SMA (the classic pair, one tick slower),
+// on 3-min as ~3 EMA / 7 SMA (almost exactly Raschke 3/10-oscillator
+// geometry). The ~2:1 fast:slow ratio matches the
+// canonical MA pair applied to breadth rather than price — McClellan's
+// 19/39 EMA oscillator (2.05) and MACD's 12/26 (2.17) — and the EMA-fast /
+// SMA-slow mix is the trigger-vs-structure split, not folklore: an EMA lags
+// ~1/3 of its length (early trigger), an SMA lags half (smoother,
+// harder-to-whipsaw baseline). Bar-count lengths were rejected because a
+// 20-BAR SMA on the 3-min chart = 60 minutes of post-09:30 convergence —
+// the entire prime open window burned on warmup.
+bool compositeBreadthShowSignalFast = input.bool(
      defval = true,
-     title = "Show Signal Line",
-     tooltip = "Smoothed reference line — moving average of the smoothed composite (fed from the same series that's plotted, so divergences read true). Composite above signal = upward momentum building; composite below signal = downward. Toggling OFF turns the signal fully off — the average is not computed and the cross alerts go silent.",
+     title = "Show Fast Signal Line",
+     tooltip = "FAST leg of the signal pair — the trigger line on the smoothed composite (fed from the same series that's plotted, so crosses and divergences read true). Toggling OFF turns the leg fully off — not computed, and the fast-vs-slow cross alerts go silent. The slow leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
-string compositeBreadthSignalType = input.string(
-     defval = "SMA",
-     title = "Signal Type",
-     options = ["SMA", "EMA"],
-     tooltip = "Moving-average type for the signal line. SMA (default): plain rolling mean of the last N display bars — every bar in the window weighs the same, so the reference reads as \"where has the composite been over the last leg\". EMA: exponentially weighted — hugs the line tighter and turns earlier, at the cost of more lunch-chop crosses. Both reseed at every session open (the SMA's window never reaches across the 09:30 boundary).",
+bool compositeBreadthShowSignalSlow = input.bool(
+     defval = true,
+     title = "Show Slow Signal Line",
+     tooltip = "SLOW leg of the signal pair — the baseline. Composite above/below it = momentum building that way (the legacy single-signal read). Toggling OFF turns the leg fully off — not computed, and BOTH the composite-vs-signal and fast-vs-slow cross alerts go silent. The fast leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
-int compositeBreadthSignalLength = input.int(
-     defval = 20,
-     title = "Signal Length",
-     minval = 1,
-     maxval = 100,
+string compositeBreadthSignalFastType = input.string(
+     defval = "EMA",
+     title = "Fast Type",
+     options = ["EMA", "SMA"],
+     tooltip = "Moving-average type for the FAST leg. EMA (default): exponentially weighted — hugs the composite tighter and turns earlier, the trigger line. SMA: plain rolling mean of the leg's window. Both reseed at every session open (a window never reaches across the 09:30 boundary).",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+int compositeBreadthSignalFastMinutes = input.int(
+     defval = 10,
+     title = "Fast Length (minutes)",
+     minval = 2,
+     maxval = 120,
      step = 1,
-     tooltip = "Period (in BARS) for the signal line, SMA or EMA per the type above. Fed from the smoothed display line so signal vs composite is internally consistent. Reseeds at every session open after a brief warmup (time-anchored, so it works on RTH-only and extended-hours charts alike) — crosses read against fresh state rather than carrying over from the prior session. Default 20 follows Ehlers' half-cycle rule for crossover pairs: the 3-EMA display vs a 20-length signal tunes to ~40-minute directional legs on a 2-min chart, squarely inside the 30–120 min swings this composite ratifies. Drop toward 9 for a fast momentum/hook read (~18-minute legs — viable since the line is the smooth unsqueezed stance, but expect lunch-chop crosses); don't go far above 25 — a 195-bar RTH session can't converge much more. NOTE: the length is in BARS, so on a 5-min chart 9 already tunes to ~45-minute legs.",
+     tooltip = "FAST leg window in MINUTES — converted to a bar count from the chart timeframe (5 bars on the 2-min internals chart, 10 on 1-min, 3 on 3-min) so the leg keeps its meaning on every chart the pair is traded on. Default 10 is the classic 9-minute trigger nudged up one so it divides the 2-minute bar exactly — the input reads exactly what plots.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
-color compositeBreadthSignalLineColor = input.color(
-     defval = NORD3,
-     title = "Signal Line Color",
-     tooltip = "Color of the signal line (transparency supported via the picker).",
+color compositeBreadthSignalFastColor = input.color(
+     defval = color.new(color = NORD4, transp = 60),
+     title = "Fast Color",
+     tooltip = "Fast leg color — the picker owns hue and opacity. Default = NORD4 at 40% opacity, a ghost trigger that hugs the composite without competing with it.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
-int compositeBreadthSignalLineWidth = input.int(
-     defval = 4,
-     title = "Signal Line Width",
+int compositeBreadthSignalFastWidth = input.int(
+     defval = 1,
+     title = "Fast Width",
      minval = 1,
      maxval = 10,
-     tooltip = "Signal line width in pixels. Default 4 matches the composite line's weight so the pair reads as equals; drop to 1-2 for a subtler reference line.",
+     tooltip = "Fast leg line width in pixels — default 1 keeps the trigger visually lightest of the three lines.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+string compositeBreadthSignalSlowType = input.string(
+     defval = "SMA",
+     title = "Slow Type",
+     options = ["SMA", "EMA"],
+     tooltip = "Moving-average type for the SLOW leg. SMA (default): every bar in the window weighs the same, so the baseline reads as \"where has the composite been over the last leg\" — the smoother, harder-to-whipsaw structure line (Raschke's 3/10 deliberately uses the smoother SMA type for the same reason). EMA: turns earlier at the cost of more lunch-chop crosses.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+int compositeBreadthSignalSlowMinutes = input.int(
+     defval = 20,
+     title = "Slow Length (minutes)",
+     minval = 5,
+     maxval = 240,
+     step = 1,
+     tooltip = "SLOW leg window in MINUTES — converted to a bar count from the chart timeframe (10 bars on the 2-min internals chart, 20 on 1-min, 7 on 3-min). Default 20 pairs with the 10-minute fast leg at the 2:1 crossover geometry (McClellan 19/39, MACD 12/26) and is converged by ~09:50 after the session reseed on any of those charts.",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+color compositeBreadthSignalSlowColor = input.color(
+     defval = NORD3,
+     title = "Slow Color",
+     tooltip = "Slow leg color (transparency supported via the picker).",
+     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+ )
+
+int compositeBreadthSignalSlowWidth = input.int(
+     defval = 3,
+     title = "Slow Width",
+     minval = 1,
+     maxval = 10,
+     tooltip = "Slow leg line width in pixels — default 3 matches the composite's weight (the baseline reads as its equal) while the fast trigger stays lightest at 1.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
@@ -293,7 +410,7 @@ float compositeBreadthConsensusDeadband = input.float(
 
 // ─── TICK context (Barry-aligned) ─────────────────────────────────────────────
 bool compositeBreadthTickShowExtremes = input.bool(
-     defval = true,
+     defval = false,
      title = "Show TICK Extreme Markers",
      tooltip = "Plot a small triangle above/below the composite line — in the bullish/bearish marker colors (up-extreme = bull color above the line, down-extreme = bear color below) — on the bar where the TICK feed's intrabar HIGH/LOW first reaches the configured extreme threshold (±985 default). Detection reads the raw bar high/low, not the close — Barry's ±1000 zones are momentary touches that a 2-min close routinely misses by hundreds of points. Up-triangle = TICK extreme high, down-triangle = TICK extreme low. Per Barry's method: extremes signal exhaustion, NOT continuation — wait for the next cycle high/low on price after an extreme appears. Suppressed 15:45–16:00 (MOC rebalancing spikes). Toggling OFF turns the layer fully off — detection, hold-the-zero-line test, markers, and alerts.",
      group = GROUP_COMPOSITE_BREADTH_TICK
@@ -351,7 +468,7 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
 //   3. TREND-DAY TELL — extreme intrabar TICK inside the first hour with ADD
 //      and VOLD agreeing is a backtested early trend-day identifier.
 bool compositeBreadthShowStatusBadge = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Session Status Badge",
      tooltip = "Single-cell table (position and text size set below) with the session persistence + regime read: current side of zero (▲/▼), percent of session bars spent on that side, how long the current side has been held (minutes), the opening-volume regime ratio, the VOLD >30d flag (today's up/down volume difference pushed beyond its typical 30-day session extreme; sticky for the session), the consensus dissent readout, the PCCE options-sentiment stretch, and the Lowry 90% state (developing flags + capitulation arm with its age). This is the at-a-glance confirmation readout — per Steenbarger, a composite that has HELD one side all session is the trend-day signature; the instantaneous level is not. OFF by default; the underlying persistence state still computes (it drives the flip and early-shift alerts).",
      group = GROUP_COMPOSITE_BREADTH_BADGE
@@ -376,7 +493,7 @@ int compositeBreadthStatusBadgeTextSize = input.int(
  )
 
 bool compositeBreadthShowEarlyShift = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Early-Shift Markers",
      tooltip = "Diamond in the bullish/bearish marker colors when CUMTICK (the leading component) has dissented against an established composite stance for the dissent window (20 min) — breadth rotating under the trend before the zero cross. One event per rollover: re-arming needs sustained re-agreement (half the window). Markers auto-hide on trend days, where counter-trend context is continuation fuel (Raschke) — three mute legs: opening-volume expansion regime, a fired TD tell, or the realized-persistence signature (dwell-share input below). The mute is display-only and the alerts still fire. Toggling this input OFF, however, turns the layer fully off: dissent engine, markers, and alerts.",
      group = GROUP_COMPOSITE_BREADTH_PERSIST
@@ -403,7 +520,7 @@ float compositeBreadthPersistFlipMinutes = input.float(
  )
 
 bool compositeBreadthUseOpenVolRegime = input.bool(
-     defval = true,
+     defval = false,
      title = "Opening-Volume Regime (Raschke)",
      tooltip = "Classify each session by its first-30-minute volume (the market's TVOL print at the 30-min mark) against a trailing 10-session mean. Raschke's number-one day-type criterion, and the regime that decides TICK-extreme interpretation: on GOOD-volume days extremes are momentum/continuation (\"you want to use the TICKS as a momentum indicator\"); on LIGHT-volume days extremes coincide with price extremes and are fade-friendly. Drives the badge regime readout and the expansion-day MUTE of the early-shift/divergence markers (counter-trend context is continuation fuel on expansion days; their alerts still fire). Needs ~10 sessions of chart history to seed the baseline.",
      group = GROUP_COMPOSITE_BREADTH_REGIME
@@ -430,7 +547,7 @@ float compositeBreadthOpenVolLightRatio = input.float(
  )
 
 bool compositeBreadthShowTrendTell = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Trend-Day Tell Marker",
      tooltip = "TD label in the bullish/bearish marker colors on the composite line when, between minute 10 and minute 60 of the session, the TICK feed prints an intrabar extreme beyond the tell threshold WHILE both VOLD and ADD confidences agree with its direction. Backtested third-party (TOS Indicators, 2014–2024): ~70% trend-day hit rate on the TICK extreme alone, >80% with ADD/VOLD agreement; Steenbarger cites the same early-TICK tell independently. Fires at most ONCE per session — it is a day-type classification, not a repeating signal. Toggling OFF turns the layer fully off — evaluation and alerts included.",
      group = GROUP_COMPOSITE_BREADTH_TELL
@@ -447,7 +564,7 @@ float compositeBreadthTrendTellThreshold = input.float(
  )
 
 bool compositeBreadthShowLastHourGate = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Last-Hour Continuation Marker",
      tooltip = "LH label in the bullish/bearish marker colors at 15:00 ET when the first-half-hour breadth verdict, the 14:30-15:00 breadth slope, and the current stance all point the same way ON AN EXPANSION-REGIME DAY — the Gao et al. (JFE 2018) intraday-momentum pattern: the first half-hour predicts the last half-hour, the 14:30-15:00 window adds to it, and the effect concentrates on high-volatility/high-volume days. Reads as a continuation BIAS for 15:30-16:00 — hold with-trend positions through the close rather than fading strength — not an entry signal (~75% of the raw effect decayed post-2013; the regime gate is what remains). At most one per session. Requires the Opening-Volume Regime layer ON (the expansion gate is the paper's conditioning). Toggling OFF turns the gate fully off — evaluation and alerts.",
      group = GROUP_COMPOSITE_BREADTH_TELL
@@ -458,7 +575,7 @@ bool compositeBreadthShowLastHourGate = input.bool(
 // calculation — zero cost to the composite. Never a weighted component (see
 // the constants-block note for the research verdict).
 bool compositeBreadthPcceEnabled = input.bool(
-     defval = true,
+     defval = false,
      title = "PCCE Options Sentiment Layer",
      tooltip = "Adds the Cboe EQUITY-ONLY put/call ratio (USI:PCCE — verified printing live intraday on TradingView, ~every 2-min bar) as an alert-grade CONTEXT layer: a stretch read on the status badge and an options-flow divergence event vs the composite stance. Equity-only is the one put/call family that partially escapes 0DTE index contamination (0DTE = 40-62% of SPX volume). Deliberately NOT a weighted component: no intraday-leading evidence for aggregate put/call survived adversarial verification (2026-07-14 research) — this is context, weighted accordingly at zero. Disabling removes the request.security call entirely.",
      group = GROUP_COMPOSITE_BREADTH_PCCE
@@ -475,7 +592,7 @@ float compositeBreadthPcceStretchThreshold = input.float(
  )
 
 bool compositeBreadthPcceShowDivergence = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Divergence Markers",
      tooltip = "SQUARE in the bullish/bearish marker colors when PCCE has been grinding AGAINST an established composite stance: puts accumulating under a bullish stance (bearish divergence, bear-color square above the line) or put pressure unwinding under a bearish stance (bullish divergence, bull-color square below). The square shape distinguishes the options-flow layer from the breadth early-shift diamonds. Requires the stance held for at least the persistent-flip minimum AND the PCCE slope dissenting for the dissent window (30 min) — the 2026-07-10 pattern (puts building all afternoon under a rally, dump next day) made mechanical. One event per episode: re-arming needs sustained re-agreement (half the window). Markers auto-hide on trend days (counter-trend context is continuation fuel there — Raschke) via the same three-leg mute as the early-shift diamonds: expansion regime, fired TD tell, or the dwell-share persistence signature; the mute is display-only and the alerts still fire. Toggling this input OFF turns the divergence engine fully off — counting and alerts — while the stretch/badge read stays with the layer toggle. PCCE is contrarian-scaled: rising = bearish pressure, so \"dissent\" means the ratio trending the SAME direction as the stance sign.",
      group = GROUP_COMPOSITE_BREADTH_PCCE
@@ -485,7 +602,7 @@ bool compositeBreadthPcceShowDivergence = input.bool(
 // Fully independent: disabling removes the two volume-feed requests and all
 // derived state — zero cost. Alert/badge layer only, never a weight.
 bool compositeBreadthLowryEnabled = input.bool(
-     defval = true,
+     defval = false,
      title = "Lowry 90% Days Layer",
      tooltip = "Paul Desmond's capitulation method (2002 Dow Award) as a session-scale state machine on USI:UPVOL/DNVOL (verified live intraday): a 90% DOWNSIDE day (panic selling) ARMS the layer; the buy signal fires ONLY on a follow-through 90% upside day — or two consecutive 80% upside days — because panic selling alone never produces the reversal (snap-back rallies of 2-7 days routinely follow). Upside days where only the volume leg hits 90% without breadth agreement are documented SHORT-LIVED-RALLY traps and fire a warning instead. Desmond's second leg is points-gained/lost, which has no TradingView feed — the ADD confidence stands in (proxy, undocumented by Lowry). Evidence is daily-resolution 1933-2002 with modest standalone precision: treat every event as context, never as an entry.",
      group = GROUP_COMPOSITE_BREADTH_LOWRY
@@ -528,23 +645,6 @@ bool compositeBreadthShowZeroLine = input.bool(
      group = GROUP_COMPOSITE_BREADTH_DISPLAY
  )
 
-bool compositeBreadthShowTimeOfDayDim = input.bool(
-     defval = true,
-     title = "Time-of-Day Dimming",
-     tooltip = "Dim the composite line during the two structurally low-information windows: the lunch trough (12:00–13:30 ET — intraday volume/volatility minimum, VWAP-algo autopilot) and the MOC window (15:45–16:00 ET — market-on-close rebalancing contaminates the internals; CUMTICK is frozen and TICK extremes are suppressed there regardless of this toggle). Visual only: the composite math is unchanged, the dimmer line just reads as \"lower confidence now\".",
-     group = GROUP_COMPOSITE_BREADTH_DISPLAY
- )
-
-int compositeBreadthConsensusDimStrength = input.int(
-     defval = 45,
-     title = "Consensus Dim Strength",
-     minval = 0,
-     maxval = 90,
-     step = 5,
-     tooltip = "Extra line transparency at maximum component disagreement — consensus renders as OPACITY, not as a multiplier on the line (the old multiplier rescaled the whole line 30-70% every time one component's sign flickered). (1 − consensus) × this is added to the line's transparency: full agreement = vivid, split = pale. 0 turns consensus dimming off entirely. Stacks with time-of-day dimming, capped at 95 — lower one of the two if the lunch-window line goes too faint during disagreement.",
-     group = GROUP_COMPOSITE_BREADTH_DISPLAY
- )
-
 color compositeBreadthBullMarkerColor = input.color(
      defval = color.new(color = NORD8, transp = 40),
      title = "Bullish Marker Color",
@@ -576,7 +676,7 @@ bool compositeBreadthShowExtendedLevels = input.bool(
  )
 
 bool compositeBreadthShowSessionDivider = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Session Dividers",
      tooltip = "Vertical lines at each NYSE RTH session's OPEN and CLOSE so trade-day boundaries are obvious at a glance — without them, back-to-back sessions blur together. Both dividers are time-anchored BETWEEN bars: the open divider sits in the gap before the 09:30 bar (same edge that resets every piece of session state — EMAs, cumTick, VOLD extremes, feed-health counters) and the close divider in the gap after the last RTH bar, so neither one covers the first or last bar of the day even at full width. On an RTH-only chart the two boundaries coincide (16:00 and the next 09:30 share one gap) and a single divider is drawn there. Color, width, and style configurable below.",
      group = GROUP_COMPOSITE_BREADTH_DIVIDER
@@ -751,6 +851,10 @@ int compositeBreadthGaoFirstMarkBars       = math.max(1, math.round(number = CBI
 int compositeBreadthGaoTwelfthStartBars    = math.max(2, math.round(number = CBI_GAO_TWELFTH_START_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthGaoTwelfthEndBars      = math.max(3, math.round(number = CBI_GAO_TWELFTH_END_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthSignalAlertGateBars = math.max(1, math.round(number = CBI_SIGNAL_ALERT_GATE_MINUTES * 60.0 / timeframe.in_seconds()))
+// Signal pair lengths are minutes-anchored like every other window here —
+// floor 2 because a 1-bar MA is just the series itself.
+int compositeBreadthSignalFastBars      = math.max(2, math.round(number = compositeBreadthSignalFastMinutes * 60.0 / timeframe.in_seconds()))
+int compositeBreadthSignalSlowBars      = math.max(2, math.round(number = compositeBreadthSignalSlowMinutes * 60.0 / timeframe.in_seconds()))
 int compositeBreadthTickBiasWindowBars  = math.max(10, math.round(number = CBI_TICK_BIAS_DAYS * 390.0 * 60.0 / timeframe.in_seconds()))
 int compositeBreadthOpenVolWindowBars   = math.max(1, math.round(number = CBI_OPEN_VOL_WINDOW_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthTrendTellStartBars  = math.max(1, math.round(number = CBI_TREND_TELL_START_MINUTES * 60.0 / timeframe.in_seconds()))
@@ -966,6 +1070,25 @@ f_compositeBreadthClampedRatio(float numerator, float denominator) =>
 f_compositeBreadthEwmaStep(float previous, float sample, float length) =>
     float compositeBreadthEwmaAlpha = 2.0 / (length + 1.0)
     na(previous) ? sample : compositeBreadthEwmaAlpha * sample + (1.0 - compositeBreadthEwmaAlpha) * previous
+
+// One signal-MA step, shared by the fast and slow legs. PURE like the EWMA
+// helper — all state (the SMA window array and the previous EMA value) lives
+// at the call site, so the helper stays safe inside conditional scopes. SMA
+// is a manual rolling window rather than ta.sma for the same reason as the
+// legacy single signal: a ta.* call can't reseed at the session boundary,
+// and on an RTH-only chart it would silently average yesterday's close into
+// today's open. The window grows toward the configured length after each
+// reseed, mirroring the EMA's expanding-convergence character at the open.
+f_compositeBreadthSignalStep(array<float> window, float previous, string maType, int lengthBars, float sample) =>
+    float compositeBreadthSignalResult = na
+    if maType == "SMA"
+        array.push(id = window, value = sample)
+        if array.size(id = window) > lengthBars
+            array.shift(id = window)
+        compositeBreadthSignalResult := array.avg(id = window)
+    else
+        compositeBreadthSignalResult := f_compositeBreadthEwmaStep(previous = previous, sample = sample, length = lengthBars)
+    compositeBreadthSignalResult
 
 // Hysteresis consensus vote: a component votes +1/−1 only after its
 // confidence leaves the ±deadband, holds that vote through the band, and
@@ -1343,9 +1466,9 @@ float compositeBreadthLineValue = na(compositeBreadthDirectional) ? na :
      compositeBreadthDirectional * CBI_SCALE_MAX
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🌊 DISPLAY + SIGNAL EMA
+// 🌊 DISPLAY + SIGNAL PAIR
 // Display EMA is short (3) and tames per-bar jitter so intraday swings on the
-// composite read cleanly. The signal average is fed FROM the display line (not
+// composite read cleanly. Both signal legs are fed FROM the display line (not
 // from the raw composite) so the visible composite-vs-signal relationship is
 // internally consistent — divergences read true rather than reflecting two
 // different lag profiles.
@@ -1369,52 +1492,47 @@ if not na(compositeBreadthLineValue)
 else
     compositeBreadthDisplayLine := na
 
-// Single fixed signal length all session. The old "adaptive (faster at
-// open)" feature — length 8 for the first hour — was removed on research:
-// clock-scheduled EMA speed-ups have no precedent anywhere in the adaptive-MA
-// literature (KAMA/VIDYA/MAMA all adapt to measured market properties, never
-// to the clock), and the 09:30–10:00 window is exactly where a FASTER signal
-// does the most damage — the internals are still seeding off the opening
-// auction, so extra crosses there are artifacts, not information. The
-// event-time insight the feature was reaching for ("an opening bar carries
-// more information than a lunch bar") is real, but the correct response for
-// a confirmation instrument is to gate the cross ALERTS at the open (below),
-// not to speed the EMA up into the noise.
-// SMA vs EMA: both reseed on the 09:30 edge and share the same warmup gate,
-// so switching types never changes the session-reset semantics. The SMA is a
-// manual rolling window (array of the last N display values since the seed)
-// rather than ta.sma — a ta.* call can't reseed at the session boundary, and
-// on an RTH-only chart it would silently average yesterday's close into
-// today's open. The window grows toward the configured length after each
-// reseed, mirroring the EMA's expanding-convergence character at the open.
-var float compositeBreadthSignalLineValue = na
+// Signal PAIR — fast trigger + slow baseline, one state machine each, both
+// stepped by the shared helper. Both legs reseed on the 09:30 edge and share
+// the warmup gate, so switching a leg's type never changes the session-reset
+// semantics. Lengths arrive as minutes-derived bar counts (see the derived
+// calibration), so the pair keeps one meaning on the 1-min and 3-min charts
+// traded side by side. The old "adaptive (faster at open)" feature stays
+// dead for the same research reasons as before: clock-scheduled MA speed-ups
+// have no precedent in the adaptive-MA literature, and the 09:30–10:00
+// window is exactly where a faster signal does the most damage — the cross
+// ALERTS are gated at the open instead (below).
+var float compositeBreadthSignalFastValue = na
+var float compositeBreadthSignalSlowValue = na
 var int compositeBreadthSignalSeedCount = 0
-var array<float> compositeBreadthSignalWindow = array.new<float>()
+var array<float> compositeBreadthSignalFastWindow = array.new<float>()
+var array<float> compositeBreadthSignalSlowWindow = array.new<float>()
 if compositeBreadthSessionJustOpened
-    compositeBreadthSignalLineValue := na
+    compositeBreadthSignalFastValue := na
+    compositeBreadthSignalSlowValue := na
     compositeBreadthSignalSeedCount := 0
-    array.clear(id = compositeBreadthSignalWindow)
-if compositeBreadthShowSignalLine and not na(compositeBreadthDisplayLine)
+    array.clear(id = compositeBreadthSignalFastWindow)
+    array.clear(id = compositeBreadthSignalSlowWindow)
+if (compositeBreadthShowSignalFast or compositeBreadthShowSignalSlow) and not na(compositeBreadthDisplayLine)
     compositeBreadthSignalSeedCount += 1
     if compositeBreadthSignalSeedCount > CBI_SIGNAL_WARMUP_BARS
-        if compositeBreadthSignalType == "SMA"
-            array.push(id = compositeBreadthSignalWindow, value = compositeBreadthDisplayLine)
-            if array.size(id = compositeBreadthSignalWindow) > compositeBreadthSignalLength
-                array.shift(id = compositeBreadthSignalWindow)
-            compositeBreadthSignalLineValue := array.avg(id = compositeBreadthSignalWindow)
-        else
-            compositeBreadthSignalLineValue := f_compositeBreadthEwmaStep(previous = compositeBreadthSignalLineValue, sample = compositeBreadthDisplayLine, length = compositeBreadthSignalLength)
+        if compositeBreadthShowSignalFast
+            compositeBreadthSignalFastValue := f_compositeBreadthSignalStep(window = compositeBreadthSignalFastWindow, previous = compositeBreadthSignalFastValue, maType = compositeBreadthSignalFastType, lengthBars = compositeBreadthSignalFastBars, sample = compositeBreadthDisplayLine)
+        if compositeBreadthShowSignalSlow
+            compositeBreadthSignalSlowValue := f_compositeBreadthSignalStep(window = compositeBreadthSignalSlowWindow, previous = compositeBreadthSignalSlowValue, maType = compositeBreadthSignalSlowType, lengthBars = compositeBreadthSignalSlowBars, sample = compositeBreadthDisplayLine)
 else
-    compositeBreadthSignalLineValue := na
+    compositeBreadthSignalFastValue := na
+    compositeBreadthSignalSlowValue := na
     compositeBreadthSignalSeedCount := 0
-    array.clear(id = compositeBreadthSignalWindow)
+    array.clear(id = compositeBreadthSignalFastWindow)
+    array.clear(id = compositeBreadthSignalSlowWindow)
 
-// Cross-alert gate: composite-vs-signal cross alerts stay muted for the
-// first CBI_SIGNAL_ALERT_GATE_MINUTES of each session (30 min default) —
-// auction-seeding noise plus a freshly reseeded 20-length signal make early
-// crosses mostly artifacts, and the gate window doubles as proper
-// convergence time for the signal (the 5-bar warmup alone under-seeds a
-// 20-length average, SMA or EMA alike).
+// Cross-alert gate: every signal cross alert (composite-vs-slow AND
+// fast-vs-slow) stays muted for the first CBI_SIGNAL_ALERT_GATE_MINUTES of
+// each session (30 min default) — auction-seeding noise plus freshly
+// reseeded legs make early crosses mostly artifacts, and the gate window
+// doubles as proper convergence time for the slow leg (the 5-bar warmup
+// alone under-seeds a 20-minute average, SMA or EMA alike).
 // Level-based alerts (±50 impulse, VOLD extremes, TICK extremes) are NOT
 // gated — extreme LEVELS at the open are genuine trend-day information;
 // it's specifically the crosses that are noise there.
@@ -2144,10 +2262,15 @@ if compositeBreadthShowLastHourGate and barstate.isconfirmed and not na(composit
 //      pale instead of collapsing the line.
 //   2. Time-of-day dimming during the lunch trough and the MOC window — the
 //      two structurally low-information stretches of the session.
+// Solid mode short-circuits the whole stack: the input color is used
+// verbatim (the picker owns hue and opacity) — no gradient, no magnitude
+// fade, no consensus or time-of-day dimming. Consensus still computes (it
+// gates the impulse alerts and feeds the badge); it just stops rendering.
 bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
 float compositeBreadthExtraTransp = (1.0 - compositeBreadthConsensus) * compositeBreadthConsensusDimStrength +
      (compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow ? CBI_TIME_DIM_EXTRA_TRANSP : 0)
-color compositeBreadthLineColor = f_compositeBreadthProgressiveColor(
+color compositeBreadthLineColor = compositeBreadthLineColorMode == "Solid" ? compositeBreadthLineSolidColor :
+     f_compositeBreadthProgressiveColor(
      value = compositeBreadthDisplayLine,
      scale = CBI_OPACITY_ANCHOR,
      minTransp = CBI_SIGNAL_MIN_TRANSP,
@@ -2225,8 +2348,9 @@ if compositeBreadthShowSessionDivider and (compositeBreadthSessionJustOpened or 
      )
 
 // ─── Composite + signal lines ─────────────────────────────────────────────────
-plot(series = compositeBreadthDisplayLine, title = "Composite", color = compositeBreadthLineColor, linewidth = 4)
-plot(series = compositeBreadthShowSignalLine ? compositeBreadthSignalLineValue : na, title = "Signal", color = compositeBreadthSignalLineColor, linewidth = compositeBreadthSignalLineWidth)
+plot(series = compositeBreadthShowCompositeLine ? compositeBreadthDisplayLine : na, title = "Composite", color = compositeBreadthLineColor, linewidth = compositeBreadthLineWidth)
+plot(series = compositeBreadthShowSignalFast ? compositeBreadthSignalFastValue : na, title = "Signal Fast", color = compositeBreadthSignalFastColor, linewidth = compositeBreadthSignalFastWidth)
+plot(series = compositeBreadthShowSignalSlow ? compositeBreadthSignalSlowValue : na, title = "Signal Slow", color = compositeBreadthSignalSlowColor, linewidth = compositeBreadthSignalSlowWidth)
 
 // ─── Marker color standard (2026-07-15 legibility rework) ────────────────────
 // DIRECTION IS ALWAYS THE COLOR, THE LAYER IS ALWAYS THE SHAPE. The old
@@ -2445,8 +2569,13 @@ if barstate.islast
 // range" (exhaustion context). Doctrine (2026-07-16): a layer toggle turns
 // the layer FULLY off — computation and alerts included; only the
 // regime-driven marker mute is display-only.
-alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses above Signal", message = "Composite breadth crossed above signal — upward momentum building.")
-alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalLineValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses below Signal", message = "Composite breadth crossed below signal — downward momentum building.")
+alertcondition(condition = ta.crossover (source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalSlowValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses above Signal", message = "Composite breadth crossed above the slow signal — upward momentum building.")
+alertcondition(condition = ta.crossunder(source1 = compositeBreadthDisplayLine, source2 = compositeBreadthSignalSlowValue) and compositeBreadthSignalCrossArmed, title = "Composite crosses below Signal", message = "Composite breadth crossed below the slow signal — downward momentum building.")
+// Fast-vs-slow pair cross — the momentum cross of the 10/20-minute pair, the
+// signal-pair rework's headline event. Same open gate as the composite
+// crosses: it's specifically the CROSSES that are auction noise early.
+alertcondition(condition = ta.crossover (source1 = compositeBreadthSignalFastValue, source2 = compositeBreadthSignalSlowValue) and compositeBreadthSignalCrossArmed, title = "Signal fast crosses above slow", message = "Fast signal crossed above slow — breadth momentum turning up.")
+alertcondition(condition = ta.crossunder(source1 = compositeBreadthSignalFastValue, source2 = compositeBreadthSignalSlowValue) and compositeBreadthSignalCrossArmed, title = "Signal fast crosses below slow", message = "Fast signal crossed below slow — breadth momentum turning down.")
 // The ±50 impulse alerts carry a consensus gate (review fix 2026-07-14):
 // the old squeezed line made ±50 structurally unreachable during a split
 // vote, so "impulse" implicitly meant strong AND agreed. Removing the
