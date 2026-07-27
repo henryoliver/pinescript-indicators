@@ -46,7 +46,7 @@ const string GROUP_FIB = "🌀 Fibonacci"
 
 int fibStrengthSensitivity = input.int(defval = 5, title = "Strength Sensitivity", minval = 1, maxval = 20, tooltip = "How strong a swing must be before it becomes a Fibonacci anchor. Higher values use more important swing points.", group = GROUP_FIB)
 int fibAtrPeriod = input.int(defval = 10, title = "ATR Period", minval = 1, tooltip = "ATR lookback used to normalize the Fibonacci pivot deviation threshold.", group = GROUP_FIB)
-float fibAtrMultiplier = input.float(defval = 3.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier and the SOLE leg-quality filter: a new anchor is accepted only when the leg's percent move exceeds ATR-normalized percent × this multiplier (TradingView's official auto-fib construction). The old separate \"Minimum Leg ATR\" input was removed 2026-07-16 — it tested the same ATR-scaled quantity at a lower bar and could never reject anything this filter passed.", group = GROUP_FIB)
+float fibAtrMultiplier = input.float(defval = 5.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier and the SOLE leg-quality filter: a new anchor is accepted only when the leg's percent move exceeds ATR-normalized percent × this multiplier (TradingView's official auto-fib construction). The old separate \"Minimum Leg ATR\" input was removed 2026-07-16 — it tested the same ATR-scaled quantity at a lower bar and could never reject anything this filter passed.", group = GROUP_FIB)
 bool fibUseHighAndLow = input.bool(defval = false, title = "Use High And Low", tooltip = "When on, Fibonacci anchors use raw highs and lows. When off, they use close-based pivots for a cleaner structure read.", group = GROUP_FIB)
 
 var array<float> fibLevelPercents = array.from(-100.0, -76.4, -61.8, -50.0, -38.2, -23.6, 0.0, 23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0)
@@ -114,22 +114,25 @@ float fibLevelHundred = fibHasAnchors ? fibDownSwing ? fibAnchorLow : fibAnchorH
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
-// Projects every Fibonacci level to the right of the current bar. Weight drives
-// both the line width and style: key ratios solid, secondary dashed, minor
-// dotted.
+// Projects every Fibonacci level to the right of price: lines start one bar
+// after the last bar and either run to the right edge of the screen or stop
+// after a fixed length. Weight drives both the line width and style: key
+// ratios solid, secondary dashed, minor dotted.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_RENDER = "⚙️ Render"
+const string GROUP_LINES = "📏 Level Lines"
+const string GROUP_LABELS = "🏷️ Level Labels"
 
-bool renderShowLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the text labels for each Fibonacci level.", group = GROUP_RENDER)
-int renderLabelSize = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all Fibonacci labels.", group = GROUP_RENDER)
-int renderLabelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
-int renderLabelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
-int renderExtendBars = input.int(defval = 4, title = "Extend Bars (Left)", minval = 0, maxval = 500, tooltip = "How far left from the current bar Fibonacci levels start.", group = GROUP_RENDER)
+bool renderExtendRight = input.bool(defval = true, title = "Extend to Screen Edge", tooltip = "Extends every level line to the right edge of the screen. When off, lines stop after Line Length bars.", group = GROUP_LINES)
 // Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
-// the projection input stays at 400 to keep a safe margin from that limit.
-int renderRightBars = input.int(defval = 40, title = "Projection Right Bars", minval = 1, maxval = 400, tooltip = "How far right from the current bar Fibonacci levels project and labels sit.", group = GROUP_RENDER)
-color renderLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Level Color", tooltip = "Line color used by all Fibonacci levels.", group = GROUP_RENDER)
-color renderLabelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by Fibonacci labels.", group = GROUP_RENDER)
+// the future-side inputs stay at 400 to keep a safe margin from that limit.
+int renderLineLengthBars = input.int(defval = 40, title = "Line Length (Bars)", minval = 1, maxval = 400, tooltip = "How many bars the level lines run when Extend to Screen Edge is off.", group = GROUP_LINES)
+color renderLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Level Color", tooltip = "Line color used by all Fibonacci levels.", group = GROUP_LINES)
+
+bool renderShowLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the percent label for each Fibonacci level.", group = GROUP_LABELS)
+int renderLabelSize = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all Fibonacci labels.", group = GROUP_LABELS)
+int renderLabelOffsetBars = input.int(defval = 10, title = "Label Offset (Bars)", minval = 0, maxval = 400, tooltip = "How far right of the last bar the labels sit.", group = GROUP_LABELS)
+int renderLabelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts every label above its line by the chosen number of minimum ticks.", group = GROUP_LABELS)
+color renderLabelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by Fibonacci labels.", group = GROUP_LABELS)
 
 // Rendering refreshes once per BAR plus a self-heal path — not once per
 // tick. The projections only move when bar_index advances and the anchors
@@ -169,54 +172,37 @@ f_levelLineStyle(int levelWeight) =>
     levelWeight >= 3 ? line.style_solid : levelWeight == 2 ? line.style_dashed : line.style_dotted
 
 f_labelY(float levelPrice) =>
-    // Push labels away from price: above resistance levels, below support levels.
-    levelPrice + syminfo.mintick * renderLabelDistanceTicks * (levelPrice >= close ? 1.0 : -1.0)
+    levelPrice + syminfo.mintick * renderLabelDistanceTicks
 
 var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 
-// Drawings are created once and then moved in place on every refresh.
-// Color, width, style, and label text never change after creation (inputs and
-// level percents are constant per run), so only coordinates get updated. This
-// avoids delete/recreate churn for all lines and labels on every bar close.
-// Steady-state work throttle: between anchor changes the only thing a
-// refresh does is slide the 44-bar projection window right by one bar —
-// invisible bar to bar. The slide now runs every renderSlideBars bars
-// (10, clamped below half the right projection so price can never overtake
-// the window), while an ANCHOR change still redraws on its own bar. Cuts
-// the per-bar-close setter sweep to ~once per 10 bars without changing
-// what a human sees.
-var int lastSlideBar = na
-var float lastRenderedZero = na
-var float lastRenderedHundred = na
-int renderSlideBars = math.max(1, math.min(10, renderRightBars / 2))
+// Drawings are created once and then moved in place on every refresh (one
+// coordinate sweep per bar close — the stamp gate above keeps every other
+// tick at a single int compare). Color, width, style, extension, and label
+// text never change after creation (inputs and level percents are constant
+// per run), so only coordinates get updated — no delete/recreate churn, ever.
 if shouldRefreshRender and fibHasAnchors
     lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
     bool renderNeedsBuild = array.size(id = renderedLines) == 0
-    bool renderAnchorsChanged = fibLevelZero != lastRenderedZero or fibLevelHundred != lastRenderedHundred
-    bool renderSlideDue = na(lastSlideBar) or bar_index - lastSlideBar >= renderSlideBars
-    if renderNeedsBuild or renderAnchorsChanged or renderSlideDue
-        lastSlideBar := bar_index
-        lastRenderedZero := fibLevelZero
-        lastRenderedHundred := fibLevelHundred
-        int renderLeftBar = bar_index - renderExtendBars
-        int renderRightBar = bar_index + renderRightBars
-        int renderLabelBar = renderRightBar + renderLabelHorizontalAdjustBars
-        for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
-            float fibPercent = array.get(id = fibLevelPercents, index = fibIndex)
-            float fibPrice = f_roundToTick(rawPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01)
-            if renderNeedsBuild
-                int fibWeight = f_fibWeight(fibPercent = fibPercent)
-                line newLine = line.new(x1 = renderLeftBar, y1 = fibPrice, x2 = renderRightBar, y2 = fibPrice, xloc = xloc.bar_index, extend = extend.none, color = renderLevelColor, width = f_levelLineWidth(levelWeight = fibWeight), style = f_levelLineStyle(levelWeight = fibWeight))
-                array.push(id = renderedLines, value = newLine)
-                if renderShowLabels
-                    string fibLabelText = str.tostring(value = fibPercent, format = "#.##") + "%"
-                    label newLabel = label.new(x = renderLabelBar, y = f_labelY(levelPrice = fibPrice), text = fibLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_right)
-                    array.push(id = renderedLabels, value = newLabel)
-            else
-                line existingLine = array.get(id = renderedLines, index = fibIndex)
-                line.set_xy1(id = existingLine, x = renderLeftBar, y = fibPrice)
-                line.set_xy2(id = existingLine, x = renderRightBar, y = fibPrice)
-                if renderShowLabels
-                    label existingLabel = array.get(id = renderedLabels, index = fibIndex)
-                    label.set_xy(id = existingLabel, x = renderLabelBar, y = f_labelY(levelPrice = fibPrice))
+    int renderStartBar = bar_index + 1
+    int renderEndBar = renderStartBar + (renderExtendRight ? 1 : renderLineLengthBars)
+    int renderLabelBar = bar_index + renderLabelOffsetBars
+    for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
+        float fibPercent = array.get(id = fibLevelPercents, index = fibIndex)
+        float fibPrice = f_roundToTick(rawPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01)
+        if renderNeedsBuild
+            int fibWeight = f_fibWeight(fibPercent = fibPercent)
+            line newLine = line.new(x1 = renderStartBar, y1 = fibPrice, x2 = renderEndBar, y2 = fibPrice, xloc = xloc.bar_index, extend = renderExtendRight ? extend.right : extend.none, color = renderLevelColor, width = f_levelLineWidth(levelWeight = fibWeight), style = f_levelLineStyle(levelWeight = fibWeight))
+            array.push(id = renderedLines, value = newLine)
+            if renderShowLabels
+                string fibLabelText = str.tostring(value = fibPercent, format = "#.##") + "%"
+                label newLabel = label.new(x = renderLabelBar, y = f_labelY(levelPrice = fibPrice), text = fibLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_right)
+                array.push(id = renderedLabels, value = newLabel)
+        else
+            line existingLine = array.get(id = renderedLines, index = fibIndex)
+            line.set_xy1(id = existingLine, x = renderStartBar, y = fibPrice)
+            line.set_xy2(id = existingLine, x = renderEndBar, y = fibPrice)
+            if renderShowLabels
+                label existingLabel = array.get(id = renderedLabels, index = fibIndex)
+                label.set_xy(id = existingLabel, x = renderLabelBar, y = f_labelY(levelPrice = fibPrice))

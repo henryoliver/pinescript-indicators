@@ -35,7 +35,7 @@ const color NORD15 = #B48EAD
 
 // Non-breaking space (U+00A0) — regular spaces get collapsed in table cells,
 // NBSP survives, so it's the padding unit that keeps auto-sized columns stable.
-const string PAD_NBSP =" "
+const string PAD_NBSP = " "
 
 // Tick condition codes — precomputed at store time so the renderer doesn't need bid/ask.
 const int COND_MID          = 0
@@ -888,14 +888,15 @@ plot(series = blockTradesActive ? blockNetDelta     : 0, title = "Block Net Delt
 // ⚡ PERFORMANCE
 // Render the table only on the last bar, and clear it when tape mode is off.
 // ═════════════════════════════════════════════════════════════════════════════
-// Only render on the last bar, and — critically — only when the tick data
-// actually changed (or once per bar to seed layout/pro-flow). barstate.islast is
-// true on EVERY realtime tick, including quote/timer updates that add no new
-// print; re-rendering every cell on those was the profiler hot spot. A tickless
-// tick now matches neither branch, so the table simply persists untouched. The
-// pro-flow readout still refreshes on every new print and at each bar open
-// (tableLayoutInitialized resets at barstate.isnew).
-if barstate.islast and tapeEnabled and (lowerTfTicksChangedThisExec or not tableLayoutInitialized)
+// Render on EVERY last-bar execution — quote/timer ticks included. This is not
+// optional: table.cell changes made on an uncommitted realtime tick are ROLLED
+// BACK at the start of the next update, so a tick that skips the render leaves
+// the table showing its last COMMITTED snapshot (the last confirmed-bar render,
+// which on this plan is prints-stale because the LTF array is empty at the
+// confirmed tick). Gating the render on "tick data changed" made the table
+// flash between fresh rows and that stale snapshot — the repaint-every-tick
+// cost is the price of a visually stable intrabar table.
+if barstate.islast and tapeEnabled
     // Get current tick count
     int instTickCount = array.size(id = institutionalTicks)
     int retailTickCount = array.size(id = retailTicks)

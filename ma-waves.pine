@@ -630,27 +630,31 @@ if waveLiveFlatBroke and not na(cycleExtremeBar) and cycleExtremeBar <= waveLast
     waveLiveTrendDir := TrendDir.FLAT
 bool waveLivePreviewsReset = cycleZone != 0 and (waveLiveTrendDir != waveTrendDir or waveLiveFlatBroke or waveLivePreviewsRebirth)
 
-// ── %K-turn display latch (2026-07-16; unified same day — the var twin that
-// fed the hold while varip fed the draw was the disappearing-label bug's
-// last hiding place, so ONE varip latch now feeds display, hold, freeze,
-// and the classification gate alike):
-//   SHOW  — as soon as %K angles AGAINST the open cycle's side, tick-time
-//           (falling in a high half-cycle, rising in a low one; any turn,
-//           zone-independent — Henry's ruling).
-//   STICK — varip survives intrabar rollback: once shown, a %K un-turn can
-//           never hide the label. Reset only on the boundary's CONFIRMED
-//           tick (an intrabar %D cross that recedes must not clear it).
-// Accepted trade-off: an intrabar-only turn that recovers before the close
-// still shows — and can freeze/pin through the hold — while a reload,
-// which replays one execution per bar, may not reproduce it. Visibility
-// wins over strict replay fidelity, per the rule that what is shown must
-// persist.
-varip bool cycleKTurnShown = false
-if cycleStartedThisBar and barstate.isconfirmed
-    cycleKTurnShown := false
-bool cycleKAgainstCycle = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
-if cycleKAgainstCycle
-    cycleKTurnShown := true
+// ── %K-turn display gate (close-gated 2026-07-25, replacing the 2026-07-16
+// tick-time varip latch at Henry's ask — the same rework macd-waves got the
+// same day). ONE gate feeds display, hold, freeze, and the classification
+// block alike, so every live label type — number, F, and letter — first
+// shows through the identical check:
+//   SHOW  — only on a CONFIRMED close where %K angles AGAINST the open
+//           cycle's side (falling in a high half-cycle, rising in a low
+//           one). The turn must still be standing AT the close — an
+//           intrabar turn that recovers before the close never shows.
+//   HOLD  — once shown, shown for the rest of the half-cycle: post-show
+//           per-tick tracking is unchanged, the label keeps morphing live
+//           into the pin, and a later un-turn can't hide it. Reset only on
+//           the boundary's confirmed tick, where cycleZone has already
+//           flipped — a boundary close whose %K already angles against the
+//           NEW cycle re-opens the gate on the spot.
+// var + confirmed-tick writes only — nothing rolls back intrabar, and a
+// reload reproduces realtime exactly (the varip latch's reload caveat is
+// gone).
+var bool cycleKTurnShown = false
+if barstate.isconfirmed
+    if cycleStartedThisBar
+        cycleKTurnShown := false
+    bool cycleKCloseAgainstCycle = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
+    if cycleKCloseAgainstCycle
+        cycleKTurnShown := true
 
 // ── Live qualification + classification of the open half-cycle, judged on
 // the current extreme bar and re-evaluated as the extreme moves. The open
@@ -659,10 +663,10 @@ if cycleKAgainstCycle
 // one is not a wave three"). An extreme beyond the baseline without the
 // body = failed. A failed wave upgrades to its full number in place if a
 // deeper extreme bar commits the body — and downgrades back if a wick-only
-// bar takes the extreme. The whole block is gated on the %K latch: before
-// the turn no consumer can display the result, so the string building and
-// comparisons skip (the hold, the draw gate, and the pendingA preview all
-// require the latch too).
+// bar takes the extreme. The whole block is gated on the %K close gate:
+// before a close-confirmed turn no consumer can display the result, so the
+// string building and comparisons skip (the hold, the draw gate, and the
+// pendingA preview all require the gate too).
 bool waveCycleIsImpulseSide = cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT and (waveLiveTrendDir == TrendDir.UP) == (cycleZone == 1)
 string waveLiveLabelText = ""
 bool waveLiveShowsLetter = false  // the live label is the cycle's bare letter
@@ -713,7 +717,13 @@ if waveOwnerHasZone and barstate.isconfirmed
     // is provisionally deeper). A trend-reset preview changes NOTHING here
     // (shared half-cycle rule): the pinned owner keeps its number/stack.
     bool ownerLetterShowable = waveZoneBestLetterIndex >= 1 or (waveZoneBestLetterIndex == 0 and waveZoneOwnerAConfirmed)
-    bool liveIsRetraceSide = cycleZone != 0 and waveTrendDir != TrendDir.FLAT and not waveCycleIsImpulseSide and waveNextImpulseNumber > 1
+    // Gate-qualified: the owner only reacts to a live retrace that is
+    // actually SHOWING (the %K close gate opened). Before the gate opens the
+    // deeper retrace's own number preview is suppressed, so blanking or
+    // downgrading the owner then would leave its number vanished with
+    // nothing previewing in its place — every live-driven label mutation
+    // goes through the one display gate (Henry 2026-07-25).
+    bool liveIsRetraceSide = cycleZone != 0 and cycleKTurnShown and waveTrendDir != TrendDir.FLAT and not waveCycleIsImpulseSide and waveNextImpulseNumber > 1
     bool liveIsDeeper = liveIsRetraceSide and not waveLivePreviewsReset and (waveTrendDir == TrendDir.UP ? cycleExtreme < waveZoneBestExtreme : cycleExtreme > waveZoneBestExtreme)
     // The live retrace only counts toward complexity while the count's own
     // trend stands — a reset preview must not freeze the owner with a stack
@@ -748,7 +758,7 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
         label.set_textcolor(id = updatedLabel, textcolor = labelTextColor)
     updatedLabel
 
-// Wave label — live once the %K-turn latch opens, pinned on the %D cross
+// Wave label — live once the %K-turn close gate opens, pinned on the %D cross
 // (frozen in place instead when a trend shift cut its count — shared
 // half-cycle rule). The retrace-number owner's label ref is kept so a
 // DEEPER RETRACE can downgrade it to its letter mid-zone; a trend reset
@@ -758,11 +768,12 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
 var label waveNumberLabel = na
 var label waveZoneOwnerLabel = na
 var label wavePendingALabel = na  // the held "a", drawn provisionally while the live "b" shows
-// Display gate — the %K-turn latch (computed in the WAVES section, where
-// the classification consumes it too): show once %K turned against the
-// open cycle, keep showing until the pin or the identity's own reject;
-// identity stays LIVE while shown (text/price/anchor morph with the cycle
-// state into the pin). Unconfirmed BOUNDARY ticks freeze everything.
+// Display gate — the %K-turn close gate (computed in the WAVES section,
+// where the classification consumes it too): show once a bar CLOSED with
+// %K turned against the open cycle, keep showing until the pin or the
+// identity's own reject; identity stays LIVE while shown (text/price/
+// anchor morph with the cycle state into the pin). Unconfirmed BOUNDARY
+// ticks freeze everything.
 
 // SHARED HALF-CYCLE RULE (Henry 2026-07-16, final form): labels never cross
 // trends, but the SHIFT half-cycle may host BOTH counts. When a trend shift

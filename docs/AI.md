@@ -1037,9 +1037,12 @@ enum TrendDir
   `barstate.isconfirmed` unless tick-time behavior is a deliberate, documented
   choice — an intrabar condition that reverts before the close otherwise fires
   a phantom alert with no committed evidence on the chart.
-- When tick-time display IS deliberate (live wave labels), make the visibility
-  latch `varip`-sticky and document the reload caveat: intrabar-only state does
-  not reproduce on replay, because historical bars run a single closing tick.
+- Prefer close-gated first-shows for live drawings: when every state write
+  lands on a confirmed tick, plain `var` suffices and replay reproduces
+  realtime exactly (both waves indicators converged on this 2026-07-25). If
+  tick-time display IS deliberate anyway, make the visibility latch
+  `varip`-sticky and document the reload caveat: intrabar-only state does not
+  reproduce on replay, because historical bars run a single closing tick.
 
 ---
 
@@ -1125,17 +1128,20 @@ enum TrendDir
      ATR-fraction hysteresis), stochastic %D 45/55 cycle boundaries, and the
      wave count classifying each half-cycle's extreme
    - Implements wave labeling with impulses and retracements
-   - Uses `label.new()` for wave annotations (tick-time live label, pinned on
-     the %D cross)
+   - Uses `label.new()` for wave annotations (live label first shows on a
+     confirmed close where %K holds the turn against the cycle, pinned on the
+     %D cross)
 
 5. **`macd-waves.pine`**
    - Barry Burns momentum MACD (5/20/30) with the MOM wave count
    - Stochastic %D 45/55 half-cycle windows partition the count (plot-in-zone
      engine); labels anchor on a display-only extreme layer with pin migration
      and an ordering guard
-   - Live labels show tick-time via a sticky %K-hook latch plus an ATR-margin
-     accuracy gate; a 🧪 Debug layer emits Pine Logs (HOOK/CROSS/SHOW/PIN/…)
-     comparing realtime plots against the final pins
+   - Live labels first show on a close-gated triple confirmation — bar close
+     with BOTH the MACD line and %K angling against the open half-cycle — plus
+     an ATR-margin accuracy gate; post-show tracking is per-tick with
+     close-gated renumbering (the 🧪 debug/Pine Logs layer was stripped
+     2026-07-25 after tuning — restore from git history before re-tuning)
 
 6. **`stochastic.pine`**
    - Barry Burns cycle stochastic (5/2/3, 80/20 + 45 mid) — bare cycle
@@ -1282,5 +1288,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-07-24
+**Last Updated**: 2026-07-25
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`
