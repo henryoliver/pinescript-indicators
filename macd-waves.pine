@@ -31,17 +31,18 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📈 MACD
-// MOM/DAD engine: MACD line, signal line, and their plot colors.
-// Line colors read each line's own slope (visual only); the MACD line can
-// opt out to a solid neutral color.
+// 🎛️ USER INPUT SETTINGS
+// All input groups are declared together so the settings dialog keeps the
+// built-in ordering — MACD, Waves, then Calculation last (same rule as
+// ma-waves). Pine's top-to-bottom declaration rule would otherwise force the
+// Calculation inputs above the sections that consume them, moving the group
+// to the top.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_MACD = "📈 MACD"
+const string GROUP_WAVES = "🌊 Waves"
+const string GROUP_CALC = "🧮 Calculation"
 
-// Signal-line slope colors (same pair as ma-waves' trend colors).
-const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
-const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
-
+// MACD Settings
 macdSource = input.source(defval = close, title = "Source",
      tooltip = "Series the MACD is calculated on.", group = GROUP_MACD)
 macdFastLength = input.int(defval = 5, title = "Fast Length", minval = 1,
@@ -57,12 +58,68 @@ macdSignalMAType = input.string(defval = "EMA", title = "Signal MA Type", option
 macdColorMode = input.string(defval = "Slope", title = "MACD Color Mode", options = ["Slope", "Solid"],
      tooltip = "Slope colors the MACD line by its own rise/fall — the same behavior and colors as the signal line. Solid keeps the single neutral color.", group = GROUP_MACD, display = display.none)
 
+// Wave Settings (Barry's cycle defaults: %K Length 5, %K Smoothing 2, %D Smoothing 3)
+cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1,
+     tooltip = "Stochastic %K lookback. Defaults are Barry's cycle settings: 5/2/3.", group = GROUP_WAVES)
+cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1,
+     tooltip = "SMA smoothing applied to %K.", group = GROUP_WAVES)
+cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1,
+     tooltip = "SMA smoothing producing %D — the cycle line whose 45/55 crossings open and close the half-cycle wave windows.", group = GROUP_WAVES)
+waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color",
+     tooltip = "Label color for waves counted under an up MOM trend (matches ma-waves' wave colors).", group = GROUP_WAVES)
+waveDownColor = input.color(defval = color.new(color = NORD11, transp = 10), title = "Down Trend Wave Color",
+     tooltip = "Label color for waves counted under a down MOM trend.", group = GROUP_WAVES)
+waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40,
+     tooltip = "Text size of the wave number labels.", group = GROUP_WAVES)
+
+// Calculation Settings (manual equivalent of the built-in section — the
+// indicator() `timeframe` parameter can't be used in scripts that create drawings)
+calcTimeframe = input.timeframe(defval = "", title = "Timeframe",
+     tooltip = "Timeframe the MACD and signal lines are calculated on. Leave on Chart to follow the chart's timeframe. Note: an HTF MACD with chart-timeframe cycles is a hybrid — Barry's multi-timeframe handling uses separate charts at 3:1, so the wave count is no longer his pure system.", group = GROUP_CALC)
+calcWaitForClose = input.bool(defval = true, title = "Wait for timeframe closes",
+     tooltip = "On a higher timeframe, only show values once that timeframe's bar closes (gaps between closes). Off updates the lines with the forming bar.", group = GROUP_CALC)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📈 MACD
+// MOM/DAD engine: MACD line, signal line, and their plot colors.
+// Line colors read each line's own slope (visual only); the MACD line can
+// opt out to a solid neutral color. Both lines are computed inside the
+// requested Calculation timeframe, so on an HTF setting the averages read
+// HTF bars, not chart bars. Exports the raw (gapped) series for the plots
+// and the fill-forwarded `macd`/`signal` everything downstream consumes.
+// ═════════════════════════════════════════════════════════════════════════════
+// Signal-line slope colors (same pair as ma-waves' trend colors).
+const color TREND_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color TREND_DOWN_COLOR = color.new(color = NORD9, transp = 60)
+
 // Helper function to calculate an EMA or SMA of a source series.
 f_ma(float maSource, int maLength, simple string maType) =>
     maType == "EMA" ? ta.ema(source = maSource, length = maLength) : ta.sma(source = maSource, length = maLength)
 
-float macd = f_ma(maSource = macdSource, maLength = macdFastLength, maType = macdOscMAType) - f_ma(maSource = macdSource, maLength = macdSlowLength, maType = macdOscMAType)
-float signal = f_ma(maSource = macd, maLength = macdSignalLength, maType = macdSignalMAType)
+// Inputs to signal — "Wait for timeframe closes" maps to gaps: na between HTF
+// closes when on. lookahead stays off so historical HTF values never leak early.
+f_macdEngine() =>
+    float macdValue = f_ma(maSource = macdSource, maLength = macdFastLength, maType = macdOscMAType) - f_ma(maSource = macdSource, maLength = macdSlowLength, maType = macdOscMAType)
+    float signalValue = f_ma(maSource = macdValue, maLength = macdSignalLength, maType = macdSignalMAType)
+    [macdValue, signalValue]
+
+// gaps_on only applies when an actual HIGHER timeframe is selected — that is
+// the only case "Wait for timeframe closes" is about (its tooltip says so).
+// On the default chart timeframe the request maps 1:1 and gaps_off removes
+// any chance of the same-TF-with-gaps realtime edge starving the wave engine
+// (na macd on live ticks would freeze the extremes, turn gate, and label
+// anchors for the whole session).
+[macdRaw, signalRaw] = request.security(symbol = syminfo.tickerid, timeframe = calcTimeframe,
+     expression = f_macdEngine(), gaps = calcWaitForClose and calcTimeframe != "" ? barmerge.gaps_on : barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+// Fill-forward for everything downstream — on an HTF setting with gaps on,
+// the bars between HTF closes read na; the wave engine needs a MACD value on
+// every bar (extreme tracking, boundary seeds, label anchors, turn gate) and
+// the slope colors need one to hold their direction. Only the PLOTS read the
+// raw series, so the lines still gap between HTF closes.
+float macd = fixnan(source = macdRaw)
+float signal = fixnan(source = signalRaw)
 
 // Signal slope drives the color; hold the last direction on flat bars so it
 // doesn't flicker (same treatment as the stochastic %D and the obv signal MA).
@@ -92,26 +149,9 @@ color macdColor = macdColorMode == "Solid" ? NORD3 : macdRising ? TREND_UP_COLOR
 // plus its wave number, for the wave labels rendered at the end of this
 // section.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_WAVES = "🌊 Waves"
-
 // Cycle band (same as ma-waves): %D above 55 = high zone, below 45 = low zone.
 const float CYCLE_LOW_BOUNDARY = 45.0
 const float CYCLE_HIGH_BOUNDARY = 55.0
-
-cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1,
-     tooltip = "Stochastic %K lookback. Defaults are Barry's cycle settings: 5/2/3.", group = GROUP_WAVES)
-cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1,
-     tooltip = "SMA smoothing applied to %K.", group = GROUP_WAVES)
-cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1,
-     tooltip = "SMA smoothing producing %D — the cycle line whose 45/55 crossings open and close the half-cycle wave windows.", group = GROUP_WAVES)
-waveUpColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Up Trend Wave Color",
-     tooltip = "Label color for waves counted under an up MOM trend (matches ma-waves' wave colors).", group = GROUP_WAVES)
-waveDownColor = input.color(defval = color.new(color = NORD11, transp = 10), title = "Down Trend Wave Color",
-     tooltip = "Label color for waves counted under a down MOM trend.", group = GROUP_WAVES)
-waveLabelSize = input.int(defval = 12, title = "Wave Label Size", minval = 8, maxval = 40,
-     tooltip = "Text size of the wave number labels.", group = GROUP_WAVES)
-liveNumberMarginAtr = input.float(defval = 0.25, title = "Live Number Margin (ATR ×)", minval = 0.0, step = 0.05,
-     tooltip = "Accuracy gate for the early realtime label. 0 = show on the first bar close where the MACD line and %K both angle against the cycle (earliest). Above 0, a wave number whose classification could still flip — the cycle's extreme has not yet crossed the previous same-side extreme — waits until flipping would take at least this many ATRs of further MACD travel; already-crossed numbers can never flip and always show immediately. Trades a little lead on fragile waves for a more accurate first impression.", group = GROUP_WAVES)
 
 float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing)
 float cycleD = ta.sma(source = cycleK, length = cycleDSmoothing)
@@ -192,73 +232,104 @@ if cycleStartedThisBar
     displayExtreme := displaySeed
     displayExtremeBar := bar_index - displaySeedOffset
 
-// Wave count: each confirmed extreme is classified against the previous
-// same-side extreme (higher high/low = bullish, lower/equal = bearish).
-// Extremes agreeing with the running trend keep counting up; a contra-trend
-// extreme flips the trend and restarts the count with canonical parity —
-// wave 1 impulse, wave 2 retrace, always. A breaker on the new trend's
-// impulse side (LL breaking up, HH breaking down) becomes 1; a breaker on the
-// retrace side (LH / HL) becomes 2 and the previous extreme is re-labeled 1
-// (the retro flag exported here drives that in the label rendering below).
-// The open half-cycle's
-// number is recomputed live from its provisional extreme, so a still-extending
-// extreme corrects its own number — and the retro re-label — intrabar.
+// Wave count — rooted in structure TAKES (Henry 2026-07-27 final form). A
+// wave only moves the trend by strictly TAKING a previous extreme, and
+// NOTHING displays in the shift direction until the MACD line's value has
+// broken the current trend's structure at a bar close:
+// • A take WITH the trend (HH in up, LL in down) just counts up.
+// • A take AGAINST the trend (a low through the up trend's last HL, a high
+//   through the down trend's last LH) IS the shift: it plots as the new
+//   trend's 1 — or 3 when a failed impulse (below) set the shift up, in
+//   which case the same taking close also relabels the old retrace to "1"
+//   and flips the failed impulse to "2" (the pending machinery in the label
+//   section).
+// • A FAILED IMPULSE (a high that can't take the up trend's HH, a low that
+//   can't take the down trend's LL) displays as the RUNNING trend's next
+//   number — the shift it hints at hasn't broken anything yet — and arms a
+//   provisional that resolves ONE half-cycle later: confirmed if the next
+//   wave takes the old retrace level (that close repaints it "2" in the new
+//   trend's color), otherwise the shift dies and nothing ever showed. A
+//   contraction (alternating LH/HL with nothing taken) therefore plots a
+//   clean monotone count and can never flip the trend back and forth.
+// • Healthy retraces (HL in up, LH in down) and unclassifiable extremes
+//   count up under the running trend. Exactly-equal extremes take nothing.
+// • PLOT QUALIFICATION (Henry 2026-07-27): a wave only PLOTS if its extreme
+//   strictly took the previous same-side extreme in the TREND direction —
+//   HH and HL in an up trend, LL and LH in a down trend (one comparison:
+//   strictly beyond in the trend direction) — or if it is the shift's take
+//   itself. A wave that took nothing (the failed impulse, an equal extreme)
+//   still COUNTS (parity survives) but pins BLANK and never first-shows; the
+//   failed impulse's blank label is what the shift confirmation repaints to
+//   "2". Warmup (unseeded/unclassifiable) plots as before.
+// Extremes are built from closes only (intrabar values roll back), so every
+// take is close-confirmed by construction. The open half-cycle's number is
+// recomputed live from its provisional extreme, so a still-extending extreme
+// corrects its own number intrabar — an impulse that finally takes the HH
+// mid-half-cycle starts qualifying (and can first-show) from that close on.
 var int waveTrend = 0  // 1 = up (HH/HL), -1 = down (LL/LH), 0 = unseeded
 var int waveCount = 0
 var float lastHighExtreme = na
 var float lastLowExtreme = na
+// Provisional shift — armed by a failed impulse, resolved at the very next
+// boundary (confirm or die); the label-side copies live in the label section.
+var int shiftTrend = 0     // candidate trend direction (0 = no shift in play)
+var float shiftLevel = na  // the old trend's retrace extreme the shift must take
+bool shiftDiedAtBoundary = false
 
-// Helper function returning an extreme's wave number, whether it breaks the
-// trend as the new trend's first retrace (which re-labels the previous extreme
-// as wave 1), and the trend direction the wave belongs to (drives label color).
-// Impulse-side breakers restart at 1 themselves; unclassifiable extremes just
-// keep counting under the running trend.
-f_waveNumber(float extremeValue, float sameSideExtreme, bool isHighExtreme, int trendDirection, int confirmedCount) =>
+// Helper function classifying an extreme purely by TAKES: returns its wave
+// number, the trend direction it displays under (label color), whether it is
+// a failed impulse arming a provisional shift, and whether it QUALIFIES to
+// plot (strictly took its previous same-side extreme in the trend direction,
+// or is the shift's take itself; warmup always qualifies). A take with the
+// trend counts up; a take against it breaks the trend (1, or 3 on a
+// provisional match); everything else counts up under the running trend.
+f_waveNumber(float extremeValue, float sameSideExtreme, bool isHighExtreme, int trendDirection, int confirmedCount, int provisionalTrend) =>
     bool classifiable = not na(sameSideExtreme)
-    int newDirection = classifiable ? extremeValue > sameSideExtreme ? 1 : -1 : trendDirection
-    bool breaksTrend = classifiable and newDirection != trendDirection
-    bool breaksAsRetrace = breaksTrend and isHighExtreme == (newDirection == -1)
-    int waveNumber = breaksTrend ? breaksAsRetrace ? 2 : 1 : confirmedCount + 1
-    [waveNumber, breaksAsRetrace, newDirection]
+    bool takes = classifiable and (isHighExtreme ? extremeValue > sameSideExtreme : extremeValue < sameSideExtreme)
+    int takeDirection = isHighExtreme ? 1 : -1
+    bool breaksTrend = takes and takeDirection != trendDirection
+    bool failsImpulse = classifiable and not takes and trendDirection != 0 and isHighExtreme == (trendDirection == 1)
+    int waveNumber = breaksTrend ? provisionalTrend == takeDirection ? 3 : 1 : confirmedCount + 1
+    int waveDirection = breaksTrend ? takeDirection : trendDirection
+    bool qualifies = breaksTrend or not classifiable or trendDirection == 0 or
+         (trendDirection == 1 ? extremeValue > sameSideExtreme : extremeValue < sameSideExtreme)
+    [waveNumber, waveDirection, failsImpulse, qualifies]
 
 int endedWaveNumber = na
-bool endedWaveRetro = false
+bool endedWaveFailed = false
 int endedWaveTrend = 0
+bool endedWaveQualifies = false
 if cycleStartedThisBar and not na(endedCycleExtreme)
     bool endedIsHighExtreme = startedLowCycle  // the ended half-cycle is the new one's opposite
     float sameSideExtreme = endedIsHighExtreme ? lastHighExtreme : lastLowExtreme
-    [confirmedWaveNumber, confirmedWaveRetro, confirmedWaveTrend] = f_waveNumber(extremeValue = endedCycleExtreme, sameSideExtreme = sameSideExtreme, isHighExtreme = endedIsHighExtreme, trendDirection = waveTrend, confirmedCount = waveCount)
+    [confirmedWaveNumber, confirmedWaveTrend, confirmedWaveFailed, confirmedWaveQualifies] = f_waveNumber(extremeValue = endedCycleExtreme, sameSideExtreme = sameSideExtreme, isHighExtreme = endedIsHighExtreme, trendDirection = waveTrend, confirmedCount = waveCount, provisionalTrend = shiftTrend)
     endedWaveNumber := confirmedWaveNumber
-    endedWaveRetro := confirmedWaveRetro
     endedWaveTrend := confirmedWaveTrend
+    endedWaveFailed := confirmedWaveFailed
+    endedWaveQualifies := confirmedWaveQualifies
+    // A provisional armed at the PREVIOUS boundary resolves here, one way or
+    // the other: this wave either confirmed it (took the old retrace level —
+    // it classified as the new trend's 3) or killed it (the died flag clears
+    // the label-side pending below; nothing displayed, nothing to revert).
+    // Either way it is spent.
+    if shiftTrend != 0
+        shiftDiedAtBoundary := confirmedWaveTrend != shiftTrend
+        shiftTrend := 0
+        shiftLevel := na
     waveCount := confirmedWaveNumber
     waveTrend := confirmedWaveTrend
+    if confirmedWaveFailed
+        shiftTrend := -waveTrend
+        shiftLevel := waveTrend == 1 ? lastLowExtreme : lastHighExtreme
     if endedIsHighExtreme
         lastHighExtreme := endedCycleExtreme
     else
         lastLowExtreme := endedCycleExtreme
 
-[liveWaveNumber, liveWaveRetro, liveWaveTrend] = f_waveNumber(extremeValue = cycleExtreme, sameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme, isHighExtreme = cycleZone == 1, trendDirection = waveTrend, confirmedCount = waveCount)
+[liveWaveNumber, liveWaveTrend, liveWaveFailed, liveWaveQualifies] = f_waveNumber(extremeValue = cycleExtreme, sameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme, isHighExtreme = cycleZone == 1, trendDirection = waveTrend, confirmedCount = waveCount, provisionalTrend = shiftTrend)
 // Helper function returning the label color for a wave's trend direction.
 f_waveTrendColor(int trendDirection) =>
     trendDirection == -1 ? waveDownColor : waveUpColor
-
-// Live-number safety (display only): within a half-cycle the extreme moves in
-// ONE direction, so its classification against the previous same-side extreme
-// can flip AT MOST ONCE — and only by crossing it (log-proven 2026-07-23:
-// every early-number miss was exactly one uncrossed→crossed flip; no shown
-// number ever flipped back). Already crossed = stable forever; still inside =
-// the shown number flips if the wave travels the remaining gap. The margin
-// input requires the gap to be at least Margin × ATR at the MOMENT of first
-// show — evaluated on the qualifying close itself, so it can never go stale.
-// A wave blocked at its qualifying close re-qualifies on a later close, by
-// then either safe or crossed (stable), which shows the final number.
-float waveAtr = ta.atr(length = 14)
-float liveSameSideExtreme = cycleZone == 1 ? lastHighExtreme : lastLowExtreme
-bool liveNumberStable = na(liveSameSideExtreme) or (cycleZone == 1 ? cycleExtreme > liveSameSideExtreme : cycleExtreme <= liveSameSideExtreme)
-float liveFlipGap = liveNumberStable ? na : cycleZone == 1 ? liveSameSideExtreme - cycleExtreme : cycleExtreme - liveSameSideExtreme
-float liveFlipGapAtr = liveFlipGap / waveAtr
-bool liveNumberSafe = liveNumberStable or liveNumberMarginAtr == 0.0 or liveFlipGapAtr >= liveNumberMarginAtr
 
 // Live turn gate (display only, 2026-07-25 — REPLACED the sticky tick-time %K
 // hook latch): the live label first shows only on a CONFIRMED bar whose
@@ -269,11 +340,12 @@ bool liveNumberSafe = liveNumberStable or liveNumberMarginAtr == 0.0 or liveFlip
 // show now lands on a closing tick, all live-label state below commits with
 // the bar and plain var replaces the old varip latches: a reload reproduces
 // the live chart exactly (the tick-time latch's accepted reload caveat is
-// gone). Once shown, the label still tracks the provisional extreme every
-// tick and never un-shows — a fading turn after the show morphs into the pin
-// instead of hiding.
+// gone). Once shown, the label never un-shows: a MACD that resumes into a
+// new extreme in the same half-cycle just keeps the plotted number, moving
+// it to the very extreme MACD value of the wave (Henry 2026-07-27) — and a
+// fading turn morphs into the pin instead of hiding.
 bool liveTurnAgainstCycle = cycleZone == 1 ? macd < macd[1] and cycleK < cycleK[1] : macd > macd[1] and cycleK > cycleK[1]
-// Shown-state snapshot (display only): the number/retro/trend the live label
+// Shown-state snapshot (display only): the number/trend the live label
 // actually SAYS. It re-reads the live classification on confirmed ticks ONLY.
 // Intrabar the provisional extreme is non-monotone — var state rolls back
 // each tick, so the extreme breathes with the current tick's MACD — and while
@@ -284,7 +356,6 @@ bool liveTurnAgainstCycle = cycleZone == 1 ? macd < macd[1] and cycleK < cycleK[
 // Anchor/extreme tracking stays per-tick. On historical bars every execution
 // is a close, so replay output is identical.
 var int liveShownNumber = na
-var bool liveShownRetro = false
 var int liveShownTrend = 0
 
 // Helper function to create the cycle label on first use or move it afterwards.
@@ -304,16 +375,29 @@ f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, str
 // Cycle label — the wave number at the half-cycle's extreme MACD value, colored
 // by the wave's trend. Every wave — impulse and retrace alike — draws on the
 // first CONFIRMED bar where the MACD line and %K both angle against the
-// half-cycle (the close-gated turn gate above), from then on tracks the
-// provisional extreme and number live, and is pinned (or
-// backfilled) at the final extreme when the half-cycle ends on the %D cross.
+// half-cycle (the close-gated turn gate above) AND the wave qualifies (its
+// extreme strictly took its level — waves that took nothing never show),
+// from then on tracks the provisional extreme and number live, and is pinned
+// (or backfilled, or pinned BLANK when unqualified) at the final extreme
+// when the half-cycle ends on the %D cross.
 // After the pin the label migrates with the MACD line to the swing's true
 // turn (the line lags the %D cross), so it always ends up ON the visual
 // extreme even when that bar belongs to the next window.
 var label cycleExtremeLabel = na
 var label prevWaveLabel = na
-var int prevWaveNumber = na
-var color prevWaveColor = na
+// Pending shift labels (display only, label-side copies of the engine's
+// provisional — they survive the engine's boundary clear so a confirm and
+// its relabels can land on the same close): a failed impulse pins under the
+// RUNNING trend (no shift shows before the break); on the first confirmed
+// close where the MACD's value strictly TAKES the old retrace level, the
+// shift materializes in one shot (fire block below) — the old retrace
+// relabels to the new trend's "1" and the failed impulse repaints as its
+// "2". If the next boundary instead kills the shift, the pending clears and
+// nothing ever showed.
+var label pendingShiftLabel = na      // the previous retrace's label, waiting to become "1"
+var float pendingShiftLevel = na      // the structure level the shift must take
+var int pendingShiftTrend = 0         // pending shift direction: 1 up, -1 down, 0 none
+var label provisionalShiftLabel = na  // the failed impulse's own label, waiting to become "2"
 // Pinned-label migration state (display only): the MACD (5/20) turns AFTER
 // the faster stochastic %D (5/2/3) crosses, so the swing's real extreme often
 // prints ON the crossing bar or a few bars into the next window. The wave
@@ -331,10 +415,21 @@ var float pinnedAnchorValue = na   // pin's ordering guard can revert an oversho
 if cycleStartedThisBar and barstate.isconfirmed
     if not na(endedCycleExtreme)
         color endedWaveColor = f_waveTrendColor(trendDirection = endedWaveTrend)
-        if endedWaveRetro and not na(prevWaveLabel)
-            // Retrace-side breaker: the previous extreme becomes the new trend's impulse.
-            label.set_text(id = prevWaveLabel, text = "1")
-            label.set_textcolor(id = prevWaveLabel, textcolor = endedWaveColor)
+        if shiftDiedAtBoundary
+            // The shift never took its level — it never displayed either, so
+            // there is nothing to revert: just drop the pending relabels.
+            pendingShiftLabel := na
+            pendingShiftLevel := na
+            pendingShiftTrend := 0
+            provisionalShiftLabel := na
+        if endedWaveFailed and not na(prevWaveLabel)
+            // Failed impulse pinning under the running trend: arm the pending
+            // relabels for a confirmed shift. The engine set shiftTrend and
+            // shiftLevel this bar from the still-untouched opposite-side
+            // extreme.
+            pendingShiftLabel := prevWaveLabel
+            pendingShiftLevel := shiftLevel
+            pendingShiftTrend := shiftTrend
         // The pin anchors at the DISPLAY extreme (the line's true turn, which
         // may sit before the window opened); the number comes from the
         // window-partitioned engine above.
@@ -349,13 +444,16 @@ if cycleStartedThisBar and barstate.isconfirmed
         // window partition, which restores the count's left-to-right order.
         if not na(prevWaveLabel) and not na(pinnedAnchorBar) and label.get_x(id = prevWaveLabel) >= pinAnchorBar
             label.set_xy(id = prevWaveLabel, x = pinnedAnchorBar, y = pinnedAnchorValue)
+        // A wave that took nothing pins BLANK — it is counted (parity) but
+        // never displays; a failed impulse's blank pin is exactly what the
+        // shift confirmation repaints to "2".
         cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
              labelBarIndex = pinAnchorBar, labelPrice = pinAnchorValue,
-             labelText = str.tostring(value = endedWaveNumber),
+             labelText = endedWaveQualifies ? str.tostring(value = endedWaveNumber) : "",
              labelTextColor = endedWaveColor, isHighCycle = cycleZone == -1)
+        if endedWaveFailed
+            provisionalShiftLabel := cycleExtremeLabel
         prevWaveLabel := cycleExtremeLabel
-        prevWaveNumber := endedWaveNumber
-        prevWaveColor := endedWaveColor
         pinnedExtremeSide := cycleZone == -1 ? 1 : -1
         pinnedExtremeValue := pinAnchorValue
         pinnedExtremeMigrating := true
@@ -370,8 +468,28 @@ if cycleStartedThisBar and barstate.isconfirmed
          color = color.new(color = color.gray, transp = 100),
          textcolor = f_waveTrendColor(trendDirection = liveWaveTrend), size = waveLabelSize)
     liveShownNumber := na
-    liveShownRetro := false
     liveShownTrend := 0
+// Shift confirmation (close-gated): the shift materializes on the first
+// confirmed close where the MACD's VALUE strictly takes the old retrace
+// level — the structure break that proves the new trend. The whole shift
+// lands on this one close: the old retrace becomes the new trend's "1", the
+// failed impulse becomes its "2" (and the taking wave itself reads 3 through
+// the provisional-aware classification). Intrabar breaks commit nothing
+// (rollback). One-shot: once fired, no revert is possible — the taking close
+// commits the window extreme through the level, so the resolving boundary
+// can only confirm.
+if barstate.isconfirmed and not na(pendingShiftLabel) and
+     (pendingShiftTrend == -1 ? macd < pendingShiftLevel : macd > pendingShiftLevel)
+    color shiftColor = f_waveTrendColor(trendDirection = pendingShiftTrend)
+    label.set_text(id = pendingShiftLabel, text = "1")
+    label.set_textcolor(id = pendingShiftLabel, textcolor = shiftColor)
+    if not na(provisionalShiftLabel)
+        label.set_text(id = provisionalShiftLabel, text = "2")
+        label.set_textcolor(id = provisionalShiftLabel, textcolor = shiftColor)
+    pendingShiftLabel := na
+    pendingShiftLevel := na
+    pendingShiftTrend := 0
+    provisionalShiftLabel := na
 // Pinned-label migration stays on closing ticks: intrabar the MACD's turn away
 // from the old extreme is unconfirmed (the line can resume into a new extreme
 // before the close), and a migration step is a commitment — the label only
@@ -384,38 +502,36 @@ if barstate.isconfirmed and pinnedExtremeMigrating and not na(prevWaveLabel) and
         label.set_xy(id = prevWaveLabel, x = bar_index, y = pinnedExtremeValue)
     else
         pinnedExtremeMigrating := false
-// Live label — first show is close-gated on the triple confirmation (bar
-// close + MACD turn + %K turn, the turn gate above), then it tracks the
-// provisional extreme every tick (renumbering stays close-gated through the
-// shown-state snapshot above), morphing into the pin at the boundary
-// instead of ever hiding — once shown, a resumed move migrates and
-// renumbers the label rather than flashing it off. While the pinned label is
-// still migrating the old swing hasn't finished, so the new window's label
-// would mark a wave that hasn't started — nothing is remembered through the
-// hold; the label first shows on the first post-migration CLOSE that passes
-// the turn gate and the safety margin, both evaluated fresh on that closing
-// tick, so a stale pass can never leak a fragile number through. Once shown,
-// liveShownNumber is set and the label never un-shows. On provisional-cross
-// ticks nothing is drawn, so Pine's rollback reverts the label to its last
-// confirmed state and a receding cross leaves no trace.
+// Live label — first show is close-gated on the triple confirmation: the
+// MACD line retraces against the half-cycle, %K retraces with it, and the
+// bar CLOSES with both turns standing (the turn gate above) — the wave plots
+// at that very close. Then it tracks the provisional extreme every tick
+// (renumbering stays close-gated through the shown-state snapshot above),
+// morphing into the pin at the boundary instead of ever hiding — a MACD
+// that resumes into a new extreme in the same half-cycle just migrates and
+// renumbers the plotted label rather than flashing it off. While the pinned
+// label is still migrating the old swing hasn't finished, so the new
+// window's label would mark a wave that hasn't started — nothing is
+// remembered through the hold; the label first shows on the first
+// post-migration CLOSE that passes the turn gate, evaluated fresh on that
+// closing tick. Once shown, liveShownNumber is set and the label never
+// un-shows. On provisional-cross ticks nothing is drawn, so Pine's rollback
+// reverts the label to its last confirmed state and a receding cross leaves
+// no trace.
 bool liveLabelDrawn = not cycleStartedThisBar and cycleZone != 0 and
      not na(displayExtreme) and not pinnedExtremeMigrating and not na(cycleExtremeLabel) and
-     (not na(liveShownNumber) or (barstate.isconfirmed and liveTurnAgainstCycle and liveNumberSafe))
+     (not na(liveShownNumber) or (barstate.isconfirmed and liveTurnAgainstCycle and liveWaveQualifies))
 if liveLabelDrawn
-    if barstate.isconfirmed
+    // The shown snapshot only re-reads QUALIFIED classifications — on a close
+    // where the live wave momentarily took nothing (an exact tie mid-travel)
+    // the label keeps saying its last qualified state instead of blanking.
+    if barstate.isconfirmed and liveWaveQualifies
         liveShownNumber := liveWaveNumber
-        liveShownRetro := liveWaveRetro
         liveShownTrend := liveWaveTrend
     cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
          labelBarIndex = displayExtremeBar, labelPrice = displayExtreme,
          labelText = str.tostring(value = liveShownNumber),
          labelTextColor = f_waveTrendColor(trendDirection = liveShownTrend), isHighCycle = cycleZone == 1)
-// While the live extreme provisionally breaks the trend as a retrace, the
-// last pinned label previews wave 1 of the new trend; it reverts otherwise.
-if not na(prevWaveLabel)
-    bool previewRetro = liveLabelDrawn and liveShownRetro
-    label.set_text(id = prevWaveLabel, text = previewRetro ? "1" : str.tostring(value = prevWaveNumber))
-    label.set_textcolor(id = prevWaveLabel, textcolor = previewRetro ? f_waveTrendColor(trendDirection = liveShownTrend) : prevWaveColor)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS
@@ -423,5 +539,5 @@ if not na(prevWaveLabel)
 // in their owning sections above.
 // ═════════════════════════════════════════════════════════════════════════════
 hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed)
-plot(series = macd, title = "MACD", color = macdColor, linewidth = 2)
-plot(series = signal, title = "Signal", color = signalColor, linewidth = 4)
+plot(series = macdRaw, title = "MACD", color = macdColor, linewidth = 2)
+plot(series = signalRaw, title = "Signal", color = signalColor, linewidth = 4)
