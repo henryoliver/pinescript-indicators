@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = true)
+indicator(title = "Stochastic", shorttitle = "🎲 Stoch", format = format.price, precision = 2, timeframe = "", timeframe_gaps = false)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS

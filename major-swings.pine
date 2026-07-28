@@ -121,29 +121,32 @@ if confirmedBar and not na(confirmedSwingLow)
     nearestUnbrokenLowSwing := na(nearestUnbrokenLowSwing) ? confirmedSwingLow : math.max(nearestUnbrokenLowSwing, confirmedSwingLow)
 
 int structuralSwingCount = array.size(id = structuralSwings)
-bool canTestHighSwings = not na(nearestUnbrokenHighSwing) and high >= nearestUnbrokenHighSwing
-bool canTestLowSwings = not na(nearestUnbrokenLowSwing) and low <= nearestUnbrokenLowSwing
 
-// Defer swing break/sweep state changes until bar close to avoid repeating this scan on every realtime tick.
-if confirmedBar and structuralSwingCount > 0 and (canTestHighSwings or canTestLowSwings)
-    bool refreshNearestUnbroken = false
-    for trackedSwing in structuralSwings
-        bool shouldCheckSwing = trackedSwing.isHigh ? canTestHighSwings : canTestLowSwings
-        if shouldCheckSwing and not trackedSwing.isBroken
-            bool wickBreached = trackedSwing.isHigh ? high >= trackedSwing.price : low <= trackedSwing.price
-            if wickBreached
-                // Body comparison only runs on actual wick breaches, which
-                // keeps the common no-touch iteration to a single comparison.
-                if trackedSwing.isHigh ? currentBodyHigh >= trackedSwing.price : currentBodyLow <= trackedSwing.price
-                    trackedSwing.isBroken := true
-                    trackedSwing.isSwept := false
-                    refreshNearestUnbroken := true
-                else
-                    trackedSwing.isSwept := true
-    if refreshNearestUnbroken
-        [refreshedNearestUnbrokenHighSwing, refreshedNearestUnbrokenLowSwing] = f_getNearestUnbrokenSwings()
-        nearestUnbrokenHighSwing := refreshedNearestUnbrokenHighSwing
-        nearestUnbrokenLowSwing := refreshedNearestUnbrokenLowSwing
+// Defer swing break/sweep state changes until bar close to avoid repeating
+// this scan on every realtime tick. The nearest-level touch pre-tests live
+// inside the gate too, so unconfirmed ticks pay nothing below this line.
+if confirmedBar and structuralSwingCount > 0
+    bool canTestHighSwings = not na(nearestUnbrokenHighSwing) and high >= nearestUnbrokenHighSwing
+    bool canTestLowSwings = not na(nearestUnbrokenLowSwing) and low <= nearestUnbrokenLowSwing
+    if canTestHighSwings or canTestLowSwings
+        bool refreshNearestUnbroken = false
+        for trackedSwing in structuralSwings
+            bool shouldCheckSwing = trackedSwing.isHigh ? canTestHighSwings : canTestLowSwings
+            if shouldCheckSwing and not trackedSwing.isBroken
+                bool wickBreached = trackedSwing.isHigh ? high >= trackedSwing.price : low <= trackedSwing.price
+                if wickBreached
+                    // Body comparison only runs on actual wick breaches, which
+                    // keeps the common no-touch iteration to a single comparison.
+                    if trackedSwing.isHigh ? currentBodyHigh >= trackedSwing.price : currentBodyLow <= trackedSwing.price
+                        trackedSwing.isBroken := true
+                        trackedSwing.isSwept := false
+                        refreshNearestUnbroken := true
+                    else
+                        trackedSwing.isSwept := true
+        if refreshNearestUnbroken
+            [refreshedNearestUnbrokenHighSwing, refreshedNearestUnbrokenLowSwing] = f_getNearestUnbrokenSwings()
+            nearestUnbrokenHighSwing := refreshedNearestUnbrokenHighSwing
+            nearestUnbrokenLowSwing := refreshedNearestUnbrokenLowSwing
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
@@ -180,10 +183,25 @@ int fixedLineWidth = input.int(defval = 2, title = "Fixed Line Width", minval = 
 // for every tick of the following bar (skip — one int compare per tick),
 // while any bar_index JUMP (feed re-sync backfill, the freeze this gate's
 // predecessor fixed) breaks the equality and the first tick after the gap
-// redraws immediately. Intrabar stamp assignments roll back, so only the
-// confirm-tick value commits.
+// redraws immediately.
+// COMMIT/PROVISIONAL split (2026-07-27, the disappearing-lines fix): an
+// intrabar line.delete COMMITS while intrabar line.new and the array refs
+// ROLL BACK — the same asymmetry behind ma-waves' label lifecycle
+// invariant. The old single path deleted the committed lines on the
+// unconfirmed load/jump ticks, so a re-sync burst (whose intermediate
+// confirms can run with islast false and skip the block) could commit the
+// deletions while every replacement rolled back — a bare chart until the
+// next execution, which a quiet feed can postpone indefinitely (refresh or
+// toggling the indicator re-ran history and "restored" the lines). Now
+// deletes + the stamp live ONLY on the confirming tick, where they commit
+// together with the redraw; the load/jump path is DRAW-ONLY — provisional
+// lines and their array pushes roll back as one on the next tick, so they
+// can neither dangle nor leak, and the committed lines stay on the chart
+// underneath until a confirming tick replaces them atomically.
 var int lastRenderedBar = na
-bool shouldRefreshRender = barstate.islast and (na(lastRenderedBar) or bar_index != lastRenderedBar or barstate.isconfirmed)
+bool renderCommitTick = barstate.islast and barstate.isconfirmed
+bool renderProvisionalTick = barstate.islast and not barstate.isconfirmed and (na(lastRenderedBar) or bar_index != lastRenderedBar)
+bool shouldRefreshRender = renderCommitTick or renderProvisionalTick
 
 f_lineStyle(LineStyleMode styleMode) =>
     styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
@@ -209,13 +227,19 @@ var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
 
 if shouldRefreshRender
-    lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
-    for lineObj in renderedLines
-        line.delete(id = lineObj)
-    array.clear(id = renderedLines)
-    for labelObj in renderedLabels
-        label.delete(id = labelObj)
-    array.clear(id = renderedLabels)
+    // Deletes and the stamp are commit-tick only: removing committed
+    // drawings on a tick whose replacements roll back is exactly the
+    // vanish bug. On provisional ticks the committed lines stay put and
+    // the fresh draws simply overlay them (same prices — visually one
+    // line) until this bar's confirming tick redraws everything atomically.
+    if renderCommitTick
+        lastRenderedBar := bar_index + 1
+        for lineObj in renderedLines
+            line.delete(id = lineObj)
+        array.clear(id = renderedLines)
+        for labelObj in renderedLabels
+            label.delete(id = labelObj)
+        array.clear(id = renderedLabels)
 
     int renderedHighCount = 0
     int renderedLowCount = 0

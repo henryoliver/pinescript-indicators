@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "On Balance Volume", shorttitle = "🐳 OBV", format = format.volume, timeframe = "", timeframe_gaps = true)
+indicator(title = "On Balance Volume", shorttitle = "🐳 OBV", format = format.volume, timeframe = "", timeframe_gaps = false)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
