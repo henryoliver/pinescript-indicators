@@ -671,15 +671,23 @@ if waveLiveFlatBroke and not na(cycleExtremeBar) and cycleExtremeBar <= waveLast
     waveLiveTrendDir := TrendDir.FLAT
 bool waveLivePreviewsReset = cycleZone != 0 and (waveLiveTrendDir != waveTrendDir or waveLiveFlatBroke or waveLivePreviewsRebirth)
 
-// ── %K-turn display gate (close-gated 2026-07-25, replacing the 2026-07-16
-// tick-time varip latch at Henry's ask — the same rework macd-waves got the
-// same day). ONE gate feeds display, hold, freeze, and the classification
+// ── %K-turn display gate (TICK-TIME since 2026-07-28, replacing the
+// 2026-07-25 close gate at Henry's ask — the close gate read as a one-bar
+// delay: the show only landed on a bar's confirming tick, so visually the
+// label appeared as the NEXT bar formed. Same rework macd-waves got
+// 2026-07-27.) ONE gate feeds display, hold, freeze, and the classification
 // block alike, so every live label type — number, F, and letter — first
 // shows through the identical check:
-//   SHOW   — only on a CONFIRMED close where %K angles AGAINST the open
-//            cycle's side (falling in a high half-cycle, rising in a low
-//            one). The turn must still be standing AT the close — an
-//            intrabar turn that recovers before the close never shows.
+//   SHOW   — as soon as ANY tick has %K angling AGAINST the open cycle's
+//            side (forming %K vs the last committed close; falling in a
+//            high half-cycle, rising in a low one). No bar-close
+//            confirmation — the show lands mid-bar and STICKS (varip
+//            survives Pine's rollback). Accepted trade-off, back with the
+//            tick-time show: an intrabar-only turn that fades before the
+//            close keeps its label but may not reproduce on a reload
+//            (history has closes only). Provisional %D-crossing ticks
+//            never latch (cycleStartedThisBar guard) — the turn must
+//            belong to the standing window.
 //   HOLD   — once shown, shown for the rest of the half-cycle: post-show
 //            per-tick tracking is unchanged, the label keeps morphing live
 //            into the pin, and a later un-turn can't hide it. Reset on the
@@ -692,38 +700,42 @@ bool waveLivePreviewsReset = cycleZone != 0 and (waveLiveTrendDir != waveTrendDi
 //            on the reset preview's first confirmed close, if the old
 //            count's gate was already open and %K has rotated back WITH
 //            the cycle, the gate closes again — the newborn count's wave 1
-//            must earn its own close-confirmed %K turn instead of
-//            inheriting the turn the ended count consumed. The old count's
-//            shown label is untouched: the shared-half-cycle handoff
-//            freezes it from the hold snapshot on this same tick. A shift
-//            close where %K still angles against the cycle keeps the gate
-//            open — that turn is standing, so wave 1 may show on that very
-//            close. Edge-only: a later un-turn inside the standing preview
-//            never re-closes the gate (HOLD wins). If the reset preview
-//            reverts (a new extreme bar reads the old trend again), the
-//            re-arm is undone — the resumed old count already earned its
-//            show, and leaving the gate shut would hide a plotted label.
-// var + confirmed-tick writes only — nothing rolls back intrabar, and a
-// reload reproduces realtime exactly (the varip latch's reload caveat is
-// gone).
-var bool cycleKTurnShown = false
+//            must earn its own %K turn (any later tick now qualifies)
+//            instead of inheriting the turn the ended count consumed. The
+//            old count's shown label is untouched: the shared-half-cycle
+//            handoff freezes it from the hold snapshot on this same tick.
+//            A shift close where %K still angles against the cycle keeps
+//            the gate open — that turn is standing, so wave 1 may show on
+//            that very close. Edge-only: a later un-turn inside the
+//            standing preview never re-closes the gate (HOLD wins). If the
+//            reset preview reverts (a new extreme bar reads the old trend
+//            again), the re-arm is undone — the resumed old count already
+//            earned its show, and leaving the gate shut would hide a
+//            plotted label.
+// The re-arm bookkeeping stays on confirmed ticks (var); the SHOW is the
+// one varip write. Historical bars only ever execute their close, so a
+// replay reproduces the old close-gate timing exactly — the earliness
+// exists only in realtime.
+varip bool cycleKTurnShown = false
 var bool cycleKTurnRearmedByShift = false     // the reset preview re-closed an already-earned gate (undone on revert)
 var bool waveResetPreviewAtLastClose = false  // waveLivePreviewsReset at the previous confirmed close — the shift edge detector
+bool cycleKTickAgainstCycle = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
 if barstate.isconfirmed
     if cycleStartedThisBar
         cycleKTurnShown := false
         cycleKTurnRearmedByShift := false
-    bool cycleKCloseAgainstCycle = cycleZone == 1 ? cycleK < cycleK[1] : cycleZone == -1 ? cycleK > cycleK[1] : false
-    if waveLivePreviewsReset and not waveResetPreviewAtLastClose and cycleKTurnShown and not cycleKCloseAgainstCycle
+    if waveLivePreviewsReset and not waveResetPreviewAtLastClose and cycleKTurnShown and not cycleKTickAgainstCycle
         cycleKTurnShown := false
         cycleKTurnRearmedByShift := true
     if not waveLivePreviewsReset and cycleKTurnRearmedByShift
         cycleKTurnShown := true
         cycleKTurnRearmedByShift := false
-    if cycleKCloseAgainstCycle
+    if cycleKTickAgainstCycle
         cycleKTurnShown := true
         cycleKTurnRearmedByShift := false
     waveResetPreviewAtLastClose := waveLivePreviewsReset
+else if not cycleStartedThisBar and cycleKTickAgainstCycle
+    cycleKTurnShown := true
 
 // ── Live qualification + classification of the open half-cycle, judged on
 // the current extreme bar and re-evaluated as the extreme moves. The open
@@ -732,13 +744,14 @@ if barstate.isconfirmed
 // one is not a wave three"). An extreme beyond the baseline without the
 // body = failed. A failed wave upgrades to its full number in place if a
 // deeper extreme bar commits the body — and downgrades back if a wick-only
-// bar takes the extreme. The whole block is gated on the %K close gate:
-// before a close-confirmed turn no consumer can display the result, so the
-// string building and comparisons skip (the hold, the draw gate, and the
-// pendingA preview all require the gate too).
+// bar takes the extreme. The whole block is gated on the %K turn gate:
+// before a shown turn no consumer can display the result, so the string
+// building and comparisons skip (the hold, the draw gate, and the pendingA
+// preview all require the gate too).
 bool waveCycleIsImpulseSide = cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT and (waveLiveTrendDir == TrendDir.UP) == (cycleZone == 1)
 string waveLiveLabelText = ""
 bool waveLiveShowsLetter = false  // the live label is the cycle's bare letter
+bool waveLiveTakesOwnerNumber = false  // the live retrace is provisionally taking an EXISTING owner's number
 if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT and cycleKTurnShown
     int waveLiveImpulseNumber = waveLivePreviewsReset ? 1 : waveNextImpulseNumber
     if waveCycleIsImpulseSide
@@ -765,6 +778,10 @@ if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT and cycleKTurnShown
     else if not waveLivePreviewsReset and waveNextImpulseNumber > 1
         bool liveTakesOwnership = na(waveZoneBestExtreme) or
              (waveTrendDir == TrendDir.UP ? cycleExtreme < waveZoneBestExtreme : cycleExtreme > waveZoneBestExtreme)
+        // Exported for the hold/freeze below: this preview is claiming a
+        // number a pinned owner label currently displays — if a trend shift
+        // freezes the preview, that owner's duplicate number must go.
+        waveLiveTakesOwnerNumber := liveTakesOwnership and not na(waveZoneBestExtreme)
         bool zoneIsComplexLive = waveZoneRetraceCount + 1 >= 2  // the live retrace counts toward complexity
         if liveTakesOwnership
             // A live "a" can never be confirmed yet — preview the plain number.
@@ -773,21 +790,24 @@ if cycleZone != 0 and waveLiveTrendDir != TrendDir.FLAT and cycleKTurnShown
             waveLiveLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
             waveLiveShowsLetter := true
 
-// ── Authoritative owner text, recomputed every bar: while a live retrace is
-// provisionally deeper than the owner, the owner previews its letter; it
-// reverts to its number (stacked when complex) otherwise.
+// ── Authoritative owner text, recomputed every TICK (2026-07-28, was
+// confirm-gated): while a live retrace is provisionally deeper than the
+// owner, the owner previews its letter; it reverts to its number (stacked
+// when complex) otherwise. Per-tick because the deeper retrace's number
+// preview is tick-time now — the owner's downgrade must travel on the SAME
+// tick, or both labels read the even number for the rest of the bar
+// (duplicated-2 bug, Henry 2026-07-28). Unconfirmed boundary ticks still
+// change nothing (application-side guard, like every render path).
 string waveOwnerText = ""
 bool waveOwnerHasZone = not na(waveZoneBestExtreme)
-// Confirm-gated: the only consumer is the confirm-tick set_text, so the
-// string building and deeper-retrace checks skip unconfirmed ticks.
-if waveOwnerHasZone and barstate.isconfirmed
+if waveOwnerHasZone and (barstate.isconfirmed or not cycleStartedThisBar)
     // The owner's letter only displays once confirmed — an "a" without its
     // "b" keeps the plain number (or an empty preview while a live retrace
     // is provisionally deeper). A trend-reset preview changes NOTHING here
     // (shared half-cycle rule): the pinned owner keeps its number/stack.
     bool ownerLetterShowable = waveZoneBestLetterIndex >= 1 or (waveZoneBestLetterIndex == 0 and waveZoneOwnerAConfirmed)
     // Gate-qualified: the owner only reacts to a live retrace that is
-    // actually SHOWING (the %K close gate opened). Before the gate opens the
+    // actually SHOWING (the %K turn gate opened). Before the gate opens the
     // deeper retrace's own number preview is suppressed, so blanking or
     // downgrading the owner then would leave its number vanished with
     // nothing previewing in its place — every live-driven label mutation
@@ -827,7 +847,7 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
         label.set_textcolor(id = updatedLabel, textcolor = labelTextColor)
     updatedLabel
 
-// Wave label — live once the %K-turn close gate opens, pinned on the %D cross
+// Wave label — live once the tick-time %K-turn gate opens, pinned on the %D cross
 // (frozen in place instead when a trend shift cut its count — shared
 // half-cycle rule). The retrace-number owner's label ref is kept so a
 // DEEPER RETRACE can downgrade it to its letter mid-zone; a trend reset
@@ -837,11 +857,21 @@ f_upsertWaveLabel(label existingLabel, int labelBarIndex, float labelPrice, stri
 var label waveNumberLabel = na
 var label waveZoneOwnerLabel = na
 var label wavePendingALabel = na  // the held "a", drawn provisionally while the live "b" shows
-// Display gate — the %K-turn close gate (computed in the WAVES section,
-// where the classification consumes it too): show once a bar CLOSED with
+// Spare label — one blank label kept in reserve (minted only on confirmed
+// ticks, honoring the lifecycle invariant) so a trend shift can preview the
+// NEWBORN count intrabar while the old count's label stays put: the shift
+// tick can't label.new, and morphing the one live object into the newborn
+// "1" is exactly the old-wave-2-vanishes flick Henry killed 2026-07-28. Its
+// intrabar set_*s roll back every tick and it is never written on confirmed
+// ticks, so its committed state is always blank — invisible until a shift
+// preview borrows it, adopted as the newborn count's live object at the
+// handoff (zero-pixel morph), then re-minted fresh.
+var label waveSpareLabel = na
+// Display gate — the tick-time %K-turn gate (computed in the WAVES section,
+// where the classification consumes it too): show as soon as any tick has
 // %K turned against the open cycle, keep showing until the pin, the
-// identity's own reject, or the mid-cycle count reset's RE-ARM (gate
-// block); identity stays LIVE while shown (text/price/
+// identity's own confirmed reject, or the mid-cycle count reset's RE-ARM
+// (gate block); identity stays LIVE while shown (text/price/
 // anchor morph with the cycle state into the pin). Unconfirmed BOUNDARY
 // ticks freeze everything.
 
@@ -863,24 +893,66 @@ var label wavePendingALabel = na  // the held "a", drawn provisionally while the
 // bar, and returns the moment a new extreme migrates the count's anchor
 // off it (yield blocks below and in the boundary branch). Frozen numbers,
 // F pins, and owner stacks are count labels themselves and never yield.
-var string waveLiveHeldText = ""
-var float waveLiveHeldPrice = na
-var int waveLiveHeldBar = na
-var color waveLiveHeldColor = na
-var bool waveLiveHeldIsLetter = false
+// varip since 2026-07-28: the gate shows tick-time now, so the hold must
+// travel WITH the show — a var hold rolls back each tick, and a trend shift
+// right after an intrabar-only first show would freeze an empty snapshot
+// and drop the visible label (the exact disappearing-label bug the
+// 2026-07-16 hardening fixed on the old latch). Trade-off, accepted with
+// the tick-time gate: a shift confirming while the extreme's tick rolled
+// back freezes the label where it was last SHOWN, which may not be the
+// committed extreme — what is shown must persist. Intrabar, an EMPTY live
+// text never overwrites the hold (a momentary disqualification tick keeps
+// the last shown state — anti-flick); a confirmed empty text still lands
+// (the identity's own reject, unchanged canon).
+varip string waveLiveHeldText = ""
+varip float waveLiveHeldPrice = na
+varip int waveLiveHeldBar = na
+varip color waveLiveHeldColor = na
+varip bool waveLiveHeldIsLetter = false
+varip bool waveLiveHeldTakesOwner = false       // the held preview was claiming a pinned owner's number
+varip string waveOwnerDowngradeSnapshot = ""    // the owner text standing while it was claimed (letter or blank)
 var label waveHeldFrozenLabel = na
-if cycleZone != 0 and cycleKTurnShown and not waveLivePreviewsReset and not cycleStartedThisBar
+// A frozen deeper-retrace preview KEEPS the owner's number spent (Henry
+// 2026-07-28, duplicated-2 fix): while this flag stands, the owner label
+// renders the downgrade snapshot instead of the live owner text — without
+// it, the reset preview turns liveIsDeeper off on the very tick the "2"
+// preview freezes, and the owner's "2" comes back next to the frozen one.
+// Cleared when the frozen label reverts (owner recomputes live) and at the
+// boundary (the ref drops with the downgrade standing).
+var bool waveFrozenTookOwnerNumber = false
+// The na(waveHeldFrozenLabel) guard: while a frozen label exists, the hold
+// IS its snapshot — an intrabar revert tick (preview momentarily off, the
+// confirmed delete still pending) must not overwrite it, or a re-engaged
+// preview would re-stamp the frozen label from corrupted values.
+if cycleZone != 0 and cycleKTurnShown and not waveLivePreviewsReset and not cycleStartedThisBar and
+     na(waveHeldFrozenLabel) and (waveLiveLabelText != "" or barstate.isconfirmed)
     waveLiveHeldText := waveLiveLabelText
     waveLiveHeldPrice := cycleExtreme
     waveLiveHeldBar := cycleExtremeBar
     waveLiveHeldColor := waveLiveLabelColor
     waveLiveHeldIsLetter := waveLiveShowsLetter
-bool waveLiveLabelDrawn = not na(cycleExtreme) and cycleKTurnShown and waveLiveLabelText != "" and
+    waveLiveHeldTakesOwner := waveLiveTakesOwnerNumber
+    if waveLiveTakesOwnerNumber
+        waveOwnerDowngradeSnapshot := waveOwnerText
+// Render state — the live label never blanks INTRABAR: a momentary
+// disqualification tick (the provisional extreme breathing across a
+// baseline flips the classification empty for a tick) keeps rendering the
+// last shown state instead of flashing blank↔shown. A REAL reject still
+// hides at the close, where the hold snapshots the empty text. Reset
+// previews are exempt — the split path below owns the old label then.
+string waveLiveRenderText = waveLiveLabelText
+bool waveLiveRenderIsLetter = waveLiveShowsLetter
+if waveLiveRenderText == "" and not barstate.isconfirmed and not waveLivePreviewsReset and waveLiveHeldText != ""
+    waveLiveRenderText := waveLiveHeldText
+    waveLiveRenderIsLetter := waveLiveHeldIsLetter
+bool waveLiveLabelDrawn = not na(cycleExtreme) and cycleKTurnShown and waveLiveRenderText != "" and
      (barstate.isconfirmed or not cycleStartedThisBar)
-// Close-only gate for everything else — pins, owner downgrades, and the held
-// "a": an intrabar %D cross can recede before the close, so those label
-// mutations wait for the bar's confirming tick, where the extreme tracking
-// and boundary state above have already seen the bar's final values. Wave
+// Close-only gate for the STRUCTURAL label work — pins, boundary owner
+// downgrades, freezes, and every create/delete: an intrabar %D cross can
+// recede before the close, so these mutations wait for the bar's confirming
+// tick, where the extreme tracking and boundary state above have already
+// seen the bar's final values. (The pendingA preview and the owner
+// application are per-tick set_text blocks below since 2026-07-28.) Wave
 // STATE is untouched — it still updates every tick and rolls back.
 if barstate.isconfirmed
     if cycleStartedThisBar
@@ -897,8 +969,20 @@ if barstate.isconfirmed
             waveHeldFrozenLabel := f_freezeHeldLabel(liveLabel = waveNumberLabel, frozenBar = waveLiveHeldBar,
                  frozenPrice = waveLiveHeldPrice, frozenText = waveLiveHeldText, frozenColor = waveLiveHeldColor)
             waveNumberLabel := na  // the pin path builds fresh if it pins
-            if not na(wavePendingALabel)
-                wavePendingALabel := na  // frozen "b" keeps its previewed "a" (pair persists)
+            // The frozen preview was claiming the owner's number — commit the
+            // owner's downgrade NOW (per-tick applications rolled back, the
+            // apply block skips once the zone state resets below): the frozen
+            // label IS the valid even wave, the old owner must not keep a
+            // duplicate (Henry 2026-07-28).
+            if waveLiveHeldTakesOwner and not na(waveZoneOwnerLabel)
+                label.set_text(id = waveZoneOwnerLabel, text = waveOwnerDowngradeSnapshot)
+            if not na(wavePendingALabel) and waveLiveHeldIsLetter
+                // Frozen "b" keeps its previewed "a" (pair persists) — commit
+                // the per-tick preview text before orphaning the ref. A held
+                // pendingA whose "b" did NOT freeze falls through to the drop
+                // path below instead.
+                label.set_text(id = wavePendingALabel, text = "a")
+                wavePendingALabel := na
         if waveEndedLabelText != ""
             waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = endedCycleExtremeBar,
                  labelPrice = endedCycleExtreme, labelText = waveEndedLabelText, labelTextColor = waveLabelColor, isHighSide = cycleStartedLow)
@@ -917,6 +1001,12 @@ if barstate.isconfirmed
         waveNumberLabel := label.new(x = bar_index, y = cycleStartedHigh ? high : low, text = "", xloc = xloc.bar_index, yloc = yloc.price,
              style = cycleStartedHigh ? label.style_label_down : label.style_label_up,
              color = color.new(color = color.gray, transp = 100), textcolor = waveLiveLabelColor, size = waveLabelSize)
+        if na(waveSpareLabel)
+            // Keep the shift-preview spare stocked (confirmed tick — the
+            // only place a label may be born).
+            waveSpareLabel := label.new(x = bar_index, y = cycleStartedHigh ? high : low, text = "", xloc = xloc.bar_index, yloc = yloc.price,
+                 style = cycleStartedHigh ? label.style_label_down : label.style_label_up,
+                 color = color.new(color = color.gray, transp = 100), textcolor = waveLiveLabelColor, size = waveLabelSize)
         if waveOwnerClear
             waveZoneOwnerLabel := na  // zone closed or structure reset — the label stays, the ref is dropped
         // A frozen old-trend label becomes permanent at the boundary; the
@@ -932,59 +1022,110 @@ if barstate.isconfirmed
         waveHeldFrozenLabel := na
         waveLiveHeldText := ""
         waveLiveHeldIsLetter := false
+        waveLiveHeldTakesOwner := false
+        waveFrozenTookOwnerNumber := false
         if not na(wavePendingAReleasePrice)
             // The held "a" earned its "b" — make its preview permanent (or draw it
             // retroactively if the live "b" never showed). Dropping the ref keeps
-            // the preview block below from deleting it.
+            // every later write off it.
             label releasedALabel = f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingAReleaseBar,
                  labelPrice = wavePendingAReleasePrice, labelText = "a", labelTextColor = waveLabelColor, isHighSide = wavePendingAReleaseIsHighSide)
             wavePendingALabel := na
+        else if not na(wavePendingALabel)
+            // Dropped — a failed wave, confirmed impulse, or reset killed the
+            // held "a" (its per-tick previews rolled back; the object's
+            // committed state is at most a blank). Confirmed tick: delete is
+            // safe, ref and deletion commit together.
+            label.delete(id = wavePendingALabel)
+            wavePendingALabel := na
+        if not na(wavePendingAPrice)
+            // A lone "a" was held at THIS boundary — mint its preview object
+            // now, blank (lifecycle invariant: labels are only born on
+            // confirmed ticks). The per-tick block below shows it the moment
+            // the next cycle's live "b" draws — same tick-time engine as
+            // every other live label.
+            wavePendingALabel := label.new(x = wavePendingABar, y = wavePendingAPrice, text = "", xloc = xloc.bar_index, yloc = yloc.price,
+                 style = wavePendingAIsHighSide ? label.style_label_down : label.style_label_up,
+                 color = color.new(color = color.gray, transp = 100), textcolor = waveLabelColor, size = waveLabelSize)
     else
         if waveLivePreviewsReset and waveLiveHeldText != "" and not na(waveLiveHeldBar) and na(waveHeldFrozenLabel) and not na(waveNumberLabel)
             // Trend shift confirmed mid-half-cycle: leave the old trend's
             // label exactly where it stood (Henry 2026-07-16) — the live
             // object becomes the permanent frozen label, restamped from the
-            // hold snapshot, and a fresh object is minted for the NEW
-            // count's preview in this same half-cycle. Confirmed tick only:
-            // creation and the handoff commit together (lifecycle-safe).
+            // hold snapshot, and the NEW count's preview in this same
+            // half-cycle adopts the SPARE label: the intrabar split below
+            // was already previewing the newborn on it, so the handoff is a
+            // zero-pixel morph — nothing hides, nothing jumps (Henry
+            // 2026-07-28). Confirmed tick only: the handoff, the adoption,
+            // and the replacement mint commit together (lifecycle-safe).
             waveHeldFrozenLabel := f_freezeHeldLabel(liveLabel = waveNumberLabel, frozenBar = waveLiveHeldBar,
                  frozenPrice = waveLiveHeldPrice, frozenText = waveLiveHeldText, frozenColor = waveLiveHeldColor)
-            waveNumberLabel := label.new(x = bar_index, y = waveLiveHeldPrice, text = "", xloc = xloc.bar_index, yloc = yloc.price,
+            if na(waveSpareLabel)
+                waveNumberLabel := label.new(x = bar_index, y = waveLiveHeldPrice, text = "", xloc = xloc.bar_index, yloc = yloc.price,
+                     style = cycleZone == 1 ? label.style_label_down : label.style_label_up,
+                     color = color.new(color = color.gray, transp = 100), textcolor = waveLiveLabelColor, size = waveLabelSize)
+            else
+                waveNumberLabel := waveSpareLabel
+                label.set_style(id = waveNumberLabel, style = cycleZone == 1 ? label.style_label_down : label.style_label_up)
+            waveSpareLabel := label.new(x = bar_index, y = waveLiveHeldPrice, text = "", xloc = xloc.bar_index, yloc = yloc.price,
                  style = cycleZone == 1 ? label.style_label_down : label.style_label_up,
                  color = color.new(color = color.gray, transp = 100), textcolor = waveLiveLabelColor, size = waveLabelSize)
+            // The frozen preview was claiming the owner's number — spend it:
+            // the flag routes the owner's per-tick application onto the
+            // downgrade snapshot from this tick on (duplicated-2 fix, Henry
+            // 2026-07-28), and the revert path below hands the number back.
+            waveFrozenTookOwnerNumber := waveLiveHeldTakesOwner
             if not na(wavePendingALabel)
-                // The previewed lone-"a" freezes WITH its "b" — the pair
-                // persists together (a frozen bare "b" with its "a" erased
-                // would be exactly the meaningless-lone-letter state the
-                // pendingA machinery exists to prevent). Orphaning the ref
-                // makes the drawn "a" permanent and keeps the preview-delete
-                // below from reaching it; clearing the pending state keeps
-                // the boundary from re-dropping it.
+                if waveLiveHeldIsLetter
+                    // The previewed lone-"a" freezes WITH its "b" — the pair
+                    // persists together (a frozen bare "b" with its "a"
+                    // erased would be exactly the meaningless-lone-letter
+                    // state the pendingA machinery exists to prevent).
+                    // Commit the per-tick preview text, then orphan the ref
+                    // so no later write reaches it; clearing the pending
+                    // state keeps the boundary from re-dropping it.
+                    label.set_text(id = wavePendingALabel, text = "a")
+                else
+                    // The held "a" never got its live "b" before the shift —
+                    // it dies with the old count. Confirmed tick: safe.
+                    label.delete(id = wavePendingALabel)
                 wavePendingALabel := na
                 wavePendingAPrice := na
                 wavePendingABar := na
         else if not waveLivePreviewsReset and not na(waveHeldFrozenLabel)
             // The reset preview reverted (a new extreme bar reads the old
             // trend again) — the old count resumes in the live object, so
-            // the frozen copy is reabsorbed. Confirmed-tick delete: safe.
+            // the frozen copy is reabsorbed and the owner (if its number was
+            // spent by the freeze) recomputes live again. Confirmed-tick
+            // delete: safe.
             label.delete(id = waveHeldFrozenLabel)
             waveHeldFrozenLabel := na
-    // Held-"a" preview: a lone "a" is meaningless, but once the very next cycle's
-    // live bare-letter "b" is drawing, the "a" has meaning — show it now instead
-    // of waiting for the %D cross to pin the "b". Provisional like every live
-    // label: it deletes if the open cycle upgrades to a number or failed wave
-    // (the boundary then drops the held "a" for good).
-    bool wavePendingAPreviewed = not na(wavePendingAPrice) and waveLiveLabelDrawn and waveLiveShowsLetter
-    if wavePendingAPreviewed
-        wavePendingALabel := f_upsertWaveLabel(existingLabel = wavePendingALabel, labelBarIndex = wavePendingABar,
-             labelPrice = wavePendingAPrice, labelText = "a", labelTextColor = waveLabelColor, isHighSide = wavePendingAIsHighSide)
-    else if not na(wavePendingALabel)
-        label.delete(id = wavePendingALabel)
-        wavePendingALabel := na
-    // Empty owner text is applied too — it blanks an unconfirmed-"a" owner while
-    // a live retrace is provisionally deeper (its number is being previewed there).
-    if not na(waveZoneOwnerLabel) and waveOwnerHasZone
-        label.set_text(id = waveZoneOwnerLabel, text = waveOwnerText)
+            waveFrozenTookOwnerNumber := false
+// Held-"a" preview — PER TICK since 2026-07-28 (was confirm-gated, which
+// made the "a" trail its tick-time "b" by a close — the lag that broke the
+// one-engine rule): a lone "a" is meaningless, but the moment the very next
+// cycle's live bare-letter "b" is drawing, the "a" has meaning — show it on
+// that same tick. Its object was minted blank at the boundary (lifecycle
+// invariant), so this is set_text only — shown while the "b" shows, hidden
+// via "" otherwise; the real delete stays at the boundary (or the shift
+// handoff), where drops commit. Unconfirmed boundary ticks change nothing.
+// During a reset preview the live text belongs to the NEWBORN count while
+// the "b" keeps displaying through the hold (split/freeze) — the "a" reads
+// the HELD letter state then, so the pair never blinks apart mid-shift.
+if not na(wavePendingALabel) and not na(wavePendingAPrice) and (barstate.isconfirmed or not cycleStartedThisBar)
+    bool wavePendingAPreviewed = waveLivePreviewsReset ? waveLiveHeldIsLetter : waveLiveLabelDrawn and waveLiveRenderIsLetter
+    label.set_text(id = wavePendingALabel, text = wavePendingAPreviewed ? "a" : "")
+// Owner application — PER TICK since 2026-07-28 (was confirm-gated): the
+// deeper retrace's number previews tick-time, so the owner's downgrade (or
+// its blank, for an unconfirmed-"a" owner) lands on the same tick — never a
+// bar with two even numbers standing. While a trend shift has FROZEN a
+// deeper preview, the flag overrides the live text with the downgrade
+// snapshot: liveIsDeeper reads false during the reset preview, and the
+// owner's number must stay spent as long as the frozen label displays it
+// (duplicated-2 fix). set_text only, idempotent, rolls back like every
+// intrabar write; confirmed ticks commit it.
+if not na(waveZoneOwnerLabel) and waveOwnerHasZone and (barstate.isconfirmed or not cycleStartedThisBar)
+    label.set_text(id = waveZoneOwnerLabel, text = waveFrozenTookOwnerNumber ? waveOwnerDowngradeSnapshot : waveOwnerText)
 
 // Live wave label — tick-time, per the display gate above. On the boundary
 // bar's confirming tick this runs AFTER the pin block dropped the old ref, so
@@ -1004,14 +1145,41 @@ if barstate.isconfirmed
 // extreme bar and hands off to the pin at the close, which reuses the same
 // object. The live label therefore never leaves the extreme bar across the
 // half-cycle's end.
-if waveLiveLabelDrawn
+// SHIFT-PREVIEW SPLIT (Henry 2026-07-28): while a reset preview stands
+// INTRABAR with a shown old label and the freeze hasn't committed yet, the
+// one live object must not morph into the newborn count — that is the
+// old-wave-2-vanishes-then-reappears flick. Instead the old label re-pins
+// to its hold snapshot every tick (a pre-freeze: the confirmed handoff
+// commits these exact values) and the NEWBORN count previews tick-time on
+// the spare label at the shared extreme. At the handoff the newborn adopts
+// the spare — both labels keep their pixels, realtime morphs straight into
+// the permanent state. If the preview reverts mid-bar, the spare's writes
+// roll back to its committed blank and the old label resumes below —
+// nothing was created or deleted.
+bool waveShiftSplitActive = not barstate.isconfirmed and not cycleStartedThisBar and waveLivePreviewsReset and
+     na(waveHeldFrozenLabel) and waveLiveHeldText != "" and not na(waveLiveHeldBar) and not na(waveNumberLabel)
+if waveShiftSplitActive
+    // Count-over-letter, pre-handoff mirror: a held bare letter yields its
+    // bar to the newborn count's number while they share the extreme bar.
+    bool heldBarContestedLive = waveLiveHeldIsLetter and waveLiveLabelDrawn and not waveLiveRenderIsLetter and
+         cycleExtremeBar == waveLiveHeldBar
+    label.set_xy(id = waveNumberLabel, x = waveLiveHeldBar, y = waveLiveHeldPrice)
+    label.set_text(id = waveNumberLabel, text = heldBarContestedLive ? "" : waveLiveHeldText)
+    label.set_textcolor(id = waveNumberLabel, textcolor = waveLiveHeldColor)
+    if not na(waveSpareLabel)
+        label.set_xy(id = waveSpareLabel, x = cycleExtremeBar, y = cycleExtreme)
+        label.set_text(id = waveSpareLabel, text = waveLiveLabelDrawn ? waveLiveRenderText : "")
+        label.set_textcolor(id = waveSpareLabel, textcolor = waveLiveLabelColor)
+        label.set_style(id = waveSpareLabel, style = cycleZone == 1 ? label.style_label_down : label.style_label_up)
+else if waveLiveLabelDrawn
     waveNumberLabel := f_upsertWaveLabel(existingLabel = waveNumberLabel, labelBarIndex = cycleExtremeBar,
-         labelPrice = cycleExtreme, labelText = waveLiveLabelText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
+         labelPrice = cycleExtreme, labelText = waveLiveRenderText, labelTextColor = waveLiveLabelColor, isHighSide = cycleZone == 1)
 else if not na(waveNumberLabel) and not cycleStartedThisBar
-    // Gate closed (no %K turn shown yet, or empty display text) — HIDE, never
-    // delete: the half-cycle's one label object must live to the boundary so
-    // the intrabar ticks above only ever set_* it (a delete-and-recreate
-    // cycle is exactly the label.new churn the 2026-07-15 fix removed). The
+    // Gate closed (no %K turn shown yet, or a confirmed empty display text —
+    // intrabar empties render the hold instead) — HIDE, never delete: the
+    // half-cycle's one label object must live to the boundary so the
+    // intrabar ticks above only ever set_* it (a delete-and-recreate cycle
+    // is exactly the label.new churn the 2026-07-15 fix removed). The
     // boundary's confirmed tick reuses it for the pin or deletes it, then
     // mints the successor.
     label.set_text(id = waveNumberLabel, text = "")
@@ -1026,5 +1194,5 @@ else if not na(waveNumberLabel) and not cycleStartedThisBar
 // nothing, like every other render path. On the boundary's confirmed tick
 // the ref is already dropped above, where the pin settled the bar for good.
 if not na(waveHeldFrozenLabel) and waveLiveHeldIsLetter and (barstate.isconfirmed or not cycleStartedThisBar)
-    bool frozenBarContested = waveLiveLabelDrawn and not waveLiveShowsLetter and cycleExtremeBar == waveLiveHeldBar
+    bool frozenBarContested = waveLiveLabelDrawn and not waveLiveRenderIsLetter and cycleExtremeBar == waveLiveHeldBar
     label.set_text(id = waveHeldFrozenLabel, text = frozenBarContested ? "" : waveLiveHeldText)
