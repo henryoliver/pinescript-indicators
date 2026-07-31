@@ -79,6 +79,7 @@ type TickData
     int   direction // 1 = buy/up, -1 = sell/down, 0 = neutral/unknown
     int   condition // COND_* code (replaces bid/ask — classification baked in at store time)
     bool  iceberg = false // 🧊 same-size-repeat tag, baked in at store time (institutional prints only)
+    bool  aggregate = false // Σ delta-fallback row — a SUM of unseen prints, not a print itself
 
 type BlockTradeState
     int count   = 0 // total block prints this bar (sum of the buckets below)
@@ -90,11 +91,6 @@ type BlockTradeState
 
 type TapeProcessingState
     float tapePrice = na
-
-type RealtimeBarState
-    float volume = na
-    float price = na
-    int updateTime = na
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎛️ USER INPUT SETTINGS
@@ -167,12 +163,12 @@ showRetail = input.bool(defval = true, title = "Show Retail/Amateur", tooltip = 
 retailRows = input.int(defval = 20, title = "Retail Rows", minval = 1, maxval = 50, tooltip = "Maximum number of retail/amateur prints shown in the table.", group = GROUP_RETAIL)
 retailHeaderBg = input.color(defval = color.new(color = NORD2, transp = 80), title = "Retail Header BG", tooltip = "Background color for the retail section label.", group = GROUP_RETAIL)
 retailMinSize = input.int(defval = 0, title = "Retail Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the retail/amateur section.", group = GROUP_RETAIL)
-retailMaxSize = input.int(defval = 999, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section. Default is the institutional minimum minus one (999 vs 1000) so the two sections tile the size range with no overlap and no gap — keep it in sync if you change the institutional minimum. Set to 0 to include every print below the institutional minimum.", group = GROUP_RETAIL)
+retailMaxSize = input.int(defval = 999, title = "Retail Max Size", minval = 0, step = 1, tooltip = "Maximum trade size for the retail/amateur section. Default is the institutional minimum minus one (999 vs 1000) so the two sections tile the size range with no overlap and no gap — keep it in sync if you change the institutional minimum. Set to 0 to include every print below the institutional minimum. Capped-bar Σ aggregate rows bypass this range: they are volume-delta sums, not prints, and ride this lane only to keep the tape rolling while the bar's tick data is capped.", group = GROUP_RETAIL)
 
 const string GROUP_INSTITUTIONAL = "🏦 Professional / Institutional"
 
 // Professional / Institutional Settings
-showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", tooltip = "Show the institutional/professional tape section.", group = GROUP_INSTITUTIONAL)
+showInstitutional = input.bool(defval = true, title = "Show Institutional/Professional", tooltip = "Show the institutional/professional tape section. Holds real single prints only — capped-bar Σ aggregate rows never route here, whatever their size.", group = GROUP_INSTITUTIONAL)
 institutionalRows = input.int(defval = 10, title = "Institutional Rows", minval = 1, maxval = 50, tooltip = "Maximum number of institutional/professional prints shown in the table.", group = GROUP_INSTITUTIONAL)
 institutionalHeaderBg = input.color(defval = color.new(color = NORD1, transp = 80), title = "Institutional Header BG", tooltip = "Background color for the institutional section label.", group = GROUP_INSTITUTIONAL)
 institutionalMinSize = input.int(defval = 1000, title = "Institutional Min Size", minval = 0, step = 1, tooltip = "Minimum trade size for the institutional/professional section.", group = GROUP_INSTITUTIONAL)
@@ -315,7 +311,29 @@ varip bool barTickCapReached = false
 // True once the delta fallback has printed on the current bar — decides whether
 // a same-bar 1T latch must skip its backlog to avoid double-showing volume.
 varip bool fallbackPrintedThisBar = false
-varip RealtimeBarState realtimeBarState = RealtimeBarState.new()
+// ⚡ Delta-engine state — varip SCALARS, deliberately NOT UDT fields: object-
+// field `:=` rolls back per realtime tick (same trap as the old watermark and
+// the block-count scalars below). The 2026-07-30 log run caught the old
+// RealtimeBarState baseline rolling back mid-storm and re-printing ONE glitch
+// delta 34× (covTotal 653%) — and on other capped bars rolling back to a huge
+// stale value, muting the fallback entirely (Σrows=0, 8% of the bar lost).
+//   fbBaselineVolume — chart volume the tape has already covered. na = unseeded:
+//   the first fallback pass after a mid-bar load seeds it silently, no print.
+//   barMaxChartVol — MONOTONIC per-bar max of `volume`. The same log run caught
+//   the chart feed serving bogus LOW readings mid-bar under load (volume=40 with
+//   NA quotes on a bar that had 110k shares). Cumulative bar volume can never
+//   decrease, so the delta engine reads this watermark, never raw `volume` —
+//   a bogus execution computes delta 0 instead of fabricating prints.
+//   barTickVolSum — volume already SHOWN as real 1T prints this bar. The chart
+//   volume series and the LTF tick feed lag INDEPENDENTLY (2026-07-30 pm log
+//   run: chart volume read 118 while the tick array had covered 88,627), so the
+//   delta must baseline off whichever covered more — otherwise the Σ engine
+//   re-shows the tick-covered volume when chart volume catches up (covTotal ran
+//   106–184% on capped bars).
+varip float fbBaselineVolume = na
+varip int fbLastUpdateTime = 0
+varip float barMaxChartVol = 0.0
+varip float barTickVolSum = 0.0
 varip BlockTradeState blockState = BlockTradeState.new()
 // 🐋 Per-bar block counts the RENDER + alerts read. blockState is only a
 // per-execution ACCUMULATOR (an object, so it can be passed by-ref into the
@@ -392,16 +410,6 @@ f_recordBlockTradeState(BlockTradeState state, int condition) =>
     else
         state.mid += 1
 
-f_resetRealtimeBarState(RealtimeBarState state, float barPrice, int barUpdateTime) =>
-    state.volume := 0.0
-    state.price := barPrice
-    state.updateTime := barUpdateTime
-
-f_updateRealtimeBarState(RealtimeBarState state, float barVolume, float barPrice, int barUpdateTime) =>
-    state.volume := barVolume
-    state.price := barPrice
-    state.updateTime := barUpdateTime
-
 f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
     // LTF arrays arrive in chronological order, so the new tick is always newest:
     // skip the linear scan and just push to the front + trim the tail.
@@ -425,8 +433,17 @@ f_storeTick(float tickPrice, float tickVolume, int tickTime, int tickDirection, 
     // overlap), and from there storage is the identical code for retail and
     // institutional. instRowsActive/retailRowsActive already fold in the
     // section-visibility toggles.
-    bool inInstitutionalRange = instRowsActive > 0 and tickVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or tickVolume <= institutionalMaxSize)
-    bool inRetailRange = not inInstitutionalRange and retailRowsActive > 0 and tickVolume >= retailMinSize and (retailMaxSize <= 0 or tickVolume <= retailMaxSize)
+    // Σ EXCEPTION: a capped-bar delta aggregate is a SUM of unseen prints, not a
+    // print — on QQQ's flow rate the per-update deltas are almost always ≥1000,
+    // so size-routing them flooded the INSTITUTIONAL section with fake 1000+
+    // prints (~1/sec for the capped ~70% of every RTH minute), shoving the real
+    // ones off the rows. Whatever its size, an aggregate NEVER takes an
+    // institutional row. It rides the retail lane instead — size filters
+    // bypassed, Σ-tagged at render — purely to keep the tape visibly rolling on
+    // capped bars. If the retail section is hidden, aggregates drop and the
+    // institutional rows simply hold the last real prints through the cap.
+    bool inInstitutionalRange = not capAggregate and instRowsActive > 0 and tickVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or tickVolume <= institutionalMaxSize)
+    bool inRetailRange = not inInstitutionalRange and retailRowsActive > 0 and (capAggregate or (tickVolume >= retailMinSize and (retailMaxSize <= 0 or tickVolume <= retailMaxSize)))
     bool passesSectionFilter = inInstitutionalRange or inRetailRange
     int icebergRepeats = 0
     if passesSectionFilter
@@ -435,14 +452,16 @@ f_storeTick(float tickPrice, float tickVolume, int tickTime, int tickDirection, 
             volume = tickVolume,
             time = tickTime,
             direction = tickDirection,
-            condition = tickCondition
+            condition = tickCondition,
+            aggregate = capAggregate
         )
         // 📡 Institutional-only SIDE CHANNEL (pro flow + iceberg) — observes the
         // print, never gates or delays the row storage below. Prune by TICK time,
         // not wall time, so backfill seeding detects across the whole fetched
-        // history. Capped-bar delta aggregates never enter it — pro flow and
-        // iceberg read SINGLE institutional prints, and an aggregate ≥1000 is not one.
-        if inInstitutionalRange and flowTrackingActive and not capAggregate
+        // history. Delta aggregates can't reach here — the Σ routing above keeps
+        // them out of the institutional stream entirely, so pro flow and iceberg
+        // read only SINGLE institutional prints.
+        if inInstitutionalRange and flowTrackingActive
             f_pruneFlow(flowTimes = proFlowTimes, flowDirs = proFlowDirs, flowSizes = proFlowSizes, cutoffTime = tickTime - flowRetentionMs)
             proFlowTimes.push(value = tickTime)
             proFlowDirs.push(value = tickDirection)
@@ -482,7 +501,9 @@ f_tapeCell(int column, int row, string cellText, float cellHeight, color textCol
 
 f_renderTickRow(int tableRow, TickData currentTick) =>
     int tickCondition = currentTick.condition
-    string conditionText = f_conditionText(tickCondition = tickCondition)
+    // Σ marks a capped-bar delta aggregate — a sum of prints the capped 1T array
+    // never served, classified against the live quote like any print but not one.
+    string conditionText = (currentTick.aggregate ? "Σ " : "") + f_conditionText(tickCondition = tickCondition)
     color tickTextColor = defaultTextColor
     color tickBgColor = backgroundColor
     bool useBold = false
@@ -507,7 +528,9 @@ f_renderTickRow(int tableRow, TickData currentTick) =>
     else if currentTick.direction < 0 and belowBidBold
         useBold := true
 
-    if largeOrderSize > 0 and currentTick.volume >= largeOrderSize
+    // Aggregates skip the large-order highlight — a 10k+ volume-delta sum is not
+    // a whale print, and highlighting it fabricates one.
+    if largeOrderSize > 0 and currentTick.volume >= largeOrderSize and not currentTick.aggregate
         tickTextColor := largeOrderTextColor
         tickBgColor := largeOrderBackgroundColor
         if largeOrderBold
@@ -621,7 +644,10 @@ if barstate.isnew
     tapeProcessedTickCount := 0
     barTickCapReached := false
     fallbackPrintedThisBar := false
-    f_resetRealtimeBarState(state = realtimeBarState, barPrice = close, barUpdateTime = timenow)
+    fbBaselineVolume := 0.0
+    fbLastUpdateTime := timenow
+    barMaxChartVol := nz(source = volume)
+    barTickVolSum := 0.0
     f_resetBlockTradeState(state = blockState)
     // Clear the shown counts too so a fresh bar starts empty before its first
     // data tick latches a new value.
@@ -631,6 +657,12 @@ if barstate.isnew
     blockShownAtBid := 0
     blockShownAggSell := 0
     blockShownMid := 0
+
+// ⚡ Monotonic chart-volume watermark — advanced on EVERY realtime execution so
+// the delta engine never reads a bogus regressed `volume` (see the fb* state
+// comments). Runs after the isnew reset, so the watermark is per-bar.
+if barstate.isrealtime
+    barMaxChartVol := math.max(barMaxChartVol, nz(source = volume))
 
 // 📰 LOWER-TF TICKS
 bool lowerTfTicksChangedThisExec = false
@@ -675,7 +707,15 @@ if tapeEnabled or blockTradesActive
             // jump-in point. Worst case (sparse matches) the scan reaches index
             // 0 and processing is identical to the full pass. Realtime bars keep
             // the incremental path untouched.
-            if barstate.ishistory and processStartIndex == 0 and availableTickCount > 0
+            // 📡 FLOW-WINDOW EXCEPTION: bars still inside the pro-flow/iceberg
+            // retention window process IN FULL. The fast-forward banks only 2×
+            // the ROW caps, so on a busy backfill bar it skipped institutional
+            // prints the flow store needed — seeding the PRO FLOW readout LOW
+            // for up to a full window after every reload. A handful of full
+            // 1T-array passes at load is the whole cost.
+            int seedNewestTickTime = nz(source = tickTimes.get(index = availableTickCount - 1))
+            bool inFlowSeedWindow = flowTrackingActive and seedNewestTickTime >= timenow - flowRetentionMs
+            if barstate.ishistory and processStartIndex == 0 and availableTickCount > 0 and not inFlowSeedWindow
                 int instCandidatesNeeded = instRowsActive > 0 ? instRowsActive * 2 : 0
                 int retailCandidatesNeeded = retailRowsActive > 0 ? retailRowsActive * 2 : 0
                 int instCandidatesFound = 0
@@ -734,6 +774,10 @@ if tapeEnabled or blockTradesActive
                     // affects the tape display, never the block-trade count.
                     if isCompleteRecord
                         f_processAndStoreTick(tickPrice = currentTickPrice, tickVolume = currentTickVolume, tickTime = currentTickTime, tickBid = currentTickBid, tickAsk = currentTickAsk, countBlock = false, capAggregate = false)
+                        // Volume this bar has shown as real prints — the delta
+                        // engine's floor, so a lagging chart-volume series can't
+                        // make it re-show tick-covered volume.
+                        barTickVolSum += currentTickVolume
 
         // Update the last processed tick count to prevent reprocessing
         tapeProcessedTickCount := availableTickCount
@@ -744,9 +788,12 @@ if tapeEnabled or blockTradesActive
     // for the REST of the bar. The baseline snapshot eats the chart volume the
     // capped array (and its feed lag) already covered, so the first delta print
     // carries only genuinely new volume — no double-showing at the crossover.
+    // Snapshot from the WATERMARK, not raw `volume`: 4 of 6 caps in the
+    // 2026-07-30 log run landed on glitch executions where `volume` read 40.
     if barstate.isrealtime and lowerTfDataSeen and not barTickCapReached and availableTickCount >= LTF_TICK_CAP
         barTickCapReached := true
-        f_updateRealtimeBarState(state = realtimeBarState, barVolume = volume, barPrice = close, barUpdateTime = timenow)
+        fbBaselineVolume := math.max(barMaxChartVol, barTickVolSum)
+        fbLastUpdateTime := timenow
 
     // ⚡ DELTA ENGINE (realtime fallback)
     // Carries the tape whenever real 1T prints can't: symbols/plans/sessions with
@@ -755,13 +802,23 @@ if tapeEnabled or blockTradesActive
     // aggregate row — instant, per-update cadence — classified against the live
     // bid/ask exactly like a real print. On capped bars the aggregates are
     // display-only (capAggregate): they never count blocks, never feed the
-    // pro-flow/iceberg store, and never fire print alerts. The unseeded-baseline
-    // guard (na volume) makes the first execution after a mid-bar load a
-    // baseline-only pass instead of one giant whole-bar aggregate print.
+    // pro-flow/iceberg store, never fire print alerts, and render ONLY in the
+    // retail lane, Σ-tagged — an aggregate is a sum of unseen prints, never an
+    // institutional row. The unseeded-baseline guard (na baseline) makes the
+    // first execution after a mid-bar load a baseline-only pass instead of one
+    // giant whole-bar aggregate print. Baseline/timestamp are varip SCALARS and
+    // the delta reads the monotonic watermark, never raw `volume` — both are
+    // 2026-07-30 log-run fixes (rolled-back baseline re-printed one delta 34×;
+    // glitch executions served regressed volume).
     bool noFreshLowerTfUpdate = not newTicksThisExec
     if barstate.isrealtime and (not lowerTfDataSeen or barTickCapReached)
-        float realtimeVolumeDelta = math.max(volume - nz(source = realtimeBarState.volume), 0)
-        bool realtimePrintReady = not na(realtimeBarState.volume) and realtimeVolumeDelta > 0 and timenow != realtimeBarState.updateTime
+        float previousBaseline = fbBaselineVolume
+        // Covered = the larger of what the delta engine already printed and what
+        // the tick pipeline already showed — the two feeds lag independently, and
+        // a delta below either would re-show volume the tape already carries.
+        float coveredVolume = math.max(nz(source = previousBaseline), barTickVolSum)
+        float realtimeVolumeDelta = math.max(barMaxChartVol - coveredVolume, 0)
+        bool realtimePrintReady = not na(previousBaseline) and realtimeVolumeDelta > 0 and timenow != fbLastUpdateTime
         if realtimePrintReady and noFreshLowerTfUpdate
             f_processAndStoreTick(tickPrice = close, tickVolume = realtimeVolumeDelta, tickTime = timenow, tickBid = bid, tickAsk = ask, countBlock = not lowerTfDataSeen, capAggregate = lowerTfDataSeen)
             fallbackPrintedThisBar := true
@@ -774,7 +831,11 @@ if tapeEnabled or blockTradesActive
                 blockShownAtBid := blockState.atBid
                 blockShownAggSell := blockState.aggSell
                 blockShownMid := blockState.mid
-        f_updateRealtimeBarState(state = realtimeBarState, barVolume = volume, barPrice = close, barUpdateTime = timenow)
+        // Advance the baseline to the full covered volume on EVERY execution in
+        // this regime (printed or not), so skipped/glitch updates fold into the
+        // next genuine delta instead of double-printing.
+        fbBaselineVolume := math.max(barMaxChartVol, barTickVolSum)
+        fbLastUpdateTime := timenow
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🐋 BLOCK TRADES

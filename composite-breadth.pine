@@ -49,15 +49,17 @@ const color NORD15 = #B48EAD
 // early-shift,
 // trend-tell, last-hour, VOLD extremes, adaptive levels, PCCE, Lowry) and its
 // config was stripped for the test. Restore the full indicator from
-// composite-breadth.FULL-2026-07-29.pine (scratchpad) afterward. Panel groups:
-// General (market + zero line + engine tuning), Composite, Weights, Signal,
-// Conviction (with its regime/gap params). This section owns the inputs, data
-// requests, calculations, and plots.
-const string GROUP_COMPOSITE_BREADTH_MARKET  = "⚙️ General"
+// composite-breadth.FULL-2026-07-29.pine (scratchpad) afterward. Panel groups
+// (in settings order): Market, Zero Line, Session Divider, Composite, Weights,
+// Signal, Direction Conviction (with its regime/gap params). This section owns
+// the inputs, data requests, calculations, and plots.
+const string GROUP_COMPOSITE_BREADTH_MARKET  = "🏛️ Market"
+const string GROUP_COMPOSITE_BREADTH_ZEROLINE = "➖ Zero Line"
+const string GROUP_COMPOSITE_BREADTH_DIVIDER = "‖ Session Divider"
 const string GROUP_COMPOSITE_BREADTH_LINE    = "🌊 Composite"
 const string GROUP_COMPOSITE_BREADTH_WEIGHTS = "⚖️ Weights"
 const string GROUP_COMPOSITE_BREADTH_SIGNAL  = "🧮 Signal"
-const string GROUP_COMPOSITE_BREADTH_CONVICTION = "🧭 Conviction"
+const string GROUP_COMPOSITE_BREADTH_CONVICTION = "🧭 Direction Conviction"
 
 const float CBI_SCALE_MAX               = 100.0
 const float CBI_TICK_FIXED_SCALE        = 500.0    // NYSE-reference cumTICK saturation base — "TICK averaged ±500 across the slope window"; scaled per market by the TICK market factor
@@ -70,7 +72,6 @@ const float CBI_CUMTICK_SLOPE_MINUTES   = 10.0     // cumulative-TICK slope look
 const float CBI_CUMTICK_SLOPE_SMOOTH_MINUTES = 10.0 // EMA window (minutes → bars) applied to the cumTICK slope BEFORE normalization — the raw 10-minute ROC flips sign constantly (TICK oscillates ±300 around zero all day), and that per-bar sign chatter was the composite's main fast-noise injector at 25% weight. Smoothing the slope keeps the component's leading character while dropping the flicker
 const float CBI_TICK_BIAS_DAYS          = 20.0     // Steenbarger Adjusted-TICK trailing-mean window in trading days — raw TICK carries a persistent positive bias; subtracting a ~20-day mean before cumulating recenters the cumTICK slope
 
-const int   CBI_TIME_DIM_EXTRA_TRANSP   = 10       // extra transparency added to the composite line during the lunch trough and MOC window when time-of-day dimming is on (10 = a light touch; the earlier 35 stacked with consensus dimming into an overly faint midday line — Henry 2026-07-28)
 const float CBI_OPEN_VOL_WINDOW_MINUTES = 30.0     // opening-volume capture window — Raschke's number-one day-type criterion is FIRST-30-MINUTE NYSE volume ("The very number one criteria I look at is volume and I will usually look at the first 30-minute volume"). Measured as the market's TVOL print at the 30-minute mark — the exact total-volume series, already requested as the VOLD ratio denominator
 const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sessions) for the opening-volume baseline the regime ratio compares against — cross-session EMA, same seeding pattern as the TICK bias mean
 // NYSE RTH session windows (ET, Mon–Fri). RTH_OPEN anchors every session-wide
@@ -84,7 +85,7 @@ const string CBI_SESSION_RTH_FULL       = "0930-1600:23456"
 const string CBI_SESSION_LUNCH          = "1200-1330:23456"
 const string CBI_SESSION_MOC            = "1545-1600:23456"
 
-// ─── General (market + zero line + engine tuning) ──────────────────────────────
+// ─── Market ───────────────────────────────────────────────────────────────────
 // Six breadth universes, one per USI dotted suffix (all four feed families —
 // ADVDEC, ADVDECV, PCTABOVEVWAP, TICK — plus the TVOL denominator are
 // verified live for every suffix; ICE data). Pick the universe that matches
@@ -100,7 +101,7 @@ string compositeBreadthMarket = input.string(
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-// TICK options (engine tuning for the composite's CUMTICK component) — below Market.
+// TICK options (engine tuning for the composite's CUMTICK component).
 bool compositeBreadthTickNyseOnly = input.bool(
      defval = false,
      title = "Use NYSE TICK only (Barry's preference)",
@@ -115,41 +116,41 @@ bool compositeBreadthCumTickBiasAdjust = input.bool(
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-// Zero line.
-bool compositeBreadthShowZeroLine = input.bool(defval = true, title = "Zero Line", tooltip = "Show the zero baseline.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-color compositeBreadthZeroLineColor = input.color(defval = NORD3, title = "Color", tooltip = "Zero line color.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-int compositeBreadthZeroLineWidth = input.int(defval = 1, title = "Line Width", minval = 1, maxval = 4, tooltip = "Zero line width.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-string compositeBreadthZeroLineStyle = input.string(defval = "Solid", title = "Line Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Zero line style.", group = GROUP_COMPOSITE_BREADTH_MARKET)
+// ─── Zero Line ────────────────────────────────────────────────────────────────
+bool compositeBreadthShowZeroLine = input.bool(defval = true, title = "Zero Line", tooltip = "Show the zero baseline.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+color compositeBreadthZeroLineColor = input.color(defval = NORD3, title = "Color", tooltip = "Zero line color.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+int compositeBreadthZeroLineWidth = input.int(defval = 2, title = "Line Width", minval = 1, maxval = 4, tooltip = "Zero line width.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+string compositeBreadthZeroLineStyle = input.string(defval = "Solid", title = "Line Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Zero line style.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 
-// Session dividers — vertical lines at each RTH open/close so trade days are separated.
-bool compositeBreadthShowSessionDivider = input.bool(defval = true, title = "Session Dividers", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-color compositeBreadthSessionDividerColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Divider Color", tooltip = "Session divider line color.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-int compositeBreadthSessionDividerWidth = input.int(defval = 2, title = "Divider Width", minval = 1, maxval = 10, tooltip = "Session divider line width.", group = GROUP_COMPOSITE_BREADTH_MARKET)
-string compositeBreadthSessionDividerStyle = input.string(defval = "Dashed", title = "Divider Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Session divider line style.", group = GROUP_COMPOSITE_BREADTH_MARKET)
+// ─── Session Divider ──────────────────────────────────────────────────────────
+// Vertical lines at each RTH open/close so trade days are separated.
+bool compositeBreadthShowSessionDivider = input.bool(defval = true, title = "Session Dividers", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+color compositeBreadthSessionDividerColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Divider Color", tooltip = "Session divider line color.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+int compositeBreadthSessionDividerWidth = input.int(defval = 2, title = "Divider Width", minval = 1, maxval = 10, tooltip = "Session divider line width.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+string compositeBreadthSessionDividerStyle = input.string(defval = "Dashed", title = "Divider Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Session divider line style.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
 
 // ─── Composite line ───────────────────────────────────────────────────────────
-// The composite line's own display config, first in the panel. Two color
-// modes: the consensus gradient (magnitude gradient through neutral grey +
-// agreement rendered as opacity — the 2026-07-13 volatility-rework rendering)
-// and a plain solid color for a minimal single-hue read. The two dim layers
-// (consensus + time-of-day) are gradient-mode features: solid means solid.
+// The composite line's own display config, first in the panel. CONSENSUS
+// STRENGTH (on by default) is the ONLY thing that colors the line: on it renders
+// the directional red↔neutral↔cyan gradient with agreement as opacity; off it is
+// a plain solid color. TIME-OF-DAY DIMMING is a separate, agnostic overlay — it
+// just adds transparency (to whichever color the line already carries, solid or
+// gradient) and never touches the consensus calc. Opacity only; the composite's
+// value is never modified.
 bool compositeBreadthShowCompositeLine = input.bool(
      defval = true,
      title = "Show Composite Line",
-     tooltip = "Show/hide the composite line itself. DISPLAY-ONLY — the composite is the engine, so the signal MAs and the conviction line keep computing off it even when hidden (e.g. hide it to read the pane as signals + conviction only).",
+     tooltip = "Show/hide the composite line itself. DISPLAY-ONLY — the composite is the engine, so the signal MAs and the conviction verdict keep computing off it even when hidden (e.g. hide it to read the pane as signals only).",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
-// The composite line ships as a plain SOLID color (its value/logic untouched).
-// The moment you enable a STRENGTH feature — Consensus (here) and/or Conviction
-// (in the 🧭 group) — the line switches to the directional red↔neutral↔cyan
-// gradient and the enabled feature(s) fade its OPACITY (vivid where strong /
-// agreed / backed, faint otherwise). Opacity only — the composite's number is
-// never touched. Both features toggle independently.
+// Consensus Strength (below) is what switches the line to the directional
+// gradient. With it OFF the line is this plain solid color; opacity only, the
+// composite value is never touched.
 color compositeBreadthLineSolidColor = input.color(
-     defval = color.new(color = NORD4, transp = 40),
+     defval = color.new(color = NORD4, transp = 60),
      title = "Line Color",
-     tooltip = "The composite line's color when NO strength feature is on — a plain flat line (the picker owns hue and opacity). When Consensus Strength or Conviction Strength is enabled the line switches to the directional gradient and this solid color is not used.",
+     tooltip = "The composite line's color when Consensus Strength is OFF — a plain flat line (the picker owns hue and opacity). When Consensus Strength is on the line switches to the directional gradient and this solid color is not used (the Time-of-Day overlay still dims either one).",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
@@ -163,9 +164,9 @@ int compositeBreadthLineWidth = input.int(
  )
 
 bool compositeBreadthShowConsensusStrength = input.bool(
-     defval = false,
+     defval = true,
      title = "Consensus Strength",
-     tooltip = "OFF by default (line stays solid). ON: the line fades on internal component DISAGREEMENT — vivid when VOLD / ADD / %VWAP / CUMTICK agree on the sign, pale when they split — and switches to the directional gradient. Opacity only; the composite value is untouched.",
+     tooltip = "ON by default. The line fades on internal component DISAGREEMENT — vivid when VOLD / ADD / %VWAP / CUMTICK agree on the sign, pale when they split — rendered as the directional red↔neutral↔cyan gradient. OFF: the line is the plain solid Line Color above. This is the ONLY feature that colors the line. Opacity only; the composite value is untouched.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
@@ -180,9 +181,19 @@ int compositeBreadthConsensusDimStrength = input.int(
  )
 
 bool compositeBreadthShowTimeOfDayDim = input.bool(
-     defval = true,
+     defval = false,
      title = "Time-of-Day Dimming",
-     tooltip = "Dim the line during the two structurally low-information windows — the lunch trough (12:00–13:30 ET) and the MOC window (15:45–16:00 ET). Applies only when the line is in gradient mode (i.e. a strength feature is on). Visual only; the composite value is unchanged.",
+     tooltip = "OFF by default. An INDEPENDENT overlay that dims the line during the two structurally low-information windows — the lunch trough (12:00–13:30 ET) and the MOC window (15:45–16:00 ET) — regardless of whether the line is solid or the consensus gradient. It adds transparency agnostically and does NOT affect the consensus color or calculation. It is the weakest of the line cues (purely time-based); leave it off unless you specifically want the midday/close fade. Visual only; the composite value is unchanged.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+int compositeBreadthTimeDimStrength = input.int(
+     defval = 40,
+     title = "Time-of-Day Dim Strength",
+     minval = 0,
+     maxval = 90,
+     step = 5,
+     tooltip = "Transparency the Time-of-Day overlay adds to the line during the lunch and MOC windows (only when that toggle is on). Added on top of the line's current opacity — solid or gradient — and capped at 95.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
@@ -376,7 +387,15 @@ float compositeBreadthConsensusDeadband = input.float(
 bool compositeBreadthShowConviction = input.bool(
      defval = false,
      title = "Conviction Verdict Tag",
-     tooltip = "OFF by default. ON: drops a single tag per session, once the open resolves (~30 min), reading the independent open-context — opening-volume regime + gap character. TRUST (cyan) = context backs the move (expansion day and/or gap-and-go); FADE (red) = it doesn't (light day and/or gap-close); MIXED (grey) = the two disagree or neither resolved. A second line names the drivers (e.g. EXP · GO). Uses only signals NOT in the composite's four components, so it adds information rather than restating the line. Nothing here touches the composite line or its value.",
+     tooltip = "OFF by default. ON: drops a single tag per session, once the open resolves (~30 min), reading the independent open-context — opening-volume regime + gap character. Shows a 1–4 vertical SQUARE meter colored by direction (TRUST cyan / FADE red) and brightened dim→bright by strength; MIXED draws nothing. It sits on the zero-side of the composite line (below when the line is above zero, above when it's below) so it never runs off the pane. HOVER the tag for the full dynamic explanation (what the verdict means, the regime + gap drivers, and the read-off). Uses only signals NOT in the composite's four components, so it adds information rather than restating the line. Nothing here touches the composite line or its value.",
+     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+ )
+
+string compositeBreadthConvTagSize = input.string(
+     defval = "Small",
+     title = "Verdict Tag Size",
+     options = ["Tiny", "Small", "Normal", "Large"],
+     tooltip = "Text size of the once-per-session conviction verdict tag.",
      group = GROUP_COMPOSITE_BREADTH_CONVICTION
  )
 
@@ -397,14 +416,6 @@ float compositeBreadthConvGapWeight = input.float(
      maxval = 100.0,
      step = 5.0,
      tooltip = "Weight of the gap verdict in the verdict score (gap-and-go +, gap-close −, mixed 0). Resolves at the gap read window (~15 min). Sign of the combined regime+gap score picks TRUST vs FADE; when the two disagree the larger weight wins. Computes automatically when the tag is on.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
- )
-
-string compositeBreadthConvTagSize = input.string(
-     defval = "Small",
-     title = "Verdict Tag Size",
-     options = ["Tiny", "Small", "Normal", "Large"],
-     tooltip = "Text size of the once-per-session conviction verdict tag.",
      group = GROUP_COMPOSITE_BREADTH_CONVICTION
  )
 
@@ -1293,13 +1304,15 @@ if compositeBreadthShowConviction
 var int   compositeBreadthConvVerdictSign   = 0     // +1 trust, -1 fade, 0 mixed/neutral
 var int   compositeBreadthConvVerdictRegime = 0     // regime snapshot at resolve (±1/0)
 var int   compositeBreadthConvVerdictGap    = 0     // gap-verdict snapshot at resolve (±1/0)
+var int   compositeBreadthConvVerdictGapSize = 0    // gap size class snapshot (1 small/2 med/3 large; 0 none)
 var bool  compositeBreadthConvVerdictReady  = false // resolved & tagged this session?
 
 if compositeBreadthShowConviction and compositeBreadthSessionJustOpened
-    compositeBreadthConvVerdictSign   := 0
-    compositeBreadthConvVerdictRegime := 0
-    compositeBreadthConvVerdictGap    := 0
-    compositeBreadthConvVerdictReady  := false
+    compositeBreadthConvVerdictSign    := 0
+    compositeBreadthConvVerdictRegime  := 0
+    compositeBreadthConvVerdictGap     := 0
+    compositeBreadthConvVerdictGapSize := 0
+    compositeBreadthConvVerdictReady   := false
 
 // Resolve once regime is settled — either classified, or its capture window has
 // fully elapsed (feeds dark → abandoned). Require at least one of regime/gap to
@@ -1312,32 +1325,34 @@ if compositeBreadthShowConviction and not compositeBreadthConvVerdictReady and b
     float compositeBreadthConvGapPart    = compositeBreadthGapVerdictEvaluated ? (compositeBreadthConvGapWeight / 100.0) * compositeBreadthGapVerdict : 0.0
     float compositeBreadthConvBudget     = math.max(compositeBreadthConvRegimeWeight, compositeBreadthConvGapWeight) / 100.0
     float compositeBreadthConvScore      = math.max(-compositeBreadthConvBudget, math.min(compositeBreadthConvBudget, compositeBreadthConvRegimePart + compositeBreadthConvGapPart))
-    compositeBreadthConvVerdictSign   := compositeBreadthConvScore > 0.0 ? 1 : compositeBreadthConvScore < 0.0 ? -1 : 0
-    compositeBreadthConvVerdictRegime := compositeBreadthVolRegimeKnown ? compositeBreadthVolRegime : 0
-    compositeBreadthConvVerdictGap    := compositeBreadthGapVerdictEvaluated ? compositeBreadthGapVerdict : 0
-    compositeBreadthConvVerdictReady  := true
+    compositeBreadthConvVerdictSign    := compositeBreadthConvScore > 0.0 ? 1 : compositeBreadthConvScore < 0.0 ? -1 : 0
+    compositeBreadthConvVerdictRegime  := compositeBreadthVolRegimeKnown ? compositeBreadthVolRegime : 0
+    compositeBreadthConvVerdictGap     := compositeBreadthGapVerdictEvaluated ? compositeBreadthGapVerdict : 0
+    compositeBreadthConvVerdictGapSize := compositeBreadthGapVerdictEvaluated ? compositeBreadthGapSizeClass : 0
+    compositeBreadthConvVerdictReady   := true
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS
 // ═════════════════════════════════════════════════════════════════════════════
-// The composite line is a plain SOLID color UNLESS a line-strength feature is
-// on. Enabling Consensus Strength (or the Time-of-Day dim) switches it to the
-// directional red↔neutral↔cyan gradient and fades its OPACITY (never its
-// value):
-//   • CONSENSUS strength — (1 − consensus) × Consensus Dim Strength, so full
-//     internal agreement is vivid and a split vote goes pale.
-//   • TIME-OF-DAY dim (its own toggle) adds a lunch/MOC fade.
-// Conviction is NOT here — it renders as its own once-per-session tag (see the
-// verdict block above + PLOTS), decoupled from the per-bar line. With no
-// strength feature on, the solid color is used verbatim (picker owns hue+opacity).
+// Two fully independent layers, applied in order:
+//   1. BASE COLOR — Consensus Strength is the ONLY thing that colors the line.
+//      ON → the directional red↔neutral↔cyan gradient, faded by internal
+//      disagreement ((1 − consensus) × Consensus Dim Strength). OFF → the plain
+//      solid Line Color. Nothing else feeds this.
+//   2. TIME-OF-DAY OVERLAY — an agnostic dim applied ON TOP of whatever base
+//      color resulted, solid or gradient. It ADDS transparency (color.t + dim,
+//      capped 95) during the lunch/MOC windows and never touches the consensus
+//      calc. Purely visual; the composite value is never modified.
+// Conviction is NOT here — it renders as its own once-per-session tag.
 bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
-bool compositeBreadthUseGradient = compositeBreadthShowConsensusStrength or compositeBreadthShowTimeOfDayDim
+// 1. Base color.
 color compositeBreadthLineColor = compositeBreadthLineSolidColor
-if compositeBreadthUseGradient
-    float compositeBreadthExtraTransp =
-         (compositeBreadthShowConsensusStrength ? (1.0 - compositeBreadthConsensus) * compositeBreadthConsensusDimStrength : 0.0) +
-         (compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow ? CBI_TIME_DIM_EXTRA_TRANSP : 0)
-    compositeBreadthLineColor := f_compositeBreadthProgressiveColor(value = compositeBreadthDisplayLine, scale = CBI_OPACITY_ANCHOR, minTransp = CBI_SIGNAL_MIN_TRANSP, extraTransp = compositeBreadthExtraTransp)
+if compositeBreadthShowConsensusStrength
+    float compositeBreadthConsensusExtraTransp = (1.0 - compositeBreadthConsensus) * compositeBreadthConsensusDimStrength
+    compositeBreadthLineColor := f_compositeBreadthProgressiveColor(value = compositeBreadthDisplayLine, scale = CBI_OPACITY_ANCHOR, minTransp = CBI_SIGNAL_MIN_TRANSP, extraTransp = compositeBreadthConsensusExtraTransp)
+// 2. Time-of-day overlay — agnostic, adds transparency to the base color.
+if compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow
+    compositeBreadthLineColor := color.new(color = compositeBreadthLineColor, transp = math.min(95.0, color.t(color = compositeBreadthLineColor) + compositeBreadthTimeDimStrength))
 
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1368,23 +1383,59 @@ if compositeBreadthShowSessionDivider and (compositeBreadthSessionJustOpened or 
 // ─── Conviction verdict tag ─────────────────────────────────────────────────
 // ONE label per session, minted on the confirmed bar the open-quality verdict
 // resolves (rising edge of ConvVerdictReady — set only on barstate.isconfirmed,
-// so no intrabar mint/delete). Anchored on the composite line at that bar (so
-// it is always on-screen and sits where the open resolved), box hanging above.
-// TRUST cyan / FADE red / MIXED grey; a driver line names regime + gap; dots
-// show how many of the two drivers back the verdict.
+// so no intrabar mint/delete). Only STRONG directional reads draw: MIXED (score
+// 0 — reads cancel or neither resolved) shows nothing. Anchored on the composite
+// line, a vertical ■ stack is a strength meter (1–4 tall). PLACEMENT keeps it on
+// the ZERO-SIDE of the line so it never runs off the pane:
+//   • line ABOVE zero → tag hangs BELOW the line (label_up).
+//   • line BELOW zero → tag sits ABOVE the line (label_down).
+// ■ is the text-presentation square (honors the color arg; ticker-tape uses the
+// same one). Color by direction (TRUST cyan / FADE red), brightness dim→bright by
+// strength. HOVER = a roomy, emoji-keyed read-out. Strength: 4 = both drivers
+// agree AND a large gap · 3 = both agree · 2 = one driver · 1 = drivers conflict.
 var compositeBreadthConvTagTextSize = switch compositeBreadthConvTagSize
     "Tiny"   => size.tiny
     "Normal" => size.normal
     "Large"  => size.large
     => size.small
-if compositeBreadthShowConviction and compositeBreadthConvVerdictReady and not compositeBreadthConvVerdictReady[1]
-    string compositeBreadthConvVerdictWord = compositeBreadthConvVerdictSign > 0 ? "TRUST" : compositeBreadthConvVerdictSign < 0 ? "FADE" : "MIXED"
-    int compositeBreadthConvAligned = (compositeBreadthConvVerdictSign != 0 and compositeBreadthConvVerdictRegime == compositeBreadthConvVerdictSign ? 1 : 0) +
-         (compositeBreadthConvVerdictSign != 0 and compositeBreadthConvVerdictGap == compositeBreadthConvVerdictSign ? 1 : 0)
-    string compositeBreadthConvDots = compositeBreadthConvVerdictSign == 0 ? "" : compositeBreadthConvAligned >= 2 ? " ●●" : " ●"
-    string compositeBreadthConvRegimeStr = compositeBreadthConvVerdictRegime > 0 ? "EXP" : compositeBreadthConvVerdictRegime < 0 ? "LIGHT" : "NEUT"
-    string compositeBreadthConvGapStr = compositeBreadthConvVerdictGap > 0 ? "GO" : compositeBreadthConvVerdictGap < 0 ? "CLOSE" : "MIXED"
-    string compositeBreadthConvTagText = compositeBreadthConvVerdictWord + compositeBreadthConvDots + "\n" + compositeBreadthConvRegimeStr + " · " + compositeBreadthConvGapStr
-    color compositeBreadthConvTagHue = compositeBreadthConvVerdictSign > 0 ? NORD8 : compositeBreadthConvVerdictSign < 0 ? NORD11 : NORD3
-    color compositeBreadthConvTagTextColor = compositeBreadthConvVerdictSign > 0 ? NORD0 : NORD6
-    label.new(x = bar_index, y = na(compositeBreadthDisplayLine) ? 0.0 : compositeBreadthDisplayLine, text = compositeBreadthConvTagText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_down, color = color.new(color = compositeBreadthConvTagHue, transp = 10), textcolor = compositeBreadthConvTagTextColor, size = compositeBreadthConvTagTextSize)
+if compositeBreadthShowConviction and compositeBreadthConvVerdictReady and not compositeBreadthConvVerdictReady[1] and compositeBreadthConvVerdictSign != 0
+    bool compositeBreadthConvTrust = compositeBreadthConvVerdictSign > 0
+    // Strength → 1..4 (MIXED never reaches here).
+    bool compositeBreadthConvConflict = compositeBreadthConvVerdictRegime != 0 and compositeBreadthConvVerdictGap != 0 and compositeBreadthConvVerdictRegime != compositeBreadthConvVerdictGap
+    int compositeBreadthConvAligned = (compositeBreadthConvVerdictRegime == compositeBreadthConvVerdictSign ? 1 : 0) +
+         (compositeBreadthConvVerdictGap == compositeBreadthConvVerdictSign ? 1 : 0)
+    int compositeBreadthConvStrength = compositeBreadthConvConflict ? 1 :
+         compositeBreadthConvAligned == 1 ? 2 :
+         compositeBreadthConvVerdictGapSize == 3 ? 4 : 3
+    // Vertical square stack — N squares joined by newlines (■ = U+25A0, the
+    // text-presentation glyph that honors the label color; emoji ◼ would not).
+    string compositeBreadthConvRating = switch compositeBreadthConvStrength
+        4 => "■\n■\n■\n■"
+        3 => "■\n■\n■"
+        2 => "■\n■"
+        => "■"
+    // Hue by direction, brightness by strength (4 = full, 1 = dim).
+    color compositeBreadthConvTagHue = compositeBreadthConvTrust ? NORD8 : NORD11
+    color compositeBreadthConvTagTextColor = color.new(color = compositeBreadthConvTagHue, transp = (4 - compositeBreadthConvStrength) * 15)
+    // Placement by the LINE's side of zero (not the verdict): line above zero →
+    // tag hangs below it (label_up); line below zero → tag sits above it
+    // (label_down). Keeps the tag between the line and zero, always on-pane.
+    float compositeBreadthConvAnchor = na(compositeBreadthDisplayLine) ? 0.0 : compositeBreadthDisplayLine
+    string compositeBreadthConvTagStyle = compositeBreadthConvAnchor >= 0.0 ? label.style_label_up : label.style_label_down
+    // Hover — roomy, emoji-keyed, brief lines with blank rows between items.
+    string compositeBreadthConvVerdictLabel = compositeBreadthConvTrust ? "✅ TRUST" : "⚠️ FADE"
+    string compositeBreadthConvVolWord = compositeBreadthConvVerdictRegime > 0 ? "Heavy" : compositeBreadthConvVerdictRegime < 0 ? "Light" : (na(compositeBreadthOpenVolRatio) ? "n/a" : "Neutral")
+    string compositeBreadthConvRatioShort = na(compositeBreadthOpenVolRatio) ? "" : " " + str.tostring(value = compositeBreadthOpenVolRatio, format = "0.00") + "×"
+    string compositeBreadthConvGapShort = compositeBreadthConvVerdictGapSize == 0 ? "none" : (compositeBreadthConvVerdictGap > 0 ? "Gap-and-go" : compositeBreadthConvVerdictGap < 0 ? "Gap-close" : "mixed")
+    string compositeBreadthConvGapSizeShort = compositeBreadthConvVerdictGapSize == 3 ? ", large" : compositeBreadthConvVerdictGapSize == 2 ? ", medium" : compositeBreadthConvVerdictGapSize == 1 ? ", small" : ""
+    string compositeBreadthConvImpact = compositeBreadthConvTrust ?
+         "Trust the early move — it's backed by real conditions, not overnight-gap echo. Weight the composite normally, or lean into it." :
+         "Fade the early move — the early one-sidedness is likely overnight-gap echo. Discount it and watch for mean-reversion / gap-fill."
+    string compositeBreadthConvTooltip = "🧭 DIRECTION CONVICTION\n\n" +
+         compositeBreadthConvVerdictLabel + "   ·   " + str.tostring(value = compositeBreadthConvStrength) + "/4\n\n" +
+         "Does the open BACK the composite's early direction? Read from independent context its four components don't carry.\n\n" +
+         "————————————————\n\n" +
+         "📊 Volume:   " + compositeBreadthConvVolWord + compositeBreadthConvRatioShort + "\n\n" +
+         "🌅 Gap:   " + compositeBreadthConvGapShort + compositeBreadthConvGapSizeShort + "\n\n" +
+         "💡 Impact:   " + compositeBreadthConvImpact
+    label.new(x = bar_index, y = compositeBreadthConvAnchor, text = compositeBreadthConvRating, tooltip = compositeBreadthConvTooltip, xloc = xloc.bar_index, yloc = yloc.price, style = compositeBreadthConvTagStyle, color = color.new(color = NORD0, transp = 100), textcolor = compositeBreadthConvTagTextColor, size = compositeBreadthConvTagTextSize)
