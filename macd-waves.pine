@@ -233,16 +233,18 @@ if cycleStartedThisBar
     displayExtremeBar := bar_index - displaySeedOffset
 
 // Wave count — rooted in structure TAKES (Henry 2026-07-27 final form). A
-// wave only moves the trend by strictly TAKING a previous extreme, and
-// NOTHING displays in the shift direction until the MACD line's value has
-// broken the current trend's structure at a bar close:
+// wave only moves the trend by strictly TAKING a previous extreme; the
+// ENGINE only moves on the MACD line's value breaking the current trend's
+// structure at a bar close (the DISPLAY may show the shift's 1/2 earlier —
+// angle-gated provisional, 2026-08-01, see the shift plot block):
 // • A take WITH the trend (HH in up, LL in down) just counts up.
 // • A take AGAINST the trend (a low through the up trend's last HL, a high
 //   through the down trend's last LH) IS the shift: it plots as the new
 //   trend's 1 — or 3 when a failed impulse (below) set the shift up, in
 //   which case the take also relabels the old retrace to "1" and flips the
-//   failed impulse to "2" (tick-time via the pending machinery in the label
-//   section; a confirmed close with the take standing commits it).
+//   failed impulse to "2" (provisionally shown angle-gated tick-time via
+//   the pending machinery in the label section; a confirmed close with the
+//   take standing commits it).
 // • A FAILED IMPULSE (a high that can't take the up trend's HH, a low that
 //   can't take the down trend's LL) displays as the RUNNING trend's next
 //   number — the shift it hints at hasn't broken anything yet — and arms a
@@ -335,15 +337,21 @@ f_waveTrendColor(int trendDirection) =>
 // after the close-gated triple confirmation plotted a bar late): the live
 // label first shows AS SOON AS a tick has BOTH the MACD line and %K angling
 // against the open half-cycle (current tick value vs the last committed
-// close) while the wave qualifies. No bar-close confirmation: the show lands
-// mid-bar and STICKS — a turn that fades before the close keeps its label
-// (never un-shows). Accepted trade-off, same as the old tick-time latch: an
-// intrabar-only show may not reproduce on a reload (history has closes
-// only). Everything ELSE stays close-committed — engine takes, renumbering,
-// pins, relabels — so the shift machinery is untouched by this earliness.
-bool liveTurnAgainstCycle = cycleZone == 1 ? macd < macd[1] and cycleK < cycleK[1] : macd > macd[1] and cycleK > cycleK[1]
+// close) while the wave qualifies. No bar-close confirmation. After the
+// first show the MACD term ALONE rules visibility tick by tick (2026-08-01,
+// Henry: a plotted wave with the line running against it misleads): the
+// label shows only while the MACD line points in the wave's direction —
+// angling down for a high half-cycle's wave, up for a low half-cycle's —
+// hides (blank text) the moment the line turns back with the cycle, and
+// re-shows on the next tick it points against again. Accepted trade-off,
+// same as the old tick-time latch: an intrabar-only show may not reproduce
+// on a reload (history has closes only). Everything ELSE stays
+// close-committed — engine takes, renumbering, pins, relabels — so the
+// shift machinery is untouched by this earliness.
+bool macdTurnAgainstCycle = cycleZone == 1 ? macd < macd[1] : macd > macd[1]
+bool liveTurnAgainstCycle = macdTurnAgainstCycle and (cycleZone == 1 ? cycleK < cycleK[1] : cycleK > cycleK[1])
 // Shown-state snapshot (display only): the number/trend the live label
-// actually SAYS. varip — the FIRST show commits mid-bar and survives Pine's
+// says while visible. varip — the FIRST show commits mid-bar and survives Pine's
 // rollback. AFTER the show it re-reads the live classification on confirmed
 // QUALIFIED ticks only: intrabar the provisional extreme is non-monotone —
 // var state rolls back each tick, so the extreme breathes with the current
@@ -376,7 +384,8 @@ f_upsertCycleLabel(label existingLabel, int labelBarIndex, float labelPrice, str
 // as a TICK has the MACD line and %K both angling against the half-cycle
 // (the tick-time turn gate above) AND the wave qualifies (its extreme
 // strictly took its level — waves that took nothing never show), from then
-// on tracks the provisional extreme and number live, and is pinned (or
+// on tracks the provisional extreme and number live — visible only on ticks
+// where the MACD line still points against the half-cycle — and is pinned (or
 // backfilled, or pinned BLANK when unqualified) at the final extreme when
 // the half-cycle ends on the %D cross.
 // After the pin the label migrates with the MACD line to the swing's true
@@ -387,17 +396,24 @@ var label prevWaveLabel = na
 // Pending shift labels (display only, label-side copies of the engine's
 // provisional — they survive the engine's boundary clear so a confirm and
 // its relabels can land on the same close): a failed impulse pins under the
-// RUNNING trend (no shift shows before the break); as soon as a TICK has the
-// %D crossed and the MACD's value strictly through the old retrace level,
-// the shift materializes in one shot (tick-time fire block below) — the old
-// retrace relabels to the new trend's "1" and the failed impulse repaints as
-// its "2"; only a confirmed close with the take standing COMMITS it. If the
-// next boundary instead kills the shift, the pending clears and nothing ever
-// showed.
+// RUNNING trend. ANGLE-GATED PROVISIONAL since 2026-08-01 (Henry: waiting
+// for the value break plotted the 1/2 too late): from the %D cross that
+// ends the failed impulse's half-cycle — never before it — any tick where
+// the MACD line angles in the shift direction (or its value is already
+// through the old retrace level) shows the shift in one shot: the old
+// retrace relabels to the new trend's "1" and the failed impulse repaints
+// as its "2". A tick angling back restores the originals explicitly (a
+// close can COMMIT the provisional, so rollback alone can't undo it — the
+// snapshot text below is the restore source). Only a confirmed close with
+// the MACD's VALUE strictly through the level clears the pending — the 1/2
+// are permanent from that close on, and the ENGINE's trend/count still move
+// only on the strict take (untouched — this is display). If the next
+// boundary instead kills the shift, the death path restores the originals.
 var label pendingShiftLabel = na      // the previous retrace's label, waiting to become "1"
 var float pendingShiftLevel = na      // the structure level the shift must take
 var int pendingShiftTrend = 0         // pending shift direction: 1 up, -1 down, 0 none
 var label provisionalShiftLabel = na  // the failed impulse's own label, waiting to become "2"
+var string pendingShiftOneText = na   // the retrace label's original text — fade/death restore source
 // Pinned-label migration state (display only): the MACD (5/20) turns AFTER
 // the faster stochastic %D (5/2/3) crosses, so the swing's real extreme often
 // prints ON the crossing bar or a few bars into the next window. The wave
@@ -416,20 +432,29 @@ if cycleStartedThisBar and barstate.isconfirmed
     if not na(endedCycleExtreme)
         color endedWaveColor = f_waveTrendColor(trendDirection = endedWaveTrend)
         if shiftDiedAtBoundary
-            // The shift never took its level — it never displayed either, so
-            // there is nothing to revert: just drop the pending relabels.
+            // The shift never took its level — undo anything the angle-gated
+            // provisional committed (the retrace's original number and color
+            // back, the failed impulse back to blank), then drop the pending.
+            if not na(pendingShiftLabel)
+                label.set_text(id = pendingShiftLabel, text = pendingShiftOneText)
+                label.set_textcolor(id = pendingShiftLabel, textcolor = f_waveTrendColor(trendDirection = -pendingShiftTrend))
+            if not na(provisionalShiftLabel)
+                label.set_text(id = provisionalShiftLabel, text = "")
             pendingShiftLabel := na
             pendingShiftLevel := na
             pendingShiftTrend := 0
             provisionalShiftLabel := na
+            pendingShiftOneText := na
         if endedWaveFailed and not na(prevWaveLabel)
             // Failed impulse pinning under the running trend: arm the pending
             // relabels for a confirmed shift. The engine set shiftTrend and
             // shiftLevel this bar from the still-untouched opposite-side
-            // extreme.
+            // extreme. The text snapshot reads the retrace's committed pin —
+            // provisional applications never commit before this arming tick.
             pendingShiftLabel := prevWaveLabel
             pendingShiftLevel := shiftLevel
             pendingShiftTrend := shiftTrend
+            pendingShiftOneText := label.get_text(id = prevWaveLabel)
         // The pin anchors at the DISPLAY extreme (the line's true turn, which
         // may sit before the window opened); the number comes from the
         // window-partitioned engine above.
@@ -469,21 +494,27 @@ if cycleStartedThisBar and barstate.isconfirmed
          textcolor = f_waveTrendColor(trendDirection = liveWaveTrend), size = waveLabelSize)
     liveShownNumber := na
     liveShownTrend := 0
-// Shift plot — TICK-TIME (Henry 2026-07-27 pm: "plot it as soon as the %D
-// crosses 45/55 intrabar"): the 1 and 2 apply on ANY tick where the shift's
-// criteria stand — the failed impulse's half-cycle has ended (the committed
-// pending after its pin, or the %D crossing tick itself BEFORE the pin) and
-// the MACD's value is through the old retrace level. Intrabar applications
-// ride Pine's rollback: a tick where the cross or the take recedes stops
-// re-applying and the committed texts return, so no phantom shift survives.
-// The pending only CLEARS on a confirmed close with the take standing — the
-// committed final state is exactly the old close-gated one.
+// Shift plot — ANGLE-GATED PROVISIONAL, tick-time (Henry 2026-08-01; the
+// 2026-07-27 value-break-only display plotted the 1/2 too late): the 1 and 2
+// apply on ANY tick where the failed impulse's half-cycle has ended per the
+// %D (the committed pending after its pin, or the %D crossing tick itself
+// BEFORE the pin — never earlier, Henry's condition) and the MACD line is
+// either ANGLING in the shift direction (tick value vs last committed
+// close — the provisional show, same fade rule as the live label) or
+// already through the old retrace level VALUE (the real take). A tick
+// angling back stops re-applying AND the else-branch actively restores the
+// originals — a provisional can commit at a close, so rollback alone can't
+// undo it. The pending only CLEARS on a confirmed close with the VALUE take
+// standing: the 1/2 are permanent from that close on, and the engine's
+// trend/count still move only on the strict take at the boundary.
 bool shiftPlotPrePin = na(pendingShiftLabel) and cycleStartedThisBar and endedWaveFailed and not na(prevWaveLabel)
 label shiftOneLabel = not na(pendingShiftLabel) ? pendingShiftLabel : shiftPlotPrePin ? prevWaveLabel : na
 label shiftTwoLabel = not na(pendingShiftLabel) ? provisionalShiftLabel : shiftPlotPrePin ? cycleExtremeLabel : na
 int shiftPlotTrend = not na(pendingShiftLabel) ? pendingShiftTrend : shiftTrend
 float shiftPlotLevel = not na(pendingShiftLabel) ? pendingShiftLevel : shiftLevel
-if not na(shiftOneLabel) and (shiftPlotTrend == -1 ? macd < shiftPlotLevel : macd > shiftPlotLevel)
+bool macdAnglesWithShift = shiftPlotTrend == -1 ? macd < macd[1] : macd > macd[1]
+bool shiftTakeStands = not na(shiftOneLabel) and (shiftPlotTrend == -1 ? macd < shiftPlotLevel : macd > shiftPlotLevel)
+if not na(shiftOneLabel) and (macdAnglesWithShift or shiftTakeStands)
     color shiftPlotColor = f_waveTrendColor(trendDirection = shiftPlotTrend)
     label.set_text(id = shiftOneLabel, text = "1")
     label.set_textcolor(id = shiftOneLabel, textcolor = shiftPlotColor)
@@ -497,11 +528,21 @@ if not na(shiftOneLabel) and (shiftPlotTrend == -1 ? macd < shiftPlotLevel : mac
             label.set_xy(id = shiftTwoLabel,
                  x = na(endedDisplayExtremeBar) ? endedCycleExtremeBar : endedDisplayExtremeBar,
                  y = na(endedDisplayExtreme) ? endedCycleExtreme : endedDisplayExtreme)
-    if barstate.isconfirmed
+    if barstate.isconfirmed and shiftTakeStands
         pendingShiftLabel := na
         pendingShiftLevel := na
         pendingShiftTrend := 0
         provisionalShiftLabel := na
+        pendingShiftOneText := na
+else if not na(pendingShiftLabel)
+    // Fade restore: a provisional 1/2 that COMMITTED at a close (MACD angled
+    // with the shift at that close without the take) must be undone by hand
+    // when the line angles back — the retrace label returns to its pinned
+    // number under the old trend's color, the failed impulse to blank.
+    label.set_text(id = pendingShiftLabel, text = pendingShiftOneText)
+    label.set_textcolor(id = pendingShiftLabel, textcolor = f_waveTrendColor(trendDirection = -pendingShiftTrend))
+    if not na(provisionalShiftLabel)
+        label.set_text(id = provisionalShiftLabel, text = "")
 // Pinned-label migration stays on closing ticks: intrabar the MACD's turn away
 // from the old extreme is unconfirmed (the line can resume into a new extreme
 // before the close), and a migration step is a commitment — the label only
@@ -519,14 +560,17 @@ if barstate.isconfirmed and pinnedExtremeMigrating and not na(prevWaveLabel) and
 // above), and the wave qualified, it plots — no bar-close confirmation.
 // Then it tracks the provisional extreme every tick (renumbering stays
 // close-gated through the shown-state snapshot above), morphing into the
-// pin at the boundary instead of ever hiding — a MACD that resumes into a
-// new extreme in the same half-cycle just migrates and renumbers the
-// plotted label rather than flashing it off. While the pinned label is
-// still migrating the old swing hasn't finished, so the new window's label
-// would mark a wave that hasn't started — nothing is remembered through the
-// hold; the label first shows on the first post-migration tick that passes
-// the gates, evaluated fresh on that tick. Once shown, liveShownNumber is
-// set (varip — it survives rollback) and the label never un-shows.
+// pin at the boundary. VISIBILITY rides the MACD line tick by tick
+// (2026-08-01, replacing never-un-shows): a resume — the line turning back
+// WITH the cycle, extending the extreme — hides the label (blank text, the
+// object survives), and the next tick pointing against the cycle re-shows
+// it on the (possibly migrated) extreme with the snapshot's number. While
+// the pinned label is still migrating the old swing hasn't finished, so the
+// new window's label would mark a wave that hasn't started — nothing is
+// remembered through the hold; the label first shows on the first
+// post-migration tick that passes the gates, evaluated fresh on that tick.
+// liveShownNumber (varip — survives rollback) is the ARMED state: once set,
+// the MACD direction alone decides visibility — %K is first-show only.
 bool liveLabelDrawn = not cycleStartedThisBar and cycleZone != 0 and
      not na(displayExtreme) and not pinnedExtremeMigrating and not na(cycleExtremeLabel) and
      (not na(liveShownNumber) or (liveTurnAgainstCycle and liveWaveQualifies))
@@ -541,7 +585,7 @@ if liveLabelDrawn
         liveShownTrend := liveWaveTrend
     cycleExtremeLabel := f_upsertCycleLabel(existingLabel = cycleExtremeLabel,
          labelBarIndex = displayExtremeBar, labelPrice = displayExtreme,
-         labelText = str.tostring(value = liveShownNumber),
+         labelText = macdTurnAgainstCycle ? str.tostring(value = liveShownNumber) : "",
          labelTextColor = f_waveTrendColor(trendDirection = liveShownTrend), isHighCycle = cycleZone == 1)
 
 // ═════════════════════════════════════════════════════════════════════════════

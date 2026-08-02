@@ -42,38 +42,46 @@ const color NORD15 = #B48EAD
 // as line OPACITY (2026-07-13 volatility rework), never a multiplier.
 //
 // This is a REDUCED TEST build with three lines — the composite line and the
-// fast/slow signal MAs — plus the INDEPENDENT CONVICTION read rendered as a
-// background strength WASH (a −100..+100 "trust the move" score from the
-// opening-volume-regime + gap backbone, shaded behind the lines only where it
-// clears its threshold). Every other sub-indicator (TICK extremes, persistence,
-// early-shift,
+// fast/slow signal MAs — plus two collaborator layers on the line itself
+// (2026-08-01 rework, replacing the Direction Conviction verdict tag):
+//   🧭 LINE TRUST — the opening regime (first-30-min volume + open volatility
+//      vs trailing baselines) sets the line's vividness CEILING for the
+//      session and unlocks the "trusted" max-vivid step on expansion tapes;
+//      quiet-regime vivid-grade pushes get an ▲ unsupported-move marker.
+//   🎯 PRICE CONFIRMATION — Dow-style read of price vs breadth at session
+//      extremes; a failure (price new extreme, breadth doesn't follow) drops
+//      a ◆ non-confirmation diamond.
+// Every other sub-indicator (TICK extremes, persistence, early-shift,
 // trend-tell, last-hour, VOLD extremes, adaptive levels, PCCE, Lowry) and its
 // config was stripped for the test. Restore the full indicator from
 // composite-breadth.FULL-2026-07-29.pine (scratchpad) afterward. Panel groups
 // (in settings order): Market, Zero Line, Session Divider, Composite, Weights,
-// Signal, Direction Conviction (with its regime/gap params). This section owns
-// the inputs, data requests, calculations, and plots.
+// Signal, Line Trust, Price Confirmation. This section owns the inputs, data
+// requests, calculations, and plots.
 const string GROUP_COMPOSITE_BREADTH_MARKET  = "🏛️ Market"
 const string GROUP_COMPOSITE_BREADTH_ZEROLINE = "➖ Zero Line"
 const string GROUP_COMPOSITE_BREADTH_DIVIDER = "‖ Session Divider"
 const string GROUP_COMPOSITE_BREADTH_LINE    = "🌊 Composite"
 const string GROUP_COMPOSITE_BREADTH_WEIGHTS = "⚖️ Weights"
 const string GROUP_COMPOSITE_BREADTH_SIGNAL  = "🧮 Signal"
-const string GROUP_COMPOSITE_BREADTH_CONVICTION = "🧭 Direction Conviction"
+const string GROUP_COMPOSITE_BREADTH_TRUST   = "🧭 Line Trust"
+const string GROUP_COMPOSITE_BREADTH_CONFIRM = "🎯 Price Confirmation"
 
 const float CBI_SCALE_MAX               = 100.0
 const float CBI_TICK_FIXED_SCALE        = 500.0    // NYSE-reference cumTICK saturation base — "TICK averaged ±500 across the slope window"; scaled per market by the TICK market factor
 const int   CBI_SIGNAL_WARMUP_BARS      = 5        // bars to seed display before first signal value — slightly longer than legacy 3 so the EMA isn't dominated by the seed at session open
 const int   CBI_DISPLAY_SMOOTH_LENGTH   = 3        // light EMA on composite for the plot only — reduces visual noise without affecting calc
-const float CBI_OPACITY_ANCHOR          = 50.0     // |line| value where the color gradient + magnitude opacity saturate. Recalibrated 35 → 50 with the consensus-squeeze removal: the unsqueezed line runs 1.4-3× larger on disagreement bars, so the old anchor saturated most of the session and erased the vivid-means-strong dynamic range
-const int   CBI_SIGNAL_MIN_TRANSP       = 40
+const int   CBI_OPACITY_SMOOTH_LENGTH   = 4        // EMA (bars) on the line's RENDERED transparency only — every opacity driver is a step function (agreement tiers, impulse/retrace flips, boost, ceiling, time-of-day edges), so the raw target jumps up to ~58 points bar-to-bar; smoothing the render turns each step into a few-bar glide while the STATE stays discrete (markers, table, data window all read the unsmoothed truth)
+const int   CBI_MARKER_REARM_BARS       = 5        // confirmed bars the unsupported-move condition must stay OFF before the marker re-arms — without this, a one-bar slope wiggle inside one quiet-day push re-fires the ▲ every few bars
 
 const float CBI_CUMTICK_SLOPE_MINUTES   = 10.0     // cumulative-TICK slope lookback in MINUTES — bar count derived from the chart timeframe (5 bars on 2-min) so the window keeps its meaning on 1m/2m/5m charts. Short enough to catch real-time inflections, long enough to filter single-bar noise
-const float CBI_CUMTICK_SLOPE_SMOOTH_MINUTES = 10.0 // EMA window (minutes → bars) applied to the cumTICK slope BEFORE normalization — the raw 10-minute ROC flips sign constantly (TICK oscillates ±300 around zero all day), and that per-bar sign chatter was the composite's main fast-noise injector at 25% weight. Smoothing the slope keeps the component's leading character while dropping the flicker
+const float CBI_CUMTICK_SLOPE_SMOOTH_MINUTES = 10.0 // EMA window (minutes → bars) applied to the cumTICK slope BEFORE normalization — the raw 10-minute ROC flips sign constantly (TICK oscillates ±300 around zero all day), and that per-bar sign chatter was the composite's main fast-noise injector at 25% weight. Smoothing the slope keeps the component's early-turning responsiveness while dropping the flicker
 const float CBI_TICK_BIAS_DAYS          = 20.0     // Steenbarger Adjusted-TICK trailing-mean window in trading days — raw TICK carries a persistent positive bias; subtracting a ~20-day mean before cumulating recenters the cumTICK slope
 
 const float CBI_OPEN_VOL_WINDOW_MINUTES = 30.0     // opening-volume capture window — Raschke's number-one day-type criterion is FIRST-30-MINUTE NYSE volume ("The very number one criteria I look at is volume and I will usually look at the first 30-minute volume"). Measured as the market's TVOL print at the 30-minute mark — the exact total-volume series, already requested as the VOLD ratio denominator
-const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sessions) for the opening-volume baseline the regime ratio compares against — cross-session EMA, same seeding pattern as the TICK bias mean
+const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sessions) for the opening-volume AND opening-range baselines the regime ratios compare against — cross-session EMA, same seeding pattern as the TICK bias mean
+const float CBI_NONCONF_MARGIN          = 2.0      // minimum breadth shortfall (composite units, ±100 scale) for a lower-high/higher-low to count as a non-confirmation — filters numerical-noise "divergences" between back-to-back price extremes
+const float CBI_MARKER_OFFSET           = 6.0      // pane units the ▲/◆ markers sit ABOVE the display line (fixed ±100 scale) so they never cover it
 // NYSE RTH session windows (ET, Mon–Fri). RTH_OPEN anchors every session-wide
 // state reset; RTH_FULL marks the whole cash session (its exit edge anchors
 // the close-side session divider); LUNCH is the documented intraday
@@ -83,74 +91,100 @@ const float CBI_OPEN_VOL_MEAN_DAYS      = 10.0     // trailing mean window (sess
 const string CBI_SESSION_RTH_OPEN       = "0930-0935:23456"
 const string CBI_SESSION_RTH_FULL       = "0930-1600:23456"
 const string CBI_SESSION_LUNCH          = "1200-1330:23456"
+const string CBI_SESSION_MORNING        = "1000-1100:23456"   // post-open reversion window — 135-session log analysis (2026-08-01): the 10:xx hour is where following the stance loses in 2 of 3 regime chunks (−1.6/−4.4 bps per 30min); the open's echo mean-reverts before the tape picks a side
 const string CBI_SESSION_MOC            = "1545-1600:23456"
 
 // ─── Market ───────────────────────────────────────────────────────────────────
 // Six breadth universes, one per USI dotted suffix (all four feed families —
 // ADVDEC, ADVDECV, PCTABOVEVWAP, TICK — plus the TVOL denominator are
-// verified live for every suffix; ICE data). Pick the universe that matches
-// the instrument being confirmed: NQ/NDX futures → NASDAQ; ES/SPX → NYSE
-// (the classic S&P breadth read); YM/Dow → Dow Jones; RTY/Russell and
-// total-market reads → US All Markets (no Russell-specific feed exists);
-// ETF tape → NYSE Arca; small-cap/micro tape → NYSE American.
+// verified live for every suffix; ICE data). PER-COMPONENT ROUTING
+// (2026-07-31 research verdict): no single universe wins — the Breadth
+// Universe below drives VOLD, TVOL and PCTABOVEVWAP (volume breadth is
+// self-cap-weighted toward the same mega-caps the traded index holds, so it
+// belongs on the traded market), while A-D and TICK get their own universe
+// inputs defaulting to NYSE: Nasdaq issue-count A/D is structurally
+// contaminated by small-cap listing churn (McClellan — false divergences are
+// its background condition, the cumulative line has never made an all-time
+// high since 1972) and NYSE A-D is the highest-quality issue-count read even
+// for judging Nasdaq strength; the Steenbarger Adjusted-TICK canon and
+// practitioner practice (incl. Nasdaq-only traders, incl. Barry Burns) are
+// explicitly NYSE TICK — no evidence survived for a TICK.NQ advantage.
 string compositeBreadthMarket = input.string(
      defval = "NASDAQ",
-     title = "Market",
-     options = ["NASDAQ", "NYSE", "US All Markets", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "Breadth universe — all feeds (ADVDEC, ADVDECV, TVOL, PCTABOVEVWAP, TICK) route to the matching exchange suffix. NASDAQ (.NQ) for NQ/NDX. NYSE (.NY) for ES/SPX — the classic S&P breadth read. US All Markets (.US) for RTY/Russell or total-market confirmation (no Russell-specific feed exists). Dow Jones (.DJ) is the exact Dow 30 basket — coarse (30 issues) but exchange-exact for YM. NYSE Arca (.AX) is the ETF tape — highly correlated issues, expect saturated readings on directional days. NYSE American (.AM) is the small/micro-cap tape — thin, read with its coarser calibration in mind.",
+     title = "Breadth Universe",
+     options = ["US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
+     tooltip = "Universe for the VOLD, TVOL and PCTABOVEVWAP feeds — pick the market being traded (volume breadth is self-cap-weighted toward the index's own mega-caps, so it belongs on the traded tape). US All Markets (.US) for RTY/Russell or total-market confirmation (no Russell-specific feed exists). NYSE (.NY) for ES/SPX — the classic S&P breadth read. NASDAQ (.NQ) for NQ/NDX/QQQ. Dow Jones (.DJ) is the exact Dow 30 basket — coarse (30 issues) but exchange-exact for YM. NYSE Arca (.AX) is the ETF tape — highly correlated issues, expect saturated readings on directional days. NYSE American (.AM) is the small/micro-cap tape — thin, read with its coarser calibration in mind. The A-D and TICK components route via their own universe inputs below.",
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-// TICK options (engine tuning for the composite's CUMTICK component).
-bool compositeBreadthTickNyseOnly = input.bool(
-     defval = false,
-     title = "Use NYSE TICK only (Barry's preference)",
-     tooltip = "OFF (default): TICK routes to the selected market's feed (USI:TICK.<suffix>) with all TICK levels scaled by that market's factor. ON: forces USI:TICK.NY at the native NYSE ±1000 calibration regardless of selected market. Barry Burns explicitly prefers NYSE TICK for all markets — \"the technique that I use for the tick indicator works best with the New York Stock Exchange tick … I just use the New York Stock Exchange tick\", and on the Nasdaq/Dow ticks: \"they just don't reach the extremes as much.\" Asked about trading the NQ: \"I would still use the tick index.\" Turn on to follow his approach.",
+string compositeBreadthAddUniverse = input.string(
+     defval = "NYSE",
+     title = "A-D Universe",
+     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
+     tooltip = "Universe for the ADD component's issue-count feed (ADVDEC), with its saturation scale following the pick. NYSE default (2026-07-31 research): Nasdaq issue-count A/D carries a structural negative bias from small-cap listing churn — marginal listings spend their IPO-to-delisting decline feeding the declines column, so divergences vs the index are its normal background condition (McClellan), and equal-weighted counting under-represents the mega-caps that drive a cap-weighted index ~300×. NYSE A-D is the documented highest-quality issue-count read even for judging Nasdaq strength. The same contamination argument covers US All Markets (it contains the Nasdaq tape) and NYSE American; caveat: the documented bias is cumulative daily-scale drift — a session-resetting intraday ADD inherits the mechanism only weakly.",
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
-bool compositeBreadthCumTickBiasAdjust = input.bool(
-     defval = true,
-     title = "Bias-Adjust CUMTICK (Steenbarger)",
-     tooltip = "Subtract a trailing ~20-trading-day mean of per-bar TICK before cumulating (Steenbarger's Adjusted TICK construction). Raw TICK carries a persistent positive bias, which tilts the cumulative slope bullish and makes negative saturation structurally rarer than positive — consistent with the backtest record where fading negative TICK extremes worked and fading positive ones didn't. OFF cumulates raw TICK (legacy behavior). Applies to the CUMTICK composite component only.",
+string compositeBreadthTickUniverse = input.string(
+     defval = "NYSE",
+     title = "TICK Universe",
+     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
+     tooltip = "Universe for the CUMTICK component's TICK feed, with every TICK level scaled by the picked universe's factor. NYSE default (2026-07-31 research): Steenbarger's Adjusted-TICK canon is explicitly NYSE TICK, and practitioner practice — including dedicated Nasdaq-only traders and Barry Burns (\"I just use the New York Stock Exchange tick\"; the Nasdaq/Dow ticks \"just don't reach the extremes as much\") — routes to NYSE TICK for every instrument. No evidence survived for a TICK.NQ advantage.",
      group = GROUP_COMPOSITE_BREADTH_MARKET
  )
 
 // ─── Zero Line ────────────────────────────────────────────────────────────────
-bool compositeBreadthShowZeroLine = input.bool(defval = true, title = "Zero Line", tooltip = "Show the zero baseline.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
-color compositeBreadthZeroLineColor = input.color(defval = NORD3, title = "Color", tooltip = "Zero line color.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
-int compositeBreadthZeroLineWidth = input.int(defval = 2, title = "Line Width", minval = 1, maxval = 4, tooltip = "Zero line width.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
-string compositeBreadthZeroLineStyle = input.string(defval = "Solid", title = "Line Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Zero line style.", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+bool compositeBreadthShowZeroLine = input.bool(defval = false, title = "Show", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+color compositeBreadthZeroLineColor = input.color(defval = NORD3, title = "Color", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+int compositeBreadthZeroLineWidth = input.int(defval = 3, title = "Width", minval = 1, maxval = 4, group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+string compositeBreadthZeroLineStyle = input.string(defval = "Solid", title = "Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 
 // ─── Session Divider ──────────────────────────────────────────────────────────
 // Vertical lines at each RTH open/close so trade days are separated.
-bool compositeBreadthShowSessionDivider = input.bool(defval = true, title = "Session Dividers", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
-color compositeBreadthSessionDividerColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Divider Color", tooltip = "Session divider line color.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
-int compositeBreadthSessionDividerWidth = input.int(defval = 2, title = "Divider Width", minval = 1, maxval = 10, tooltip = "Session divider line width.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
-string compositeBreadthSessionDividerStyle = input.string(defval = "Dashed", title = "Divider Style", options = ["Solid", "Dashed", "Dotted"], tooltip = "Session divider line style.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+bool compositeBreadthShowSessionDivider = input.bool(defval = false, title = "Show", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+color compositeBreadthSessionDividerColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Color", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+int compositeBreadthSessionDividerWidth = input.int(defval = 2, title = "Width", minval = 1, maxval = 10, group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+string compositeBreadthSessionDividerStyle = input.string(defval = "Dashed", title = "Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_COMPOSITE_BREADTH_DIVIDER)
 
 // ─── Composite line ───────────────────────────────────────────────────────────
-// The composite line's own display config, first in the panel. CONSENSUS
-// STRENGTH (on by default) is the ONLY thing that colors the line: on it renders
-// the directional red↔neutral↔cyan gradient with agreement as opacity; off it is
-// a plain solid color. TIME-OF-DAY DIMMING is a separate, agnostic overlay — it
-// just adds transparency (to whichever color the line already carries, solid or
-// gradient) and never touches the consensus calc. Opacity only; the composite's
-// value is never modified.
+// The composite line's own display config, first in the panel. The line is
+// SLOPE-colored (2026-07-31 rework, same engine as ma-waves' trend line and
+// macd-waves' slope colors): rising = Up Color, falling = Down Color, last
+// direction held on flat bars — NOT the old above/below-zero gradient.
+// CONSENSUS is always on and renders as opacity ON TOP of the slope color,
+// symmetrically on both sides: vivid rising = components agree behind the up
+// move, vivid falling = components agree behind the down move, pale either
+// way = internal disagreement. TIME-OF-DAY DIMMING is a separate, agnostic
+// overlay — it just adds transparency to whatever color resulted and never
+// touches the consensus calc. Opacity only; the composite's value is never
+// modified.
 bool compositeBreadthShowCompositeLine = input.bool(
      defval = true,
-     title = "Show Composite Line",
+     title = "Show",
      tooltip = "Show/hide the composite line itself. DISPLAY-ONLY — the composite is the engine, so the signal MAs and the conviction verdict keep computing off it even when hidden (e.g. hide it to read the pane as signals only).",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
-// Consensus Strength (below) is what switches the line to the directional
-// gradient. With it OFF the line is this plain solid color; opacity only, the
-// composite value is never touched.
-color compositeBreadthLineSolidColor = input.color(
-     defval = color.new(color = NORD4, transp = 60),
-     title = "Line Color",
-     tooltip = "The composite line's color when Consensus Strength is OFF — a plain flat line (the picker owns hue and opacity). When Consensus Strength is on the line switches to the directional gradient and this solid color is not used (the Time-of-Day overlay still dims either one).",
+// Zero-cut color pair — two hues, one dial (2026-08-01): NORD8 owns the whole
+// ABOVE-ZERO side, NORD11 the whole BELOW-ZERO side (the composite is a
+// zero-anchored stance line, so its sign IS the trend — the standard
+// internals-pane read), and OPACITY alone walks each from ghost (the retrace
+// — no internal backing) through split/dissent to vivid (the impulse with
+// full agreement) and the trusted max-vivid step the expansion regime
+// unlocks. The hue changes only where the line crosses zero — never per
+// slope segment, never on a vote. The picker owns hue AND the vivid-tier
+// base opacity; agreement/regime only move transparency.
+color compositeBreadthLineUpColor = input.color(
+     defval = color.new(color = NORD8, transp = 28),
+     title = "Bullish Color",
+     tooltip = "Line color for the whole ABOVE-ZERO side — impulses and retraces alike (opacity separates them: with-trend impulses run the agreement ladder to vivid, retraces ghost). The hue changes only where the line crosses zero. The picker owns hue and the VIVID-tier base opacity: agreement dims from there and the expansion-regime trust boost brightens past it. Hue answers only \"which side of zero\"; opacity answers \"how much to believe the current move\".",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+color compositeBreadthLineDownColor = input.color(
+     defval = color.new(color = NORD11, transp = 28),
+     title = "Bearish Color",
+     tooltip = "Line color for the whole BELOW-ZERO side — down-impulses run the agreement ladder to vivid (the predominant read), bounces ghost. Same treatment as the Bullish Color: picker owns hue and the vivid-tier base opacity; agreement and the regime ceiling/boost only move transparency. At full vividness on an expansion tape this reads as CONFIRMED WEAKNESS.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
@@ -163,27 +197,38 @@ int compositeBreadthLineWidth = input.int(
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
-bool compositeBreadthShowConsensusStrength = input.bool(
-     defval = true,
-     title = "Consensus Strength",
-     tooltip = "ON by default. The line fades on internal component DISAGREEMENT — vivid when VOLD / ADD / %VWAP / CUMTICK agree on the sign, pale when they split — rendered as the directional red↔neutral↔cyan gradient. OFF: the line is the plain solid Line Color above. This is the ONLY feature that colors the line. Opacity only; the composite value is untouched.",
-     group = GROUP_COMPOSITE_BREADTH_LINE
- )
-
 int compositeBreadthConsensusDimStrength = input.int(
-     defval = 45,
+     defval = 65,
      title = "Consensus Dim Strength",
      minval = 0,
      maxval = 90,
      step = 5,
-     tooltip = "Extra transparency at maximum internal disagreement (only when Consensus Strength is on). (1 − consensus) × this is added to the line's transparency: full agreement = vivid, split = pale. Capped at 95.",
+     tooltip = "Extra transparency at maximum internal disagreement — always on, applied symmetrically to whichever slope color is active. (1 − move consensus) × this is added to the line's transparency: components aligned behind the move = vivid, split = pale, countertrend drift = ghost, on the way up and on the way down alike. 0 disables the dim entirely. Capped at 95.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+// The deadband drives the composite's consensus vote (line opacity).
+float compositeBreadthConsensusDeadband = input.float(
+     defval = 0.1,
+     title = "Consensus Vote Deadband",
+     minval = 0.0,
+     maxval = 0.5,
+     step = 0.05,
+     tooltip = "Confidence magnitude a component must exceed before it VOTES in the consensus read. Near-zero components abstain — flat is not dissent — and an established vote holds through the band (hysteresis), flipping only when confidence crosses the band on the OPPOSITE side. Kills the consensus flicker from a component's sign chattering around zero without delaying real rollovers. Consensus renders as the composite line's opacity.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
 bool compositeBreadthShowTimeOfDayDim = input.bool(
      defval = false,
      title = "Time-of-Day Dimming",
-     tooltip = "OFF by default. An INDEPENDENT overlay that dims the line during the two structurally low-information windows — the lunch trough (12:00–13:30 ET) and the MOC window (15:45–16:00 ET) — regardless of whether the line is solid or the consensus gradient. It adds transparency agnostically and does NOT affect the consensus color or calculation. It is the weakest of the line cues (purely time-based); leave it off unless you specifically want the midday/close fade. Visual only; the composite value is unchanged.",
+     tooltip = "OFF by default. An INDEPENDENT overlay that dims the line during the two structurally low-information windows — the lunch trough (12:00–13:30 ET) and the MOC window (15:45–16:00 ET) — on top of whatever the trend color + consensus dim produced. It adds transparency agnostically and does NOT affect the consensus calculation. Purely time-based; leave it off unless you specifically want the midday/close fade. Visual only; the composite value is unchanged.",
+     group = GROUP_COMPOSITE_BREADTH_LINE
+ )
+
+bool compositeBreadthShowMorningDim = input.bool(
+     defval = true,
+     title = "Morning Reversion Dim",
+     tooltip = "ON by default — the most consistent finding in the 135-session log analysis: the 10:00–11:00 ET hour is where following the composite's stance LOSES (negative in 2 of 3 regime chunks, worst of the day), while 14:00+ is positive in all three — the open's echo mean-reverts before the tape picks a side (Gao et al.: the first half-hour's information pays at the close, not right after). Dims the line by the Time-of-Day Dim Strength during 10:00–11:00, independent of the lunch/MOC toggle. Opacity only; the composite value is unchanged.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
@@ -193,49 +238,51 @@ int compositeBreadthTimeDimStrength = input.int(
      minval = 0,
      maxval = 90,
      step = 5,
-     tooltip = "Transparency the Time-of-Day overlay adds to the line during the lunch and MOC windows (only when that toggle is on). Added on top of the line's current opacity — solid or gradient — and capped at 95.",
+     tooltip = "Transparency the time-based dims add to the line — the lunch/MOC windows (Time-of-Day Dimming toggle) and the 10:00–11:00 morning-reversion window (Morning Reversion Dim toggle) share this one strength. Added on top of the line's current opacity and capped at 95.",
      group = GROUP_COMPOSITE_BREADTH_LINE
  )
 
-// ─── Weights (30/25/20/25 = VOLD/ADD/PCTABOVEVWAP/CUMTICK) ────────────────────
+// ─── Weights (40/30/30/0 = VOLD/ADD/PCTABOVEVWAP/CUMTICK) ─────────────────────
 // Research synthesis: TRIN is a non-independent transformation of VOLD+ADD so
 // adding it would double-count. VOLD and ADD are correlated siblings (net
 // breadth measured in volume vs issues — their DISAGREEMENT is the
-// information, and the consensus read extracts it (surfacing as line
-// opacity, the badge dissent readout, and the early-shift event)), so their
-// combined weight is capped at 55% instead of the legacy 70%; VOLD keeps the
-// edge over ADD as the higher-conviction leg and the cleanest trend-day
-// identifier in practitioner use. PCTABOVEVWAP captures positioning vs the
-// dominant institutional execution benchmark and is independent of the
-// volume/issue dimensions. CUMTICK (cumulative intraday TICK,
-// slope-normalized) is the only component with a documented LEADING use case
-// — Steenbarger's cumulative-TICK divergence read — so it carries 25%
-// instead of the legacy 15%. Raw TICK remains context-only (extreme
-// markers): the per-bar value is too noisy to be a weighted signal.
+// information, and the consensus read extracts it, surfacing as line
+// opacity); VOLD keeps the edge over ADD as the higher-conviction leg, the
+// cleanest trend-day identifier in practitioner use, and the largest-|IC|
+// component in the 135-session log analysis. PCTABOVEVWAP captures
+// positioning vs the dominant institutional execution benchmark and is
+// independent of the volume/issue dimensions.
 //
-// Weight-optimality check (2026-07-08): no published correlation matrix,
-// intraday predictive decomposition, or consensus composite weighting exists
-// for this stack — every published composite's weights are folklore. The one
-// rigorous, replicated literature (forecast-combination puzzle, DeMiguel's
-// 1/N, Grinold's signal-weighting) says: with correlated noisy signals and
-// no out-of-sample estimation, stay near equal weights with at most mild
-// conviction tilts, and give a correlated pair a shared capped budget.
-// 30/25/20/25 is exactly that construction (max 5-point tilt from equal,
-// VOLD+ADD capped at 55%) — re-tuning it without a proper out-of-sample
+// CUMTICK DEFAULTS TO 0 (2026-08-01 log verdict): across three regime chunks
+// (Jan–Mar down, Mar–May rally, May–Jul chop; 135 sessions of 2-min QQQ
+// bars) its IC vs forward returns was NEGATIVE in all three (−0.01..−0.04 at
+// 60min) and no alternative slope window rescued it — the one component that
+// was weak in every regime, confirming the earlier research round's refuted
+// "cumulative TICK leads price" premise. Weight 0 fully deactivates it (no
+// weighted-sum contribution, no consensus vote) while the engine keeps
+// computing, so re-enabling is a one-input change. Raw TICK
+// remains context-only: the per-bar value is too noisy to be a weighted
+// signal.
+//
+// Weight doctrine (2026-07-08, reaffirmed 2026-07-31): with correlated noisy
+// signals and no out-of-sample estimation, stay near equal weights with at
+// most mild conviction tilts (forecast-combination puzzle, DeMiguel's 1/N).
+// 40/30/30 is near-1/N across the three LIVE components with VOLD's
+// evidence-backed tilt — re-tuning further without a proper out-of-sample
 // sweep would be worse than leaving it alone.
 float compositeBreadthVoldWeight = input.float(
-     defval = 30,
-     title = "VOLD Weight",
+     defval = 40,
+     title = "VOLD",
      minval = 0,
      maxval = 100,
      step = 5,
-     tooltip = "Volume trend — conviction. Barry's primary intraday breadth read on NDX (\"up/down volume difference\") and the strongest trend-day identifier in practitioner use.",
+     tooltip = "Volume trend — conviction. Barry's primary intraday breadth read on NDX (\"up/down volume difference\"), the strongest trend-day identifier in practitioner use, and the largest-magnitude component in the 135-session log analysis (its sign tracks the prevailing regime — IC +0.11 in the Mar–May rally).",
      group = GROUP_COMPOSITE_BREADTH_WEIGHTS
  )
 
 float compositeBreadthAddWeight = input.float(
-     defval = 25,
-     title = "ADD Weight",
+     defval = 30,
+     title = "ADD",
      minval = 0,
      maxval = 100,
      step = 5,
@@ -244,22 +291,22 @@ float compositeBreadthAddWeight = input.float(
  )
 
 float compositeBreadthPctVwapWeight = input.float(
-     defval = 20,
-     title = "PCTABOVEVWAP Weight",
+     defval = 30,
+     title = "PCTABOVEVWAP",
      minval = 0,
      maxval = 100,
      step = 5,
-     tooltip = "Percent of stocks trading above their intraday VWAP — independent breadth dimension capturing real-time positioning vs the institutional execution benchmark (VWAP-pegged algos are the single largest execution style). The slowest-turning component: reads as the composite's stance, not its trigger. Routes to the selected market's PCTABOVEVWAP feed.",
+     tooltip = "Percent of stocks trading above their intraday VWAP — independent breadth dimension capturing real-time positioning vs the institutional execution benchmark (VWAP-pegged algos are the single largest execution style). The slowest-turning component: reads as the composite's stance, not its trigger. Routes to the Breadth Universe's PCTABOVEVWAP feed.",
      group = GROUP_COMPOSITE_BREADTH_WEIGHTS
  )
 
 float compositeBreadthCumTickWeight = input.float(
-     defval = 25,
-     title = "CUMTICK Weight",
+     defval = 0,
+     title = "CUMTICK",
      minval = 0,
      maxval = 100,
      step = 5,
-     tooltip = "Cumulative session TICK, slope-normalized. Confidence is the 10-minute (timeframe-derived bar count) rate-of-change of the running session sum of (optionally bias-adjusted) TICK, smoothed by a 10-minute EMA before normalization (the raw slope flips sign constantly), saturating at ±1 when TICK averaged ±500 NYSE-scale (scaled per market by the TICK factor) across the window. Positive = breadth strengthening on the bid; negative = weakening. This is the divergence-grade breadth series — the only component with a documented LEADING use case (Steenbarger) — hence its 25% weight. Frozen during the 15:45–16:00 MOC window (rebalancing spikes aren't directional information). Resets at each NYSE RTH open.",
+     tooltip = "DEFAULT 0 — DEACTIVATED by the 2026-08-01 log analysis: its correlation with forward returns was negative in all three regime chunks (135 sessions) and no slope window rescued it, confirming the refuted \"cumulative TICK leads price\" premise. At 0 it contributes nothing to the weighted sum and casts no consensus vote; the engine keeps computing so re-enabling is a one-input change. Construction if re-enabled: 10-minute ROC of the session sum of bias-adjusted TICK (Steenbarger-style trailing ~20-day mean subtraction), 10-minute EMA smoothed, saturating at ±500 NYSE-scale × the TICK universe's factor; frozen in the MOC window; resets each RTH open.",
      group = GROUP_COMPOSITE_BREADTH_WEIGHTS
  )
 
@@ -282,15 +329,15 @@ float compositeBreadthCumTickWeight = input.float(
 // 20-BAR SMA on the 3-min chart = 60 minutes of post-09:30 convergence —
 // the entire prime open window burned on warmup.
 bool compositeBreadthShowSignalFast = input.bool(
-     defval = true,
-     title = "Show Fast Signal Line",
+     defval = false,
+     title = "Show Fast",
      tooltip = "FAST leg of the signal pair — the trigger line on the smoothed composite (fed from the same series that's plotted, so crosses and divergences read true). Toggling OFF turns the leg fully off — not computed. The slow leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
 bool compositeBreadthShowSignalSlow = input.bool(
-     defval = true,
-     title = "Show Slow Signal Line",
+     defval = false,
+     title = "Show Slow",
      tooltip = "SLOW leg of the signal pair — the baseline. Composite above/below it = momentum building that way (the legacy single-signal read). Toggling OFF turns the leg fully off — not computed. The fast leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
@@ -363,118 +410,172 @@ int compositeBreadthSignalSlowWidth = input.int(
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
-// ─── Consensus (engine) ───────────────────────────────────────────────────────
-// The deadband drives the composite's consensus vote (line opacity).
-float compositeBreadthConsensusDeadband = input.float(
-     defval = 0.1,
-     title = "Consensus Vote Deadband",
-     minval = 0.0,
-     maxval = 0.5,
-     step = 0.05,
-     tooltip = "Confidence magnitude a component must exceed before it VOTES in the consensus read. Near-zero components abstain — flat is not dissent — and an established vote holds through the band (hysteresis), flipping only when confidence crosses the band on the OPPOSITE side. Kills the consensus flicker from a component's sign chattering around zero without delaying real rollovers. Consensus renders as the composite line's opacity.",
-     group = GROUP_COMPOSITE_BREADTH_SIGNAL
+// ─── Line Trust (session regime → the line's vividness ceiling) ─────────────
+// Replaces the Direction Conviction verdict tag (2026-08-01, research-driven
+// rebuild). Conviction is no longer a parallel opinion next to the line — it
+// QUALIFIES the line: the opening regime (first-30-min volume + open
+// volatility vs ~10-session trailing baselines, the two evidence-backed
+// conditioners) decides how loud the line is allowed to speak today.
+// Expansion = full voice + the "trusted" max-vivid step; neutral = mild cap;
+// quiet = whisper (follow-through signal on quiet opens is statistically
+// ≈ zero — JFE 2018 low-volatility tercile). Vivid-grade pushes on a quiet
+// tape get an ▲ unsupported-move marker. The gap leg, the weighted TRUST/FADE
+// score, and the 1–4 meter tag were removed outright (gap base rates never
+// verified at a primary source; the combined score's nearest tested analogue
+// failed out-of-sample). Nothing here touches the composite's value — ceiling,
+// boost, and markers are opacity/labels only.
+bool compositeBreadthShowLineTrust = input.bool(
+     defval = true,
+     title = "Show",
+     tooltip = "Master toggle for the Line Trust layer: the opening-regime read (volume + open volatility), the session vividness ceiling, the expansion trust boost, the ▲ unsupported-move markers, and the Trust Readout table. OFF = the line renders on agreement alone (no ceiling, no boost) and none of this computes.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
  )
 
-// ─── Conviction verdict tag (open-quality read) ─────────────────────────────
-// A ONE-PER-SESSION verdict tag, NOT a line overlay. Conviction is the
-// independent-context read (opening-volume regime + gap character — the two
-// signals that carry information the composite's four components don't). It is
-// a slow, session-level, near-binary "trust the open vs fade it" call decided
-// once the open resolves (~30 min) — the wrong shape for per-bar line opacity,
-// which is why it lives here as its own tag. The composite line + consensus
-// carry the per-bar picture; this tag carries the day's open-quality verdict.
-// Regime + Gap compute automatically when this is on (zero cost).
-bool compositeBreadthShowConviction = input.bool(
-     defval = false,
-     title = "Conviction Verdict Tag",
-     tooltip = "OFF by default. ON: drops a single tag per session, once the open resolves (~30 min), reading the independent open-context — opening-volume regime + gap character. Shows a 1–4 vertical SQUARE meter colored by direction (TRUST cyan / FADE red) and brightened dim→bright by strength; MIXED draws nothing. It sits on the zero-side of the composite line (below when the line is above zero, above when it's below) so it never runs off the pane. HOVER the tag for the full dynamic explanation (what the verdict means, the regime + gap drivers, and the read-off). Uses only signals NOT in the composite's four components, so it adds information rather than restating the line. Nothing here touches the composite line or its value.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
- )
-
-string compositeBreadthConvTagSize = input.string(
-     defval = "Small",
-     title = "Verdict Tag Size",
-     options = ["Tiny", "Small", "Normal", "Large"],
-     tooltip = "Text size of the once-per-session conviction verdict tag.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
- )
-
-float compositeBreadthConvRegimeWeight = input.float(
-     defval = 40.0,
-     title = "Regime Weight",
-     minval = 0.0,
-     maxval = 100.0,
-     step = 5.0,
-     tooltip = "Weight of the opening-volume regime in the verdict score (expansion +, light −, neutral 0). Regime is the backbone — classified once at the 30-min mark. Sign of the combined score picks TRUST vs FADE; when regime and gap disagree the larger weight wins. Computes automatically when the tag is on.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
- )
-
-float compositeBreadthConvGapWeight = input.float(
-     defval = 30.0,
-     title = "Gap Weight",
-     minval = 0.0,
-     maxval = 100.0,
-     step = 5.0,
-     tooltip = "Weight of the gap verdict in the verdict score (gap-and-go +, gap-close −, mixed 0). Resolves at the gap read window (~15 min). Sign of the combined regime+gap score picks TRUST vs FADE; when the two disagree the larger weight wins. Computes automatically when the tag is on.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
- )
-
-// Regime tuning — the opening-volume regime feeds the conviction backbone.
 float compositeBreadthOpenVolExpansionRatio = input.float(
      defval = 1.2,
-     title = "Expansion Regime Ratio",
+     title = "Volume Expansion Ratio",
      minval = 1.0,
      maxval = 3.0,
      step = 0.05,
-     tooltip = "Opening volume at or above this multiple of the trailing mean = range-expansion (trend-capable) regime. Raschke's rule is categorical (\"good volume day\" vs \"light volume day\") with no published number — 1.2× (20% above average) is a reasonable default; re-validate on current data rather than trusting it (breadth thresholds decay across regimes, Qi & Zhao 2008).",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+     tooltip = "First-30-minute volume (or opening range) at or above this multiple of its trailing ~10-session mean = EXPANSION regime — full ceiling, trusted step unlocked. Raschke's rule is categorical (\"good volume day\" vs \"light volume day\") with no published number; 1.2× is this indicator's parameterization, not hers — re-validate on current data rather than trusting it.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
  )
 
 float compositeBreadthOpenVolLightRatio = input.float(
      defval = 0.8,
-     title = "Light Regime Ratio",
+     title = "Volume Quiet Ratio",
      minval = 0.3,
      maxval = 1.0,
      step = 0.05,
-     tooltip = "Opening volume at or below this multiple of the trailing mean = light-volume (rotation, fade-friendly) regime. Between the two ratios the day is classified neutral.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+     tooltip = "First-30-minute volume at or below this multiple of the trailing mean — AND open volatility at or below it too (quiet needs both: the follow-through evidence dies only when volume and open range are both low) = QUIET regime: the whole line runs at the Quiet Ceiling all session and vivid-grade pushes get flagged. Between the two ratios = NEUTRAL.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
  )
 
-// Gap tuning — the opening-gap verdict feeds the conviction backbone.
-float compositeBreadthGapReadMinutes = input.float(
-     defval = 15.0,
-     title = "Gap Read Window (minutes)",
+float compositeBreadthOpenRangeMinutes = input.float(
+     defval = 30.0,
+     title = "Open Volatility Window (minutes)",
      minval = 10.0,
-     maxval = 30.0,
-     step = 1.0,
-     tooltip = "Minutes after 09:30 before the Gap Close / Gap and Go verdict is evaluated (bar count derived from the chart timeframe). The first ~10 minutes are gap-distorted (Raschke: \"don't look at the breadth reading in the first five or ten minutes\"), so the verdict waits past that but fires before the 30-minute cross-alert gate lifts — long enough for VOLD to develop a clean change-since-open sign, early enough that the read still matters. 15 minutes is the default middle; the verdict is a one-shot per session, evaluated on the first confirmed bar at/after this mark.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+     maxval = 60.0,
+     step = 5.0,
+     tooltip = "Window for the opening-volatility leg: the chart's high-low range over the first N minutes, compared to its ~10-session trailing mean exactly like the volume leg. Open volatility conditions follow-through even more sharply than volume (JFE 2018: the low-volatility tercile carries NO statistically significant signal), so it shares the regime vote: either leg expanding = expansion, both quiet = quiet.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
  )
 
-float compositeBreadthGapSmallPct = input.float(
-     defval = 20.0,
-     title = "Small-Gap Threshold (% of prior range)",
-     minval = 5.0,
-     maxval = 50.0,
-     step = 5.0,
-     tooltip = "Gap size (as a percent of the PRIOR day's high-low range) at or below which the gap is 'small' — Steenbarger's volatility-normalized gap study (SPY, N=897): gaps under ~20% of the prior range filled ~88% of the time. A small gap barely pre-loads the composite, and its early one-sidedness is most likely intraday noise around a fill-prone open. Normalizing by the prior range rather than a fixed percent is the point — a 0.3% gap means something different in a quiet tape than a wild one.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+int compositeBreadthQuietCeilingDim = input.int(
+     defval = 40,
+     title = "Quiet Ceiling Dim",
+     minval = 0,
+     maxval = 90,
+     step = 5,
+     tooltip = "Transparency added to the ENTIRE line for the rest of the session when the regime reads QUIET — the visual statement that today's directional reads are low-information. Applied on top of the agreement dim, capped at 95.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
  )
 
-float compositeBreadthGapLargePct = input.float(
-     defval = 40.0,
-     title = "Large-Gap Threshold (% of prior range)",
-     minval = 20.0,
-     maxval = 100.0,
-     step = 5.0,
-     tooltip = "Gap size (percent of the prior day's range) at or above which the gap is 'large' — Steenbarger: gaps beyond ~40% of the prior range filled only about half the time (a coin flip between gap-and-go and gap-fade). A large gap pre-loads the composite hardest AND deserves no automatic fade prior — respect the open until the verdict says otherwise. Between the small and large thresholds the gap is 'medium'. Thresholds are regime-dependent priors from a 2003-06 low-volatility sample; re-validate on current data before leaning on them.",
-     group = GROUP_COMPOSITE_BREADTH_CONVICTION
+int compositeBreadthNeutralCeilingDim = input.int(
+     defval = 15,
+     title = "Neutral Ceiling Dim",
+     minval = 0,
+     maxval = 90,
+     step = 5,
+     tooltip = "Transparency added to the line on a NEUTRAL (or unclassifiable — no baseline yet, feeds dark) session. Mild by default: the tape is participating, just not expanding. Expansion sessions get no ceiling at all.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+int compositeBreadthTrustBoost = input.int(
+     defval = 23,
+     title = "Trust Vividness Boost",
+     minval = 0,
+     maxval = 28,
+     step = 1,
+     tooltip = "Transparency REMOVED from the line (brighter than the picker's vivid tier) when everything stacks: EXPANSION regime + full agreement across the voting components + an established stance the slope is moving with. This is the \"trusted rising / confirmed weakness\" max-vivid step — the only state that renders brighter than the base color.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+bool compositeBreadthShowTrustTable = input.bool(
+     defval = true,
+     title = "Trust Readout Table",
+     tooltip = "Corner table with the live numbers: STATE (trusted/vivid/dimmed/pale/ghost), CBI value + slope, agreement count with the dissenter, stance vote, and the regime with its volume/volatility ratios. Redrawn on last-bar ticks only — a handful of cells, negligible cost; OFF creates nothing.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+bool compositeBreadthShowUnsupportedMarkers = input.bool(
+     defval = true,
+     title = "Unsupported-Move Markers",
+     tooltip = "▲/▼ marker on the first confirmed bar of a vivid-grade push (full agreement of the voting components behind the slope) during a QUIET regime — a move without tape participation; quiet opens carry ≈ zero follow-through signal, don't chase it. One marker per push episode; hover for the numbers. Silence everywhere else is the design: expansion days draw nothing.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+color compositeBreadthUnsupportedMarkerColor = input.color(
+     defval = color.new(color = NORD13, transp = 25),
+     title = "Marker Color",
+     tooltip = "Unsupported-move marker color — used verbatim (the picker owns hue and opacity).",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+int compositeBreadthUnsupportedMarkerSize = input.int(
+     defval = 4,
+     title = "Marker Size",
+     minval = 4,
+     maxval = 20,
+     tooltip = "Unsupported-move marker size in points.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+bool compositeBreadthNewsDaySuppression = input.bool(
+     defval = false,
+     title = "News-Day Suppression (today)",
+     tooltip = "Manual kill switch for scheduled-news sessions (FOMC, CPI, opex) — Raschke's own explicit exception to the opening-volume rule: announcement-day volume expansion is event noise, not a higher-timeframe player. ON: the regime is forced NEUTRAL for the session (neutral ceiling, no trusted step, no unsupported-move markers) and the Trust Readout reads SUPPRESSED. Flip it on in the morning, off after.",
+     group = GROUP_COMPOSITE_BREADTH_TRUST
+ )
+
+// ─── Price Confirmation (Dow-style price-vs-breadth read at the extremes) ────
+// The one layer that adds NEW information rather than re-rendering state:
+// price is the missing validator of the breadth line. At each new confirmed
+// session price extreme, breadth must have followed; when price prints a new
+// high (low) and the composite sits materially below (above) where it stood at
+// the prior price extreme, that is a Dow-style NON-CONFIRMATION — the classic
+// confirm-grade use of cumulative internals (Steenbarger's documented read is
+// divergence at turns, not lead). Evaluated on confirmed closes only — no
+// intrabar diamonds, no repaint. Chart OHLC only, zero new feeds.
+bool compositeBreadthShowPriceConfirmation = input.bool(
+     defval = true,
+     title = "Show",
+     tooltip = "Watch the chart's session price extremes against the composite: a new confirmed price high (low) with breadth at a materially lower high (higher low) vs the prior price extreme = a ◆ non-confirmation marker on the line. Confirmation itself is silent — agreement is the normal state; only the failure draws. Evaluated on bar close only.",
+     group = GROUP_COMPOSITE_BREADTH_CONFIRM
+ )
+
+color compositeBreadthNonConfMarkerColor = input.color(
+     defval = color.new(color = NORD12, transp = 15),
+     title = "Non-Confirmation Marker Color",
+     tooltip = "◆ non-confirmation marker color — used verbatim (the picker owns hue and opacity).",
+     group = GROUP_COMPOSITE_BREADTH_CONFIRM
+ )
+
+int compositeBreadthNonConfMarkerSize = input.int(
+     defval = 4,
+     title = "Marker Size",
+     minval = 4,
+     maxval = 20,
+     tooltip = "Non-confirmation marker size in points.",
+     group = GROUP_COMPOSITE_BREADTH_CONFIRM
+ )
+
+int compositeBreadthNonConfSeparationMinutes = input.int(
+     defval = 30,
+     title = "Min Extreme Separation (minutes)",
+     minval = 10,
+     maxval = 120,
+     step = 5,
+     tooltip = "Minimum time between the prior price extreme and the new one before a non-confirmation can fire (bar count derived from the chart timeframe). Back-to-back new highs during one push are one advance, not a divergence — this keeps the diamond meaning \"price came BACK to a new extreme and breadth declined to follow\".",
+     group = GROUP_COMPOSITE_BREADTH_CONFIRM
  )
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔗 SYMBOL ROUTING + PER-MARKET CALIBRATION
-// One suffix drives every feed family — the whole point of the dotted USI
-// catalog is that ADVDEC/ADVDECV/TVOL/PCTABOVEVWAP/TICK exist for the SAME
+// Three resolved universes drive the feed families — VOLD/TVOL/PCTABOVEVWAP
+// on the base Breadth Universe, ADVDEC on the A-D universe, TICK on the TICK
+// universe (per-component routing, 2026-07-31). The dotted USI catalog makes
+// this possible: ADVDEC/ADVDECV/TVOL/PCTABOVEVWAP/TICK exist for the SAME
 // six universes (verified 2026-07-13 against TradingView's symbol-search API
 // and symbol pages, provider ICE): .NY = NYSE, .NQ = Nasdaq, .US = all US
 // markets combined, .DJ = Dow 30, .AX = NYSE Arca (ARCX — the ETF tape),
@@ -483,10 +584,39 @@ float compositeBreadthGapLargePct = input.float(
 // dotted family is used exclusively so every market gets the same
 // construction.
 // ═════════════════════════════════════════════════════════════════════════════
+// Per-component routing: the A-D and TICK universe inputs resolve here —
+// "Same as Breadth Universe" collapses onto the base pick, anything else
+// overrides just that component's feed AND its calibration (ADD scale / TICK
+// factor follow the component's universe, not the base market's). The suffix
+// switches stay bare global statements (no helper function) so the symbol
+// strings keep the simple qualifier request.security requires.
+string compositeBreadthAddUniverseResolved = compositeBreadthAddUniverse == "Same as Breadth Universe" ?
+     compositeBreadthMarket : compositeBreadthAddUniverse
+string compositeBreadthTickUniverseResolved = compositeBreadthTickUniverse == "Same as Breadth Universe" ?
+     compositeBreadthMarket : compositeBreadthTickUniverse
+
 string compositeBreadthMarketSuffix = switch compositeBreadthMarket
-    "NASDAQ"         => "NQ"
-    "NYSE"           => "NY"
     "US All Markets" => "US"
+    "NYSE"           => "NY"
+    "NASDAQ"         => "NQ"
+    "Dow Jones"      => "DJ"
+    "NYSE Arca"      => "AX"
+    "NYSE American"  => "AM"
+    => "NQ"
+
+string compositeBreadthAddSuffix = switch compositeBreadthAddUniverseResolved
+    "US All Markets" => "US"
+    "NYSE"           => "NY"
+    "NASDAQ"         => "NQ"
+    "Dow Jones"      => "DJ"
+    "NYSE Arca"      => "AX"
+    "NYSE American"  => "AM"
+    => "NQ"
+
+string compositeBreadthTickSuffix = switch compositeBreadthTickUniverseResolved
+    "US All Markets" => "US"
+    "NYSE"           => "NY"
+    "NASDAQ"         => "NQ"
     "Dow Jones"      => "DJ"
     "NYSE Arca"      => "AX"
     "NYSE American"  => "AM"
@@ -495,7 +625,8 @@ string compositeBreadthMarketSuffix = switch compositeBreadthMarket
 // ADD saturation scale — the net-issues reading that maps to full ±1
 // confidence. Net issues is bounded by the exchange's tradable issue count
 // and practitioners read it at ABSOLUTE levels, so a fixed per-market scale
-// is the right normalization (calibration research 2026-07-13):
+// is the right normalization (calibration research 2026-07-13). Keys off the
+// A-D component's own universe:
 //   NYSE ~2,800 issues — ±1,500 strong / ±2,000 extreme is the documented
 //     practitioner level (52-wk $ADDN extremes ≈ ±1,700) → scale 2000.
 //   NASDAQ ~3,450 issues — scaled by issue ratio, matches observed 52-wk
@@ -504,10 +635,10 @@ string compositeBreadthMarketSuffix = switch compositeBreadthMarket
 //   Dow: hard bound ±30; 27 = 28+ of 30 one-sided (lore extreme ±22-26).
 //   Arca ~2,500 ETPs, but ETFs tick together → 2000 saturates appropriately.
 //   American ~242 issues → 200.
-float compositeBreadthAddScale = switch compositeBreadthMarket
-    "NASDAQ"         => 2500.0
-    "NYSE"           => 2000.0
+float compositeBreadthAddScale = switch compositeBreadthAddUniverseResolved
     "US All Markets" => 4500.0
+    "NYSE"           => 2000.0
+    "NASDAQ"         => 2500.0
     "Dow Jones"      => 27.0
     "NYSE Arca"      => 2000.0
     "NYSE American"  => 200.0
@@ -515,17 +646,19 @@ float compositeBreadthAddScale = switch compositeBreadthMarket
 
 // TICK market factor — scales every NYSE-calibrated TICK level (cumTICK
 // saturation base ±500, extreme threshold ±985, trend-tell ±1500) to the
-// selected feed. NYSE ±1,000 extreme is the documented anchor; the other
-// factors derive from issue counts anchored to what IS documented (Nasdaq
-// climax ~±1,200-1,300; Dow TICKI extreme lore ±22-26 of its ±30 bound —
-// small baskets tick together, so the factor is NOT purely proportional to
-// issue count). No practitioner levels exist for .US/.AX/.AM — factors are
+// resolved TICK feed (keys off the TICK component's own universe — NYSE
+// default = factor 1.0, the calibration the levels were authored on). NYSE
+// ±1,000 extreme is the documented anchor; the other factors derive from
+// issue counts anchored to what IS documented (Nasdaq climax ~±1,200-1,300;
+// Dow TICKI extreme lore ±22-26 of its ±30 bound — small baskets tick
+// together, so the factor is NOT purely proportional to issue count). No
+// practitioner levels exist for .US/.AX/.AM — factors are
 // issue-count-derived, honest but unvalidated; re-check against the live
 // feed's actual range before leaning on their extreme markers.
-float compositeBreadthTickMarketFactor = switch compositeBreadthMarket
-    "NASDAQ"         => 1.25
-    "NYSE"           => 1.0
+float compositeBreadthTickMarketFactor = switch compositeBreadthTickUniverseResolved
     "US All Markets" => 2.25
+    "NYSE"           => 1.0
+    "NASDAQ"         => 1.25
     "Dow Jones"      => 0.026
     "NYSE Arca"      => 1.6
     "NYSE American"  => 0.17
@@ -541,24 +674,19 @@ float compositeBreadthTickMarketFactor = switch compositeBreadthMarket
 // day, and American is thin → ±30. Derived, not documented — no
 // per-exchange practitioner rails exist.
 float compositeBreadthPctVwapBand = switch compositeBreadthMarket
-    "NASDAQ"         => 15.0
-    "NYSE"           => 15.0
     "US All Markets" => 15.0
+    "NYSE"           => 15.0
+    "NASDAQ"         => 15.0
     "Dow Jones"      => 20.0
     "NYSE Arca"      => 30.0
     "NYSE American"  => 30.0
     => 15.0
 
-string compositeBreadthAddNetSymbol   = "USI:ADVDEC."       + compositeBreadthMarketSuffix
+string compositeBreadthAddNetSymbol   = "USI:ADVDEC."       + compositeBreadthAddSuffix
 string compositeBreadthVoldNetSymbol  = "USI:ADVDECV."      + compositeBreadthMarketSuffix
 string compositeBreadthTotalVolSymbol = "USI:TVOL."         + compositeBreadthMarketSuffix
 string compositeBreadthPctVwapSymbol  = "USI:PCTABOVEVWAP." + compositeBreadthMarketSuffix
-
-// TICK routes to the same suffix; the NYSE-only toggle (Barry's stated
-// practice) forces TICK.NY and neutralizes the market factor so all levels
-// read on the NYSE ±1000 calibration he teaches.
-string compositeBreadthTickSymbol = compositeBreadthTickNyseOnly ?
-     "USI:TICK.NY" : "USI:TICK." + compositeBreadthMarketSuffix
+string compositeBreadthTickSymbol     = "USI:TICK."         + compositeBreadthTickSuffix
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎛️ DERIVED CALIBRATION
@@ -586,11 +714,11 @@ int compositeBreadthCumTickSlopeWindow  = math.max(2, math.round(number = CBI_CU
 int compositeBreadthCumTickSlopeSmoothBars = math.max(2, math.round(number = CBI_CUMTICK_SLOPE_SMOOTH_MINUTES * 60.0 / timeframe.in_seconds()))
 int compositeBreadthTickBiasWindowBars  = math.max(10, math.round(number = CBI_TICK_BIAS_DAYS * 390.0 * 60.0 / timeframe.in_seconds()))
 int compositeBreadthOpenVolWindowBars   = math.max(1, math.round(number = CBI_OPEN_VOL_WINDOW_MINUTES * 60.0 / timeframe.in_seconds()))
-int compositeBreadthGapReadBars         = math.max(1, math.round(number = compositeBreadthGapReadMinutes * 60.0 / timeframe.in_seconds()))
+int compositeBreadthOpenRangeWindowBars = math.max(1, math.round(number = compositeBreadthOpenRangeMinutes * 60.0 / timeframe.in_seconds()))
+int compositeBreadthNonConfSeparationBars = math.max(1, math.round(number = compositeBreadthNonConfSeparationMinutes * 60.0 / timeframe.in_seconds()))
 int compositeBreadthSignalFastBars      = math.max(2, math.round(number = compositeBreadthSignalFastMinutes * 60.0 / timeframe.in_seconds()))
 int compositeBreadthSignalSlowBars      = math.max(2, math.round(number = compositeBreadthSignalSlowMinutes * 60.0 / timeframe.in_seconds()))
-float compositeBreadthTickFactor        = compositeBreadthTickNyseOnly ? 1.0 : compositeBreadthTickMarketFactor
-float compositeBreadthTickScale         = CBI_TICK_FIXED_SCALE * compositeBreadthTickFactor
+float compositeBreadthTickScale         = CBI_TICK_FIXED_SCALE * compositeBreadthTickMarketFactor
 float compositeBreadthCumTickSlopeScale = compositeBreadthCumTickSlopeWindow * compositeBreadthTickScale
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -718,6 +846,7 @@ bool compositeBreadthAnyFeedLive =
 bool compositeBreadthInRthOpen = not na(time(timeframe = timeframe.period, session = CBI_SESSION_RTH_OPEN, timezone = "America/New_York"))
 bool compositeBreadthSessionJustOpened = compositeBreadthInRthOpen and not compositeBreadthInRthOpen[1]
 bool compositeBreadthInLunchWindow = not na(time(timeframe = timeframe.period, session = CBI_SESSION_LUNCH, timezone = "America/New_York"))
+bool compositeBreadthInMorningWindow = not na(time(timeframe = timeframe.period, session = CBI_SESSION_MORNING, timezone = "America/New_York"))
 bool compositeBreadthInMocWindow   = not na(time(timeframe = timeframe.period, session = CBI_SESSION_MOC,   timezone = "America/New_York"))
 // In the cash session (09:30–16:00 ET) — gates the gap layer's RTH-only
 // prior-day price tracking so an extended-hours chart doesn't fold an overnight
@@ -766,7 +895,6 @@ f_compositeBreadthSignalStep(array<float> window, float previous, string maType,
         compositeBreadthSignalResult := f_compositeBreadthEwmaStep(previous = previous, sample = sample, length = lengthBars)
     compositeBreadthSignalResult
 
-
 // Hysteresis consensus vote: a component votes +1/−1 only after its
 // confidence leaves the ±deadband, holds that vote through the band, and
 // flips only when confidence crosses the band on the OPPOSITE side. 0 =
@@ -781,24 +909,6 @@ f_compositeBreadthVoteSign(int currentVote, float confidence, float deadband) =>
         else if confidence < -deadband
             compositeBreadthVoteResult := -1
     compositeBreadthVoteResult
-
-f_compositeBreadthProgressiveColor(float value, float scale, int minTransp, float extraTransp) =>
-    color compositeBreadthResultColor = na
-    if not na(value)
-        // Two-stage gradient — NORD11 → NORD3 (neutral grey at zero) → NORD8 — produces
-        // a continuous hue walk through neutral instead of the abrupt cyan↔red flip at
-        // zero that previously left visible bright bars at color transitions.
-        color compositeBreadthBaseColor = value >= 0.0 ?
-             color.from_gradient(value = value, bottom_value = 0.0,    top_value = scale, bottom_color = NORD3,  top_color = NORD8) :
-             color.from_gradient(value = value, bottom_value = -scale, top_value = 0.0,   bottom_color = NORD11, top_color = NORD3)
-        // Magnitude-based transparency (faded near zero, vivid at |value| ≥
-        // scale) plus the caller's extra dim (consensus + time-of-day),
-        // folded into ONE color.new — the old two-stage color.t() unwrap +
-        // rewrap allocated a second color on nearly every bar.
-        float compositeBreadthMagnitude = math.min(1.0, math.abs(number = value) / scale)
-        float compositeBreadthTransparency = math.min(95.0, minTransp - minTransp * compositeBreadthMagnitude + extraTransp)
-        compositeBreadthResultColor := color.new(color = compositeBreadthBaseColor, transp = compositeBreadthTransparency)
-    compositeBreadthResultColor
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎯 PER-COMPONENT CONFIDENCE
@@ -848,7 +958,7 @@ if not na(compositeBreadthTickValue)
     compositeBreadthTickBiasMean := f_compositeBreadthEwmaStep(previous = compositeBreadthTickBiasMean, sample = compositeBreadthTickValue, length = compositeBreadthTickBiasWindowBars)
 
 float compositeBreadthTickAdjustedValue = na(compositeBreadthTickValue) ? na :
-     compositeBreadthCumTickBiasAdjust and not na(compositeBreadthTickBiasMean) ?
+     not na(compositeBreadthTickBiasMean) ?
      compositeBreadthTickValue - compositeBreadthTickBiasMean : compositeBreadthTickValue
 
 // CUMTICK (cumulative session TICK, slope-normalized)
@@ -892,7 +1002,7 @@ float compositeBreadthCumTickSlope = compositeBreadthCumTickSlopeReady ?
 // (TICK oscillates around zero all day), so the unsmoothed slope injected
 // per-bar sign chatter into 25% of the weighted sum and, before the consensus
 // rework, flickered the consensus tier on top. A short EMA on the slope keeps
-// the leading inflections and drops the flicker. Session-scoped like
+// the early inflections and drops the flicker. Session-scoped like
 // everything upstream: reseeds at 09:30, blanks with the slope.
 var float compositeBreadthCumTickSlopeSmoothed = na
 if compositeBreadthSessionJustOpened
@@ -1094,266 +1204,199 @@ else
     array.clear(id = compositeBreadthSignalFastWindow)
     array.clear(id = compositeBreadthSignalSlowWindow)
 
-
 // ═════════════════════════════════════════════════════════════════════════════
-// 🔊 OPENING-VOLUME REGIME (Raschke)
-// Raschke's number-one day-type criterion: first-30-minute NYSE volume. High
-// opening volume = range-expansion / trend-capable day; light = rotation.
-// This is also the regime that resolves TICK-extreme interpretation — her
-// verified rule is volume-conditional: "If it's a light volume day TICKS very
-// often will match the extreme of the move" (exit/fade read), "If you've got
-// a good volume day, you want to use the TICKS as a momentum indicator"
-// (continuation read). The regime note in the TICK extremes section was
-// comment-only until now; this flag turns it into data.
+// 🧭 LINE TRUST REGIME (opening volume + opening volatility)
+// The session regime that sets the composite line's vividness ceiling — the
+// two evidence-backed conditioners of "how much to trust the open's
+// direction" (2026-07-31 research):
+//   VOLUME LEG (Raschke): first-30-minute total volume. High opening volume =
+//   range-expansion / trend-capable day; light = rotation ("The very number
+//   one criteria I look at is volume … the first 30-minute volume"). Source:
+//   TVOL — session-cumulative, so its value at the 30-minute mark IS the
+//   first-30-min volume; already requested as the VOLD denominator.
+//   VOLATILITY LEG (JFE 2018): the chart's first-N-minute high-low range.
+//   Open-direction follow-through conditions on open volatility even more
+//   sharply than on volume — the low-volatility tercile carries NO
+//   statistically significant signal, which is what the QUIET ceiling
+//   renders. Chart OHLC only, no request.
+// Both legs compare against a cross-session ~10-day EMA baseline (classified
+// against PRIOR days' mean first, then folded in — same seeding pattern as
+// the TICK bias mean). Vote: either leg expanding = EXPANSION; both at/below
+// the quiet ratio = QUIET; else NEUTRAL. Until a baseline exists the regime
+// is UNKNOWN, which consumers treat like neutral. News-Day Suppression forces
+// the whole session to a SUPPRESSED neutral (Raschke's FOMC exception).
 //
-// Volume source: TVOL — the market's exact total-volume feed, already
-// requested as the VOLD ratio denominator. It's session-cumulative, so its
-// value at the 30-minute mark IS the first-30-min volume. No extra request
-// needed, and it's a strictly better source than the old UPVOL+DNVOL proxy
-// (which excluded unchanged volume).
-//
-// Baseline: cross-session EMA (~10 sessions) of the captured opening volume,
-// seeded from the first captured session like the TICK bias mean. Today is
-// classified against the mean of PRIOR days first, then folded in. Until the
-// baseline exists (first session on a fresh chart load) the regime is
-// UNKNOWN, which consumers treat like neutral.
-//
-// Capture fires on the first CONFIRMED bar at/after the 30-minute live-bar
-// mark with a valid VOLD total (na gaps push it to the next valid bar). If
-// the feeds were dead long enough that the mark is only reached past twice
-// the window, the session is skipped entirely — a "first 30 minutes" captured
-// at 11:00 would poison the baseline.
+// Captures fire on the first CONFIRMED bar at/after each window mark (na gaps
+// push to the next valid bar); a capture only reached past twice its window
+// is skipped entirely — a "first 30 minutes" captured at 11:00 would poison
+// the baseline. The resolve is one-shot per session once both windows settle.
 // ═════════════════════════════════════════════════════════════════════════════
-var float compositeBreadthOpenVolMean     = na
-var bool  compositeBreadthOpenVolCaptured = false
-var float compositeBreadthOpenVolRatio    = na
-var int   compositeBreadthVolRegime       = 0      // 1 = expansion, -1 = light, 0 = neutral (or unknown)
-var bool  compositeBreadthVolRegimeKnown  = false
+var float compositeBreadthOpenVolMean       = na
+var bool  compositeBreadthOpenVolCaptured   = false
+var float compositeBreadthOpenVolRatio      = na
+var float compositeBreadthOpenRangeMean     = na
+var bool  compositeBreadthOpenRangeCaptured = false
+var float compositeBreadthOpenRangeRatio    = na
+var float compositeBreadthOpenRangeHigh     = na
+var float compositeBreadthOpenRangeLow      = na
+var int   compositeBreadthTrustRegime         = 0      // 1 = expansion, -1 = quiet, 0 = neutral (or unknown/suppressed)
+var bool  compositeBreadthTrustRegimeKnown    = false  // classified against a real baseline this session
+var bool  compositeBreadthTrustRegimeResolved = false  // read settled: classified, abandoned, or suppressed
 
 if compositeBreadthSessionJustOpened
-    compositeBreadthOpenVolCaptured := false
-    compositeBreadthOpenVolRatio    := na
-    compositeBreadthVolRegime       := 0
-    compositeBreadthVolRegimeKnown  := false
+    compositeBreadthOpenVolCaptured     := false
+    compositeBreadthOpenVolRatio        := na
+    compositeBreadthOpenRangeCaptured   := false
+    compositeBreadthOpenRangeRatio      := na
+    compositeBreadthOpenRangeHigh       := na
+    compositeBreadthOpenRangeLow        := na
+    compositeBreadthTrustRegime         := 0
+    compositeBreadthTrustRegimeKnown    := false
+    compositeBreadthTrustRegimeResolved := false
 
-// The regime exists only to feed the conviction line's backbone, so it
-// computes whenever that line is on. Zero cost when off.
-bool compositeBreadthNeedRegime = compositeBreadthShowConviction
-if compositeBreadthNeedRegime and not compositeBreadthOpenVolCaptured and barstate.isconfirmed and
+// Volume leg — capture at the 30-minute mark, fold into the baseline.
+if compositeBreadthShowLineTrust and not compositeBreadthOpenVolCaptured and barstate.isconfirmed and
      compositeBreadthBarsSinceSessionOpen >= compositeBreadthOpenVolWindowBars and
      compositeBreadthBarsSinceSessionOpen <= compositeBreadthOpenVolWindowBars * 2 and
      not na(compositeBreadthTotalVolValue) and compositeBreadthTotalVolValue > 0.0
     compositeBreadthOpenVolCaptured := true
     if not na(compositeBreadthOpenVolMean) and compositeBreadthOpenVolMean > 0.0
-        compositeBreadthOpenVolRatio   := compositeBreadthTotalVolValue / compositeBreadthOpenVolMean
-        compositeBreadthVolRegimeKnown := true
-        compositeBreadthVolRegime      := compositeBreadthOpenVolRatio >= compositeBreadthOpenVolExpansionRatio ? 1 :
-             compositeBreadthOpenVolRatio <= compositeBreadthOpenVolLightRatio ? -1 : 0
+        compositeBreadthOpenVolRatio := compositeBreadthTotalVolValue / compositeBreadthOpenVolMean
     compositeBreadthOpenVolMean := f_compositeBreadthEwmaStep(previous = compositeBreadthOpenVolMean, sample = compositeBreadthTotalVolValue, length = CBI_OPEN_VOL_MEAN_DAYS)
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 🌅 GAP CONTEXT (opening-gap reading layer)
-// The false-direction-at-the-open problem, made into a reading aid. On a gap
-// day the session-cumulative composite opens strongly one-sided purely because
-// the overnight gap pre-loads the ADD feed — advance/decline starts gapped
-// (Barry: it "did not start at zero … because of gaps"), while up/down volume
-// resets to zero at 09:30. That early one-sidedness is overnight-regime echo,
-// not intraday conviction (Cooper-Cliff-Gulen 2008 / NY Fed SR917: the
-// overnight session carries the average index drift, the cash session ≈ zero).
-//
-// Two reads, both pure interpretation — nothing here touches the weighted sum:
-//   1. GAP CLASSIFICATION at 09:30 — gap = today's RTH open vs the prior RTH
-//      close, sized against the PRIOR day's high-low range (Steenbarger's
-//      volatility-normalized construction: <~20% of prior range ≈ 88% fill /
-//      fade-prone open, >~40% ≈ coin flip / respect the open), plus the open's
-//      location vs the prior range (inside vs gapped clear).
-//   2. GAP CLOSE vs GAP AND GO (Barry) — evaluated once at the read-window
-//      mark. Barry's rule keys on whether BOTH breadth tools confirm or oppose
-//      the gap: both confirm = Gap and Go (the early composite is real, respect
-//      the gap), both oppose = Gap Close (fade toward the prior close, the
-//      early composite is echo), "if only one is against, this is not a Gap
-//      Close" = mixed. Measured on the CHANGE-since-open of VOLD and ADD
-//      (delta-from-open strips the gap pre-load — the Lou-Polk-Skouras
-//      first-half-hour-baseline construction: read the internals' move off
-//      their opening print, not their gap-loaded level).
-//
-// Gap is measured on the CHART's own price series (open/high/low/close) — no
-// new request.security. Prior-session close/high/low are folded at the 09:30
-// edge exactly like the VOLD extremes, tracked over RTH bars only so an
-// extended-hours chart doesn't fold an overnight print into the range. The
-// whole layer no-ops when disabled. Consumers (badge, marker, alerts, the
-// optional early dim) treat an unknown gap (first session, or a data gap) as
-// neutral — no read, no dim.
-// ═════════════════════════════════════════════════════════════════════════════
-var float compositeBreadthGapPriorClose   = na
-var float compositeBreadthGapPriorHigh    = na
-var float compositeBreadthGapPriorLow     = na
-var float compositeBreadthGapCurClose     = na
-var float compositeBreadthGapCurHigh      = na
-var float compositeBreadthGapCurLow       = na
-var float compositeBreadthGapTodayOpen    = na
-var float compositeBreadthGapValue        = na    // signed gap in chart price points
-var float compositeBreadthGapPctOfRange   = na    // |gap| ÷ prior day's range
-var int   compositeBreadthGapDir          = 0     // +1 gap up, -1 gap down, 0 flat/unknown
-var int   compositeBreadthGapSizeClass    = 0     // 1 small, 2 medium, 3 large; 0 unknown
-var int   compositeBreadthGapOpenLoc      = 0     // +1 open above prior range, -1 below, 0 inside
-var bool  compositeBreadthGapKnown        = false
-var float compositeBreadthGapVoldOpenPrint = na
-var float compositeBreadthGapAddOpenPrint  = na
-var int   compositeBreadthGapVerdict      = 0     // +1 gap-and-go, -1 gap-close, 0 mixed/unknown
-var bool  compositeBreadthGapVerdictEvaluated = false
+// Volatility leg — accumulate the opening high-low range over RTH bars inside
+// the window, capture at the mark, fold into its own baseline.
+if compositeBreadthShowLineTrust and barstate.isconfirmed and compositeBreadthInRthFull and
+     not compositeBreadthOpenRangeCaptured and compositeBreadthBarsSinceSessionOpen < compositeBreadthOpenRangeWindowBars
+    compositeBreadthOpenRangeHigh := na(compositeBreadthOpenRangeHigh) ? high : math.max(compositeBreadthOpenRangeHigh, high)
+    compositeBreadthOpenRangeLow  := na(compositeBreadthOpenRangeLow)  ? low  : math.min(compositeBreadthOpenRangeLow, low)
+if compositeBreadthShowLineTrust and not compositeBreadthOpenRangeCaptured and barstate.isconfirmed and
+     compositeBreadthBarsSinceSessionOpen >= compositeBreadthOpenRangeWindowBars and
+     compositeBreadthBarsSinceSessionOpen <= compositeBreadthOpenRangeWindowBars * 2 and
+     not na(compositeBreadthOpenRangeHigh) and not na(compositeBreadthOpenRangeLow) and
+     compositeBreadthOpenRangeHigh > compositeBreadthOpenRangeLow
+    compositeBreadthOpenRangeCaptured := true
+    float compositeBreadthOpenRangeSample = compositeBreadthOpenRangeHigh - compositeBreadthOpenRangeLow
+    if not na(compositeBreadthOpenRangeMean) and compositeBreadthOpenRangeMean > 0.0
+        compositeBreadthOpenRangeRatio := compositeBreadthOpenRangeSample / compositeBreadthOpenRangeMean
+    compositeBreadthOpenRangeMean := f_compositeBreadthEwmaStep(previous = compositeBreadthOpenRangeMean, sample = compositeBreadthOpenRangeSample, length = CBI_OPEN_VOL_MEAN_DAYS)
 
-// Compute the gap read whenever the Conviction Verdict Tag is on — it is the
-// only consumer of the gap verdict (gap is zero-cost: chart price + the
-// already-computed confidences). No standalone gap layer / gap alerts remain;
-// the verdict feeds only the once-per-session conviction tag.
-if compositeBreadthShowConviction
-    float compositeBreadthGapSmallFrac = compositeBreadthGapSmallPct / 100.0
-    float compositeBreadthGapLargeFrac = compositeBreadthGapLargePct / 100.0
-    if compositeBreadthSessionJustOpened
-        // Fold the COMPLETED session's price extremes into the prior-day
-        // reference BEFORE resetting them — the same classify-against-prior-
-        // then-reset boundary pattern as every baseline in this file.
-        if not na(compositeBreadthGapCurClose) and not na(compositeBreadthGapCurHigh) and not na(compositeBreadthGapCurLow)
-            compositeBreadthGapPriorClose := compositeBreadthGapCurClose
-            compositeBreadthGapPriorHigh  := compositeBreadthGapCurHigh
-            compositeBreadthGapPriorLow   := compositeBreadthGapCurLow
-        // Today's RTH open is this bar's open (the session-open edge is the
-        // 09:30 bar). Reset the verdict/open-print state for the new session.
-        compositeBreadthGapTodayOpen       := open
-        compositeBreadthGapValue           := na
-        compositeBreadthGapPctOfRange      := na
-        compositeBreadthGapDir             := 0
-        compositeBreadthGapSizeClass       := 0
-        compositeBreadthGapOpenLoc         := 0
-        compositeBreadthGapKnown           := false
-        compositeBreadthGapVoldOpenPrint   := na
-        compositeBreadthGapAddOpenPrint    := na
-        compositeBreadthGapVerdict         := 0
-        compositeBreadthGapVerdictEvaluated := false
-        // Classify the gap against the prior day's range (needs a prior day).
-        if not na(compositeBreadthGapPriorClose) and not na(compositeBreadthGapPriorHigh) and not na(compositeBreadthGapPriorLow)
-            float compositeBreadthGapPriorRange = compositeBreadthGapPriorHigh - compositeBreadthGapPriorLow
-            if compositeBreadthGapPriorRange > 0.0 and not na(compositeBreadthGapTodayOpen)
-                compositeBreadthGapValue      := compositeBreadthGapTodayOpen - compositeBreadthGapPriorClose
-                compositeBreadthGapPctOfRange := math.abs(number = compositeBreadthGapValue) / compositeBreadthGapPriorRange
-                compositeBreadthGapDir        := compositeBreadthGapValue > 0.0 ? 1 : compositeBreadthGapValue < 0.0 ? -1 : 0
-                compositeBreadthGapSizeClass  := compositeBreadthGapPctOfRange <= compositeBreadthGapSmallFrac ? 1 :
-                     compositeBreadthGapPctOfRange >= compositeBreadthGapLargeFrac ? 3 : 2
-                compositeBreadthGapOpenLoc    := compositeBreadthGapTodayOpen > compositeBreadthGapPriorHigh ? 1 :
-                     compositeBreadthGapTodayOpen < compositeBreadthGapPriorLow ? -1 : 0
-                compositeBreadthGapKnown      := compositeBreadthGapDir != 0
-        // Start today's price trackers empty — filled on the confirmed RTH
-        // bars below (this bar included once it confirms).
-        compositeBreadthGapCurClose := na
-        compositeBreadthGapCurHigh  := na
-        compositeBreadthGapCurLow   := na
-
-    // Accumulate today's RTH price extremes + running close. RTH-gated so an
-    // extended-hours chart never folds an overnight print into the range; on
-    // an RTH-only chart every bar qualifies. The last RTH close of the day
-    // becomes tomorrow's prior close at the fold.
-    if barstate.isconfirmed and compositeBreadthInRthFull and not na(close)
-        compositeBreadthGapCurClose := close
-        compositeBreadthGapCurHigh  := na(compositeBreadthGapCurHigh) ? high : math.max(compositeBreadthGapCurHigh, high)
-        compositeBreadthGapCurLow   := na(compositeBreadthGapCurLow)  ? low  : math.min(compositeBreadthGapCurLow, low)
-
-    // Capture the OPENING prints of the breadth confidences — the gap-loaded
-    // first read each is measured against (delta-from-open). First valid
-    // confirmed bar of the session wins; reset to na at the fold above.
-    if barstate.isconfirmed
-        if na(compositeBreadthGapVoldOpenPrint) and not na(compositeBreadthVoldConfidence)
-            compositeBreadthGapVoldOpenPrint := compositeBreadthVoldConfidence
-        if na(compositeBreadthGapAddOpenPrint) and not na(compositeBreadthAddConfidence)
-            compositeBreadthGapAddOpenPrint := compositeBreadthAddConfidence
-
-    // Verdict — one-shot at the read-window mark (skipped if the feeds were
-    // dark past twice the window, same poison guard as the opening-volume
-    // capture). Both legs read the CHANGE since their opening print, so the
-    // gap echo in ADD's level is subtracted out. Barry's rule: both confirm =
-    // Gap and Go, both oppose = Gap Close, one each = mixed (no verdict).
-    if not compositeBreadthGapVerdictEvaluated and compositeBreadthGapKnown and barstate.isconfirmed and
-         compositeBreadthGapDir != 0 and compositeBreadthBarsSinceSessionOpen >= compositeBreadthGapReadBars and
-         compositeBreadthBarsSinceSessionOpen <= compositeBreadthGapReadBars * 2 and
-         not na(compositeBreadthGapVoldOpenPrint) and not na(compositeBreadthGapAddOpenPrint) and
-         not na(compositeBreadthVoldConfidence) and not na(compositeBreadthAddConfidence)
-        float compositeBreadthGapVoldDelta = compositeBreadthVoldConfidence - compositeBreadthGapVoldOpenPrint
-        float compositeBreadthGapAddDelta  = compositeBreadthAddConfidence  - compositeBreadthGapAddOpenPrint
-        int compositeBreadthGapVoldDeltaDir = compositeBreadthGapVoldDelta > 0.0 ? 1 : compositeBreadthGapVoldDelta < 0.0 ? -1 : 0
-        int compositeBreadthGapAddDeltaDir  = compositeBreadthGapAddDelta  > 0.0 ? 1 : compositeBreadthGapAddDelta  < 0.0 ? -1 : 0
-        bool compositeBreadthGapBothConfirm = compositeBreadthGapVoldDeltaDir == compositeBreadthGapDir and compositeBreadthGapAddDeltaDir == compositeBreadthGapDir
-        bool compositeBreadthGapBothOppose  = compositeBreadthGapVoldDeltaDir == -compositeBreadthGapDir and compositeBreadthGapAddDeltaDir == -compositeBreadthGapDir
-        compositeBreadthGapVerdict          := compositeBreadthGapBothConfirm ? 1 : compositeBreadthGapBothOppose ? -1 : 0
-        compositeBreadthGapVerdictEvaluated := true
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🧭 CONVICTION VERDICT (open-quality snapshot)
-// The independent open-context — opening-volume regime + gap character —
-// collapsed into ONE "trust the open vs fade it" verdict, snapshotted ONCE per
-// session the moment the open resolves. Regime (±1 expansion/light) is the
-// later of the two reads (30-min mark); the gap verdict (±1 go/close) is in by
-// the ~15-min mark. This is deliberately NOT a per-bar series: conviction is a
-// slow, session-level, near-binary call, so it is captured once and rendered
-// as a single tag (see PLOTS), never folded into the per-bar line opacity.
-//
-// Score = regimeWeight·regime + gapWeight·gap (each ±1), clamped to the larger
-// weight's budget — no summed double-count, and when the two disagree the
-// larger weight decides the sign. Sign → TRUST (+) / FADE (−) / MIXED (0). The
-// snapshot also stores the raw regime + gap so the tag can name the drivers.
-// ═════════════════════════════════════════════════════════════════════════════
-var int   compositeBreadthConvVerdictSign   = 0     // +1 trust, -1 fade, 0 mixed/neutral
-var int   compositeBreadthConvVerdictRegime = 0     // regime snapshot at resolve (±1/0)
-var int   compositeBreadthConvVerdictGap    = 0     // gap-verdict snapshot at resolve (±1/0)
-var int   compositeBreadthConvVerdictGapSize = 0    // gap size class snapshot (1 small/2 med/3 large; 0 none)
-var bool  compositeBreadthConvVerdictReady  = false // resolved & tagged this session?
-
-if compositeBreadthShowConviction and compositeBreadthSessionJustOpened
-    compositeBreadthConvVerdictSign    := 0
-    compositeBreadthConvVerdictRegime  := 0
-    compositeBreadthConvVerdictGap     := 0
-    compositeBreadthConvVerdictGapSize := 0
-    compositeBreadthConvVerdictReady   := false
-
-// Resolve once regime is settled — either classified, or its capture window has
-// fully elapsed (feeds dark → abandoned). Require at least one of regime/gap to
-// have produced a read, else there is no verdict to show (no empty tag).
-bool compositeBreadthConvRegimeSettled = compositeBreadthVolRegimeKnown or compositeBreadthBarsSinceSessionOpen > compositeBreadthOpenVolWindowBars * 2
-bool compositeBreadthConvHaveAnyRead   = compositeBreadthVolRegimeKnown or compositeBreadthGapVerdictEvaluated
-if compositeBreadthShowConviction and not compositeBreadthConvVerdictReady and barstate.isconfirmed and
-     compositeBreadthConvRegimeSettled and compositeBreadthConvHaveAnyRead
-    float compositeBreadthConvRegimePart = compositeBreadthVolRegimeKnown ? (compositeBreadthConvRegimeWeight / 100.0) * compositeBreadthVolRegime : 0.0
-    float compositeBreadthConvGapPart    = compositeBreadthGapVerdictEvaluated ? (compositeBreadthConvGapWeight / 100.0) * compositeBreadthGapVerdict : 0.0
-    float compositeBreadthConvBudget     = math.max(compositeBreadthConvRegimeWeight, compositeBreadthConvGapWeight) / 100.0
-    float compositeBreadthConvScore      = math.max(-compositeBreadthConvBudget, math.min(compositeBreadthConvBudget, compositeBreadthConvRegimePart + compositeBreadthConvGapPart))
-    compositeBreadthConvVerdictSign    := compositeBreadthConvScore > 0.0 ? 1 : compositeBreadthConvScore < 0.0 ? -1 : 0
-    compositeBreadthConvVerdictRegime  := compositeBreadthVolRegimeKnown ? compositeBreadthVolRegime : 0
-    compositeBreadthConvVerdictGap     := compositeBreadthGapVerdictEvaluated ? compositeBreadthGapVerdict : 0
-    compositeBreadthConvVerdictGapSize := compositeBreadthGapVerdictEvaluated ? compositeBreadthGapSizeClass : 0
-    compositeBreadthConvVerdictReady   := true
+// Resolve — one shot per session once both capture windows have settled
+// (captured, or abandoned past twice the window). Suppression wins: the
+// session stays a forced neutral, not a classification.
+bool compositeBreadthOpenVolSettled   = compositeBreadthOpenVolCaptured   or compositeBreadthBarsSinceSessionOpen > compositeBreadthOpenVolWindowBars * 2
+bool compositeBreadthOpenRangeSettled = compositeBreadthOpenRangeCaptured or compositeBreadthBarsSinceSessionOpen > compositeBreadthOpenRangeWindowBars * 2
+if compositeBreadthShowLineTrust and not compositeBreadthTrustRegimeResolved and barstate.isconfirmed and
+     compositeBreadthOpenVolSettled and compositeBreadthOpenRangeSettled
+    compositeBreadthTrustRegimeResolved := true
+    if not compositeBreadthNewsDaySuppression and not na(compositeBreadthOpenVolRatio)
+        bool compositeBreadthTrustExpansion = compositeBreadthOpenVolRatio >= compositeBreadthOpenVolExpansionRatio or
+             (not na(compositeBreadthOpenRangeRatio) and compositeBreadthOpenRangeRatio >= compositeBreadthOpenVolExpansionRatio)
+        bool compositeBreadthTrustQuiet = compositeBreadthOpenVolRatio <= compositeBreadthOpenVolLightRatio and
+             (na(compositeBreadthOpenRangeRatio) or compositeBreadthOpenRangeRatio <= compositeBreadthOpenVolLightRatio)
+        compositeBreadthTrustRegime      := compositeBreadthTrustExpansion ? 1 : compositeBreadthTrustQuiet ? -1 : 0
+        compositeBreadthTrustRegimeKnown := true
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 COLORS
 // ═════════════════════════════════════════════════════════════════════════════
-// Two fully independent layers, applied in order:
-//   1. BASE COLOR — Consensus Strength is the ONLY thing that colors the line.
-//      ON → the directional red↔neutral↔cyan gradient, faded by internal
-//      disagreement ((1 − consensus) × Consensus Dim Strength). OFF → the plain
-//      solid Line Color. Nothing else feeds this.
-//   2. TIME-OF-DAY OVERLAY — an agnostic dim applied ON TOP of whatever base
-//      color resulted, solid or gradient. It ADDS transparency (color.t + dim,
-//      capped 95) during the lunch/MOC windows and never touches the consensus
-//      calc. Purely visual; the composite value is never modified.
-// Conviction is NOT here — it renders as its own once-per-session tag.
+// Two hues, one dial: hue answers only "which SIDE OF ZERO" (Bullish Color
+// above, Bearish Color below), opacity answers "how much to believe the
+// current move". Four layers, applied in order, all opacity-only — the
+// composite value is never modified:
+//   1. ZERO-CUT COLOR (2026-08-01, third iteration — slope hue chopped per
+//      segment, stance hue still read wrong): the composite is a
+//      zero-anchored stance line, so its SIGN is the trend. Above zero the
+//      whole line is the Bullish Color, below zero the Bearish Color — the
+//      standard internals-pane read — and the hue changes only where the
+//      line actually crosses zero. Slope and stance never touch the hue;
+//      they drive impulse-vs-retrace opacity (layer 2). The picker owns hue
+//      and the vivid-tier base opacity.
+//   2. CONSENSUS DIM (impulse vs retrace) — always on, symmetric in both
+//      trends: when the slope moves WITH the trend (the impulse), the
+//      consensus tiers apply — components aligned behind the move = vivid,
+//      split = pale. When the slope moves AGAINST the trend (the retrace),
+//      the move has no internal backing by construction and gets the max dim
+//      (ghost) — the inverse read, so in a downtrend the impulse is the
+//      predominant vivid red and the retrace is a red whisper, and a bright
+//      line ONLY ever means the trend's own move with the internals behind
+//      it. (1 − move consensus) × Consensus Dim Strength is ADDED to the
+//      trend color's transparency.
+//   3. REGIME CEILING + TRUST BOOST (Line Trust) — the session regime decides
+//      how loud the line may speak: QUIET adds the Quiet Ceiling Dim to the
+//      whole line, NEUTRAL / unknown / suppressed adds the Neutral Ceiling
+//      Dim, EXPANSION adds nothing and additionally REMOVES the Trust
+//      Vividness Boost when the move carries full agreement behind an
+//      established stance — the "trusted rising / confirmed weakness"
+//      max-vivid step, the only state brighter than the picker's base. During
+//      the ~30-min read window (pre-resolve) the line renders un-capped.
+//   4. TIME-OF-DAY OVERLAY — an agnostic dim folded into the transparency
+//      target during the lunch/MOC windows (its own toggle, off) and the
+//      10:00–11:00 morning-reversion window (its own toggle, ON — the
+//      135-session log analysis' most consistent finding: the 10:xx hour is
+//      where following the stance loses across regimes). Capped 95; never
+//      touches the consensus calc. Purely visual.
+//   5. RENDER SMOOTHING — a short EMA on the final rendered transparency
+//      only: every driver above is a step function, so the raw target jumps
+//      between states; the render glides between them instead while the
+//      discrete state keeps feeding the markers, table, and data window.
 bool compositeBreadthInLowInfoWindow = compositeBreadthInLunchWindow or compositeBreadthInMocWindow
-// 1. Base color.
-color compositeBreadthLineColor = compositeBreadthLineSolidColor
-if compositeBreadthShowConsensusStrength
-    float compositeBreadthConsensusExtraTransp = (1.0 - compositeBreadthConsensus) * compositeBreadthConsensusDimStrength
-    compositeBreadthLineColor := f_compositeBreadthProgressiveColor(value = compositeBreadthDisplayLine, scale = CBI_OPACITY_ANCHOR, minTransp = CBI_SIGNAL_MIN_TRANSP, extraTransp = compositeBreadthConsensusExtraTransp)
-// 2. Time-of-day overlay — agnostic, adds transparency to the base color.
-if compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow
-    compositeBreadthLineColor := color.new(color = compositeBreadthLineColor, transp = math.min(95.0, color.t(color = compositeBreadthLineColor) + compositeBreadthTimeDimStrength))
-
+// 1. Zero-cut color — hue is the line's own side of zero (na bars read
+// bullish; the plot is blank there anyway). The slope state below feeds only
+// the impulse/retrace split, the marker triangle direction, and the table
+// arrow — never the hue.
+var bool compositeBreadthLineRising = true
+compositeBreadthLineRising := compositeBreadthDisplayLine > compositeBreadthDisplayLine[1] ? true :
+     compositeBreadthDisplayLine < compositeBreadthDisplayLine[1] ? false : compositeBreadthLineRising
+bool compositeBreadthAboveZero = nz(source = compositeBreadthDisplayLine, replacement = 0.0) >= 0.0
+color compositeBreadthLineBaseColor = compositeBreadthAboveZero ? compositeBreadthLineUpColor : compositeBreadthLineDownColor
+// 2. Consensus dim, read against the move (impulse vs retrace). The stance
+// reference and the component votes keep all their hysteresis (deadband,
+// hold-through-band, session reseed) — this only decides which consensus
+// applies to the visible segment: slope WITH the trend (impulse) → the
+// engine's tiers; slope AGAINST the trend (retrace) → the floor tier (0.1,
+// same as an outvoted split), because a move the internals aren't behind is
+// a countertrend drift whichever trend it's inside. No established stance
+// (vote 0) → the engine already reports 1.0 and the held trend color stands.
+bool compositeBreadthSlopeWithStance = compositeBreadthDirectionalVoteSign == 0 or
+     (compositeBreadthLineRising ? compositeBreadthDirectionalVoteSign > 0 : compositeBreadthDirectionalVoteSign < 0)
+float compositeBreadthMoveConsensus = compositeBreadthSlopeWithStance ? compositeBreadthConsensus : 0.1
+float compositeBreadthConsensusExtraTransp = (1.0 - compositeBreadthMoveConsensus) * compositeBreadthConsensusDimStrength
+// 3. Regime ceiling + trust boost. Expansion = no ceiling; quiet = quiet dim;
+// neutral, unknown, or suppressed = neutral dim; pre-resolve = un-capped. The
+// boost fires only on the full stack: expansion regime (which suppression
+// blocks at the resolve) + full agreement + established stance + slope with it.
+float compositeBreadthTrustCeilingDim = not compositeBreadthShowLineTrust or not compositeBreadthTrustRegimeResolved ? 0.0 :
+     compositeBreadthTrustRegimeKnown and compositeBreadthTrustRegime == 1 ? 0.0 :
+     compositeBreadthTrustRegimeKnown and compositeBreadthTrustRegime == -1 ? compositeBreadthQuietCeilingDim :
+     compositeBreadthNeutralCeilingDim
+bool compositeBreadthTrustBoostActive = compositeBreadthShowLineTrust and compositeBreadthTrustRegimeKnown and
+     compositeBreadthTrustRegime == 1 and compositeBreadthSlopeWithStance and
+     compositeBreadthDirectionalVoteSign != 0 and compositeBreadthMoveConsensus >= 0.999
+float compositeBreadthLineTranspTarget = math.max(0.0, math.min(95.0,
+     color.t(color = compositeBreadthLineBaseColor) + compositeBreadthConsensusExtraTransp +
+     compositeBreadthTrustCeilingDim - (compositeBreadthTrustBoostActive ? compositeBreadthTrustBoost : 0)))
+// 4. Time-of-day overlay — folded into the target BEFORE the render smoothing
+// so the window edges glide like every other transition. Lunch/MOC and the
+// morning-reversion window share one strength; they never overlap, so a
+// single add covers whichever is active.
+if (compositeBreadthShowTimeOfDayDim and compositeBreadthInLowInfoWindow) or
+     (compositeBreadthShowMorningDim and compositeBreadthInMorningWindow)
+    compositeBreadthLineTranspTarget := math.min(95.0, compositeBreadthLineTranspTarget + compositeBreadthTimeDimStrength)
+// 5. Render smoothing — every driver above is a STEP function (agreement
+// tiers, impulse/retrace flips, boost on/off, ceiling engagement, window
+// edges), so the raw target jumps up to ~58 transparency points bar-to-bar
+// and the line reads choppy. A short EMA on the rendered transparency turns
+// each step into a few-bar glide. RENDER-ONLY: the discrete state keeps
+// driving the markers, the Trust Readout table, and the trigger logic —
+// only the pixels ease between states. Session-reseeded and na-blanked like
+// the display line it paints.
+var float compositeBreadthLineTransp = na
+if compositeBreadthSessionJustOpened
+    compositeBreadthLineTransp := na
+compositeBreadthLineTransp := na(compositeBreadthDisplayLine) ? na :
+     f_compositeBreadthEwmaStep(previous = compositeBreadthLineTransp, sample = compositeBreadthLineTranspTarget, length = CBI_OPACITY_SMOOTH_LENGTH)
+color compositeBreadthLineColor = color.new(color = compositeBreadthLineBaseColor, transp = nz(source = compositeBreadthLineTransp, replacement = compositeBreadthLineTranspTarget))
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 PLOTS
@@ -1380,62 +1423,154 @@ if compositeBreadthShowSessionDivider and (compositeBreadthSessionJustOpened or 
          (time + time[1]) / 2
     line.new(x1 = compositeBreadthDividerTime, y1 = -1.0, x2 = compositeBreadthDividerTime, y2 = 1.0, xloc = xloc.bar_time, extend = extend.both, color = compositeBreadthSessionDividerColor, style = compositeBreadthSessionDividerLineStyle, width = compositeBreadthSessionDividerWidth)
 
-// ─── Conviction verdict tag ─────────────────────────────────────────────────
-// ONE label per session, minted on the confirmed bar the open-quality verdict
-// resolves (rising edge of ConvVerdictReady — set only on barstate.isconfirmed,
-// so no intrabar mint/delete). Only STRONG directional reads draw: MIXED (score
-// 0 — reads cancel or neither resolved) shows nothing. Anchored on the composite
-// line, a vertical ■ stack is a strength meter (1–4 tall). PLACEMENT keeps it on
-// the ZERO-SIDE of the line so it never runs off the pane:
-//   • line ABOVE zero → tag hangs BELOW the line (label_up).
-//   • line BELOW zero → tag sits ABOVE the line (label_down).
-// ■ is the text-presentation square (honors the color arg; ticker-tape uses the
-// same one). Color by direction (TRUST cyan / FADE red), brightness dim→bright by
-// strength. HOVER = a roomy, emoji-keyed read-out. Strength: 4 = both drivers
-// agree AND a large gap · 3 = both agree · 2 = one driver · 1 = drivers conflict.
-var compositeBreadthConvTagTextSize = switch compositeBreadthConvTagSize
-    "Tiny"   => size.tiny
-    "Normal" => size.normal
-    "Large"  => size.large
-    => size.small
-if compositeBreadthShowConviction and compositeBreadthConvVerdictReady and not compositeBreadthConvVerdictReady[1] and compositeBreadthConvVerdictSign != 0
-    bool compositeBreadthConvTrust = compositeBreadthConvVerdictSign > 0
-    // Strength → 1..4 (MIXED never reaches here).
-    bool compositeBreadthConvConflict = compositeBreadthConvVerdictRegime != 0 and compositeBreadthConvVerdictGap != 0 and compositeBreadthConvVerdictRegime != compositeBreadthConvVerdictGap
-    int compositeBreadthConvAligned = (compositeBreadthConvVerdictRegime == compositeBreadthConvVerdictSign ? 1 : 0) +
-         (compositeBreadthConvVerdictGap == compositeBreadthConvVerdictSign ? 1 : 0)
-    int compositeBreadthConvStrength = compositeBreadthConvConflict ? 1 :
-         compositeBreadthConvAligned == 1 ? 2 :
-         compositeBreadthConvVerdictGapSize == 3 ? 4 : 3
-    // Vertical square stack — N squares joined by newlines (■ = U+25A0, the
-    // text-presentation glyph that honors the label color; emoji ◼ would not).
-    string compositeBreadthConvRating = switch compositeBreadthConvStrength
-        4 => "■\n■\n■\n■"
-        3 => "■\n■\n■"
-        2 => "■\n■"
-        => "■"
-    // Hue by direction, brightness by strength (4 = full, 1 = dim).
-    color compositeBreadthConvTagHue = compositeBreadthConvTrust ? NORD8 : NORD11
-    color compositeBreadthConvTagTextColor = color.new(color = compositeBreadthConvTagHue, transp = (4 - compositeBreadthConvStrength) * 15)
-    // Placement by the LINE's side of zero (not the verdict): line above zero →
-    // tag hangs below it (label_up); line below zero → tag sits above it
-    // (label_down). Keeps the tag between the line and zero, always on-pane.
-    float compositeBreadthConvAnchor = na(compositeBreadthDisplayLine) ? 0.0 : compositeBreadthDisplayLine
-    string compositeBreadthConvTagStyle = compositeBreadthConvAnchor >= 0.0 ? label.style_label_up : label.style_label_down
-    // Hover — roomy, emoji-keyed, brief lines with blank rows between items.
-    string compositeBreadthConvVerdictLabel = compositeBreadthConvTrust ? "✅ TRUST" : "⚠️ FADE"
-    string compositeBreadthConvVolWord = compositeBreadthConvVerdictRegime > 0 ? "Heavy" : compositeBreadthConvVerdictRegime < 0 ? "Light" : (na(compositeBreadthOpenVolRatio) ? "n/a" : "Neutral")
-    string compositeBreadthConvRatioShort = na(compositeBreadthOpenVolRatio) ? "" : " " + str.tostring(value = compositeBreadthOpenVolRatio, format = "0.00") + "×"
-    string compositeBreadthConvGapShort = compositeBreadthConvVerdictGapSize == 0 ? "none" : (compositeBreadthConvVerdictGap > 0 ? "Gap-and-go" : compositeBreadthConvVerdictGap < 0 ? "Gap-close" : "mixed")
-    string compositeBreadthConvGapSizeShort = compositeBreadthConvVerdictGapSize == 3 ? ", large" : compositeBreadthConvVerdictGapSize == 2 ? ", medium" : compositeBreadthConvVerdictGapSize == 1 ? ", small" : ""
-    string compositeBreadthConvImpact = compositeBreadthConvTrust ?
-         "Trust the early move — it's backed by real conditions, not overnight-gap echo. Weight the composite normally, or lean into it." :
-         "Fade the early move — the early one-sidedness is likely overnight-gap echo. Discount it and watch for mean-reversion / gap-fill."
-    string compositeBreadthConvTooltip = "🧭 DIRECTION CONVICTION\n\n" +
-         compositeBreadthConvVerdictLabel + "   ·   " + str.tostring(value = compositeBreadthConvStrength) + "/4\n\n" +
-         "Does the open BACK the composite's early direction? Read from independent context its four components don't carry.\n\n" +
-         "————————————————\n\n" +
-         "📊 Volume:   " + compositeBreadthConvVolWord + compositeBreadthConvRatioShort + "\n\n" +
-         "🌅 Gap:   " + compositeBreadthConvGapShort + compositeBreadthConvGapSizeShort + "\n\n" +
-         "💡 Impact:   " + compositeBreadthConvImpact
-    label.new(x = bar_index, y = compositeBreadthConvAnchor, text = compositeBreadthConvRating, tooltip = compositeBreadthConvTooltip, xloc = xloc.bar_index, yloc = yloc.price, style = compositeBreadthConvTagStyle, color = color.new(color = NORD0, transp = 100), textcolor = compositeBreadthConvTagTextColor, size = compositeBreadthConvTagTextSize)
+// ─── ▲ Unsupported-move markers (Line Trust) ─────────────────────────────────
+// A vivid-grade push (full agreement behind the slope, stance established)
+// during a QUIET regime is a move without tape participation — quiet opens
+// carry ≈ zero follow-through signal, so the push gets flagged instead of
+// trusted. One marker per push episode: fires on the first confirmed bar the
+// condition establishes, and re-arms only after the condition has stayed OFF
+// for CBI_MARKER_REARM_BARS confirmed bars — a one-bar slope wiggle inside
+// the same push is not a new episode. Expansion/neutral days draw nothing —
+// silence is agreement. Labels are minted on confirmed bars only (no intrabar
+// mint/delete) and carry the situation numbers in their native hover tooltip.
+var bool compositeBreadthUnsupportedArmed = true
+var int  compositeBreadthUnsupportedOffBars = 0
+if compositeBreadthSessionJustOpened
+    compositeBreadthUnsupportedArmed   := true
+    compositeBreadthUnsupportedOffBars := 0
+bool compositeBreadthUnsupportedNow = compositeBreadthShowLineTrust and compositeBreadthShowUnsupportedMarkers and
+     compositeBreadthTrustRegimeKnown and compositeBreadthTrustRegime == -1 and
+     compositeBreadthSlopeWithStance and compositeBreadthDirectionalVoteSign != 0 and
+     compositeBreadthMoveConsensus >= 0.999 and not na(compositeBreadthDisplayLine)
+if barstate.isconfirmed
+    if compositeBreadthUnsupportedNow and compositeBreadthUnsupportedArmed
+        compositeBreadthUnsupportedArmed   := false
+        compositeBreadthUnsupportedOffBars := 0
+        string compositeBreadthUnsupportedDirWord = compositeBreadthLineRising ? "up" : "down"
+        string compositeBreadthUnsupportedVolText = na(compositeBreadthOpenVolRatio) ? "n/a" :
+             str.tostring(value = compositeBreadthOpenVolRatio, format = "0.00") + "×"
+        string compositeBreadthUnsupportedRangeText = na(compositeBreadthOpenRangeRatio) ? "n/a" :
+             str.tostring(value = compositeBreadthOpenRangeRatio, format = "0.00") + "×"
+        string compositeBreadthUnsupportedTooltip = "▲ UNSUPPORTED MOVE\n\n" +
+             "CBI " + str.tostring(value = compositeBreadthDisplayLine, format = "0.0") + " — vivid-grade " + compositeBreadthUnsupportedDirWord + " push, full agreement of the voting components\n" +
+             "Regime: QUIET — volume " + compositeBreadthUnsupportedVolText + " baseline · open range " + compositeBreadthUnsupportedRangeText + "\n\n" +
+             "Quiet opens carry ≈ zero follow-through signal — a vivid-grade move on a non-participating tape. The line stays capped; don't chase it."
+        label.new(x = bar_index, y = compositeBreadthDisplayLine + CBI_MARKER_OFFSET, text = "", tooltip = compositeBreadthUnsupportedTooltip, xloc = xloc.bar_index, yloc = yloc.price, style = compositeBreadthLineRising ? label.style_triangleup : label.style_triangledown, color = compositeBreadthUnsupportedMarkerColor, size = compositeBreadthUnsupportedMarkerSize)
+    else if not compositeBreadthUnsupportedNow
+        compositeBreadthUnsupportedOffBars += 1
+        if compositeBreadthUnsupportedOffBars >= CBI_MARKER_REARM_BARS
+            compositeBreadthUnsupportedArmed := true
+    else
+        // Condition on while disarmed — still the same push episode.
+        compositeBreadthUnsupportedOffBars := 0
+
+// ─── 🎯 Price Confirmation (Dow-style non-confirmation at session extremes) ──
+// Price is the external validator of the breadth line. Track the session's
+// confirmed price extremes with the composite's value at each; when price
+// prints a NEW extreme at least Min Extreme Separation after the prior one
+// and the composite sits materially below its prior-extreme reading (above,
+// for lows), that is a non-confirmation — price came back to a new extreme
+// and breadth declined to follow. Within-separation new extremes are one
+// advance: the price/bar anchors roll forward and the breadth anchor keeps
+// the push's PEAK (trough) so a grinding move can't dodge the read by
+// refreshing the anchor every bar. Confirmation itself never draws —
+// agreement is the normal state. Confirmed closes only; chart OHLC only.
+var float compositeBreadthPcHiPrice   = na
+var float compositeBreadthPcHiBreadth = na
+var int   compositeBreadthPcHiBar     = na
+var float compositeBreadthPcLoPrice   = na
+var float compositeBreadthPcLoBreadth = na
+var int   compositeBreadthPcLoBar     = na
+if compositeBreadthSessionJustOpened
+    compositeBreadthPcHiPrice   := na
+    compositeBreadthPcHiBreadth := na
+    compositeBreadthPcHiBar     := na
+    compositeBreadthPcLoPrice   := na
+    compositeBreadthPcLoBreadth := na
+    compositeBreadthPcLoBar     := na
+if compositeBreadthShowPriceConfirmation and barstate.isconfirmed and compositeBreadthInRthFull and not na(compositeBreadthDisplayLine)
+    int compositeBreadthPcAgreeing = compositeBreadthVotingCount - compositeBreadthDissentCount
+    string compositeBreadthPcAgreementText = str.tostring(value = compositeBreadthPcAgreeing) + "/" + str.tostring(value = compositeBreadthVotingCount)
+    // Highs: price higher high vs breadth lower high = bearish non-confirmation.
+    if na(compositeBreadthPcHiPrice) or high > compositeBreadthPcHiPrice
+        bool compositeBreadthPcHiSeparated = not na(compositeBreadthPcHiBar) and bar_index - compositeBreadthPcHiBar >= compositeBreadthNonConfSeparationBars
+        if compositeBreadthPcHiSeparated and compositeBreadthDisplayLine < compositeBreadthPcHiBreadth - CBI_NONCONF_MARGIN
+            string compositeBreadthPcHiTooltip = "◆ NON-CONFIRMATION (bearish)\n\n" +
+                 "Price new session high " + str.tostring(value = high, format = format.mintick) + " — breadth lower high\n" +
+                 "CBI " + str.tostring(value = compositeBreadthDisplayLine, format = "0.0") + " vs " + str.tostring(value = compositeBreadthPcHiBreadth, format = "0.0") + " at the prior price high\n" +
+                 "Agreement now: " + compositeBreadthPcAgreementText + "\n\n" +
+                 "Price is not being ratified by breadth at the new extreme (Dow non-confirmation). Confirmed on bar close."
+            label.new(x = bar_index, y = compositeBreadthDisplayLine + CBI_MARKER_OFFSET, text = "", tooltip = compositeBreadthPcHiTooltip, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_diamond, color = compositeBreadthNonConfMarkerColor, size = compositeBreadthNonConfMarkerSize)
+        compositeBreadthPcHiBreadth := compositeBreadthPcHiSeparated or na(compositeBreadthPcHiBreadth) ?
+             compositeBreadthDisplayLine : math.max(compositeBreadthPcHiBreadth, compositeBreadthDisplayLine)
+        compositeBreadthPcHiPrice := high
+        compositeBreadthPcHiBar   := bar_index
+    // Lows: price lower low vs breadth higher low = bullish non-confirmation.
+    if na(compositeBreadthPcLoPrice) or low < compositeBreadthPcLoPrice
+        bool compositeBreadthPcLoSeparated = not na(compositeBreadthPcLoBar) and bar_index - compositeBreadthPcLoBar >= compositeBreadthNonConfSeparationBars
+        if compositeBreadthPcLoSeparated and compositeBreadthDisplayLine > compositeBreadthPcLoBreadth + CBI_NONCONF_MARGIN
+            string compositeBreadthPcLoTooltip = "◆ NON-CONFIRMATION (bullish)\n\n" +
+                 "Price new session low " + str.tostring(value = low, format = format.mintick) + " — breadth higher low\n" +
+                 "CBI " + str.tostring(value = compositeBreadthDisplayLine, format = "0.0") + " vs " + str.tostring(value = compositeBreadthPcLoBreadth, format = "0.0") + " at the prior price low\n" +
+                 "Agreement now: " + compositeBreadthPcAgreementText + "\n\n" +
+                 "Price is not being ratified by breadth at the new extreme (Dow non-confirmation). Confirmed on bar close."
+            label.new(x = bar_index, y = compositeBreadthDisplayLine + CBI_MARKER_OFFSET, text = "", tooltip = compositeBreadthPcLoTooltip, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_diamond, color = compositeBreadthNonConfMarkerColor, size = compositeBreadthNonConfMarkerSize)
+        compositeBreadthPcLoBreadth := compositeBreadthPcLoSeparated or na(compositeBreadthPcLoBreadth) ?
+             compositeBreadthDisplayLine : math.min(compositeBreadthPcLoBreadth, compositeBreadthDisplayLine)
+        compositeBreadthPcLoPrice := low
+        compositeBreadthPcLoBar   := bar_index
+
+// ─── Data Window read-out ─────────────────────────────────────────────────────
+// The per-bar hover numbers, shipped the native way: display.data_window plots
+// never draw on the pane — TradingView's own crosshair shows them for whatever
+// bar the cursor is on, at the cost of a plain plot (nothing measurable).
+plot(series = compositeBreadthVotingCount - compositeBreadthDissentCount, title = "· Agreement (aligned voters)", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthVotingCount, title = "· Voting components", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthMoveConsensus, title = "· Move consensus tier", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthDirectionalVoteSign, title = "· Stance vote (+1/0/−1)", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthShowLineTrust and compositeBreadthTrustRegimeResolved and compositeBreadthTrustRegimeKnown ? compositeBreadthTrustRegime : na, title = "· Regime (+1 exp / 0 / −1 quiet)", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthOpenVolRatio, title = "· Opening volume ×baseline", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthOpenRangeRatio, title = "· Opening range ×baseline", color = NORD4, display = display.data_window)
+plot(series = compositeBreadthLineTransp, title = "· Line transparency (rendered)", color = NORD4, display = display.data_window)
+
+// ─── Trust Readout table ──────────────────────────────────────────────────────
+// The live "now" corner readout: STATE / CBI / AGREEMENT / STANCE / REGIME.
+// Cells are rewritten on EVERY islast tick — table mutations on uncommitted
+// realtime ticks roll back like all drawings, so gating the render on "data
+// changed" flashes stale committed snapshots (see the 2026-07-24 revert).
+// A handful of cells, negligible cost; OFF creates nothing.
+var table compositeBreadthTrustTable = compositeBreadthShowLineTrust and compositeBreadthShowTrustTable ?
+     table.new(position = position.top_right, columns = 2, rows = 5, bgcolor = color.new(color = NORD0, transp = 15), frame_color = NORD1, frame_width = 1, border_color = NORD1, border_width = 1) : na
+if compositeBreadthShowLineTrust and compositeBreadthShowTrustTable and barstate.islast
+    string compositeBreadthTrustStateText = na(compositeBreadthDisplayLine) ? "—" :
+         not compositeBreadthSlopeWithStance ? "GHOST (retrace)" :
+         compositeBreadthTrustBoostActive ? (compositeBreadthAboveZero ? "TRUSTED" : "CONFIRMED WEAKNESS") :
+         compositeBreadthMoveConsensus >= 0.999 ? "VIVID" :
+         compositeBreadthMoveConsensus >= 0.7 ? "DIMMED" : "PALE"
+    color compositeBreadthTrustStateColor = color.new(color = compositeBreadthAboveZero ? compositeBreadthLineUpColor : compositeBreadthLineDownColor, transp = 0)
+    string compositeBreadthTrustCbiText = na(compositeBreadthDisplayLine) ? "—" :
+         str.tostring(value = compositeBreadthDisplayLine, format = "0.0") + (compositeBreadthLineRising ? " ↑" : " ↓")
+    string compositeBreadthTrustDissenters = (compositeBreadthVoldDissents ? " VOLD" : "") + (compositeBreadthAddDissents ? " ADD" : "") +
+         (compositeBreadthPctVwapDissents ? " %VWAP" : "") + (compositeBreadthCumTickDissents ? " CUMTICK" : "")
+    string compositeBreadthTrustAgreementText = not compositeBreadthSlopeWithStance ? "against stance" :
+         compositeBreadthVotingCount == 0 ? "no voters" :
+         str.tostring(value = compositeBreadthVotingCount - compositeBreadthDissentCount) + "/" + str.tostring(value = compositeBreadthVotingCount) +
+         (compositeBreadthDissentCount > 0 ? " · out:" + compositeBreadthTrustDissenters : "")
+    string compositeBreadthTrustStanceText = compositeBreadthDirectionalVoteSign > 0 ? "bullish +1" :
+         compositeBreadthDirectionalVoteSign < 0 ? "bearish −1" : "none"
+    string compositeBreadthTrustRatiosText = (na(compositeBreadthOpenVolRatio) ? "n/a" : str.tostring(value = compositeBreadthOpenVolRatio, format = "0.00") + "×") +
+         " / " + (na(compositeBreadthOpenRangeRatio) ? "n/a" : str.tostring(value = compositeBreadthOpenRangeRatio, format = "0.00") + "×")
+    string compositeBreadthTrustRegimeText = compositeBreadthNewsDaySuppression ? "SUPPRESSED" :
+         not compositeBreadthTrustRegimeResolved ? "reading…" :
+         not compositeBreadthTrustRegimeKnown ? "UNKNOWN" :
+         (compositeBreadthTrustRegime == 1 ? "EXPANSION " : compositeBreadthTrustRegime == -1 ? "QUIET " : "NEUTRAL ") + compositeBreadthTrustRatiosText
+    table.cell(table_id = compositeBreadthTrustTable, column = 0, row = 0, text = "STATE",     text_color = NORD3, text_halign = text.align_left,  text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 0, row = 1, text = "CBI",       text_color = NORD3, text_halign = text.align_left,  text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 0, row = 2, text = "AGREEMENT", text_color = NORD3, text_halign = text.align_left,  text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 0, row = 3, text = "STANCE",    text_color = NORD3, text_halign = text.align_left,  text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 0, row = 4, text = "REGIME",    text_color = NORD3, text_halign = text.align_left,  text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 1, row = 0, text = compositeBreadthTrustStateText,     text_color = compositeBreadthTrustStateColor, text_halign = text.align_right, text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 1, row = 1, text = compositeBreadthTrustCbiText,       text_color = NORD4, text_halign = text.align_right, text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 1, row = 2, text = compositeBreadthTrustAgreementText, text_color = NORD4, text_halign = text.align_right, text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 1, row = 3, text = compositeBreadthTrustStanceText,    text_color = NORD4, text_halign = text.align_right, text_size = size.small)
+    table.cell(table_id = compositeBreadthTrustTable, column = 1, row = 4, text = compositeBreadthTrustRegimeText,    text_color = NORD4, text_halign = text.align_right, text_size = size.small)
