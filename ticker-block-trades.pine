@@ -1,0 +1,140 @@
+// © Henry — Top Dog Trading / Barry Burns "Hunting Down the Pros"
+//@version=6
+// ═════════════════════════════════════════════════════════════════════════════
+// 🐋 BLOCK TRADES PANEL — companion to 📰 Ticker Tape
+// A dedicated sub-pane histogram of block-trade activity, so it gets its OWN
+// independent scale instead of being cramped into the price axis. Height = how
+// many individual prints ≥ the size threshold hit each bar (Barry's "block
+// trades" — single large orders, NOT cumulative bar volume). Color = the bar's
+// order-flow lean, using the same block palette as Ticker Tape.
+//
+// WHY A SEPARATE INDICATOR: Pine's `overlay` is fixed at compile time — a single
+// script can't toggle between the price chart and a pane at runtime. So the
+// "panel mode" is this: add or remove this indicator.
+//
+// SHARED ENGINE: the block classifier + condition codes are the source-of-truth
+// copy in ticker-tape.pine. The regions between the `<<SYNC …>>` markers below are
+// GENERATED — do not hand-edit them here. Improve the logic in ticker-tape.pine,
+// then run scripts/sync-block-engine.sh to mirror it into this file. That keeps
+// the panel's counts identical to the tape's squares, with no drift.
+//
+// LIVE-ONLY, same as Ticker Tape and Barry's own tool: 1T tick data only exists
+// inside the intrabar window and fills on realtime/recent bars — the panel lives
+// on recent flow, it can't be back-tested over deep history.
+// ═════════════════════════════════════════════════════════════════════════════
+indicator(title = "Ticker Tape — Block Trades", shorttitle = "🐋 Tape Blocks", overlay = false, max_bars_back = 0)
+
+// ── Nord palette (mirrors ticker-tape.pine) ──
+const color NORD3  = #4C566A
+const color NORD4  = #D8DEE9
+const color NORD8  = #88C0D0
+const color NORD11 = #BF616A
+
+// ── Tick-classification condition codes ──
+// <<SYNC block-cond BEGIN>> — generated from ticker-tape.pine; run scripts/sync-block-engine.sh
+const int COND_MID          = 0
+const int COND_AT_ASK       = 1
+const int COND_ABOVE_ASK    = 2
+const int COND_ABOVE_PRICE  = 3
+const int COND_AT_BID       = 4
+const int COND_BELOW_BID    = 5
+const int COND_BELOW_PRICE  = 6
+// <<SYNC block-cond END>>
+
+// ── Plot type ──
+enum PlotKind
+    columns   = "Columns"
+    histogram = "Histogram"
+    area      = "Area"
+    line      = "Line"
+
+const string GROUP_DATA  = "🐋 Block Trades"
+const string GROUP_STYLE = "🎨 Style"
+
+// Barry's sizing rule: tune per market until block spikes land at meaningful spots
+// (cycle highs/lows, breakouts). His numbers — futures: ES/YM 20+, E-minis 100 /
+// Nasdaq 50. Stocks: 10,000-share bare minimum for ANY stock. Default honors the
+// stock floor for QQQ, matching Ticker Tape's default.
+blockSizeThreshold = input.int(defval = 10000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size count as a block on the bar. Barry's bare minimum for any stock is 10,000 shares (futures: ES/YM 20+, E-minis 100). Keep this in sync with Ticker Tape's own Block Size Threshold so the panel and the squares agree. Tune by trial and error until spikes land at cycle highs/lows and breakouts.", group = GROUP_DATA)
+intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from — the panel's window. TradingView caps served intrabar history anyway; kept low on purpose. Match Ticker Tape's setting for identical coverage.", group = GROUP_DATA)
+fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so bars inside the window below are faded — same rule as Ticker Tape's squares.", inline = "close_fade", group = GROUP_DATA)
+closeFadeSession = input.session(defval = "1530-1600", title = "", tooltip = "Session window (America/New_York) treated as into-the-close.", inline = "close_fade", group = GROUP_DATA)
+
+plotKind = input.enum(defval = PlotKind.columns, title = "Plot Type", tooltip = "How to draw the per-bar block count. Columns and Histogram give the classic bottom-up bars (Barry's look); Area fills under the count; Line traces it. All are colored per bar by the order-flow lean.", group = GROUP_STYLE)
+
+// Colors ARE the block palette — no separate histogram colors. Net buy-side lean
+// uses the Aggressive Buy hue, sell-side the Aggressive Sell hue, no-lean the Mid
+// hue, matching ticker-tape.pine's block squares.
+colBuy     = input.color(defval = color.new(color = NORD8,  transp = 20), title = "Buy-Side",  tooltip = "Bar color when the bar's blocks lean buy-side (at/above ask outweigh at/below bid). Mirrors Ticker Tape's Aggressive Buy.",  inline = "cols", group = GROUP_STYLE)
+colSell    = input.color(defval = color.new(color = NORD11, transp = 20), title = "Sell-Side", tooltip = "Bar color when the bar's blocks lean sell-side (at/below bid outweigh at/above ask). Mirrors Ticker Tape's Aggressive Sell.", inline = "cols", group = GROUP_STYLE)
+colNeutral = input.color(defval = color.new(color = NORD4,  transp = 60), title = "Neutral",   tooltip = "Bar color when the bar's blocks have no net lean (mid prints, or buy and sell balance). Mirrors Ticker Tape's Mid / Neutral.", inline = "cols", group = GROUP_STYLE)
+
+// ── THE classifier + side derivation — GENERATED from ticker-tape.pine. Quotes
+// are authoritative; tick-to-tick direction is only a no-quote fallback. Because
+// this is the same code the tape runs, the panel's counts and net-delta can never
+// drift from the squares. Edit in ticker-tape.pine, then run the sync script. ──
+// <<SYNC block-classify BEGIN>> — generated from ticker-tape.pine; run scripts/sync-block-engine.sh
+f_classifyTick(float tickPrice, float tickBid, float tickAsk, float previousPrice) =>
+    bool hasValidQuotes = not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
+    int tickCondition = COND_MID
+    if hasValidQuotes
+        if tickPrice >= tickAsk
+            tickCondition := tickPrice == tickAsk ? COND_AT_ASK : COND_ABOVE_ASK
+        else if tickPrice <= tickBid
+            tickCondition := tickPrice == tickBid ? COND_AT_BID : COND_BELOW_BID
+    else
+        int syntheticDirection = na(previousPrice) ? 0 : tickPrice > previousPrice ? 1 : tickPrice < previousPrice ? -1 : 0
+        tickCondition := syntheticDirection > 0 ? COND_ABOVE_PRICE : syntheticDirection < 0 ? COND_BELOW_PRICE : COND_MID
+    tickCondition
+
+// Buy-side / sell-side / neutral, straight off the condition code.
+f_tickDirection(int tickCondition) =>
+    tickCondition == COND_ABOVE_ASK or tickCondition == COND_AT_ASK or tickCondition == COND_ABOVE_PRICE ? 1 : tickCondition == COND_BELOW_BID or tickCondition == COND_AT_BID or tickCondition == COND_BELOW_PRICE ? -1 : 0
+// <<SYNC block-classify END>>
+
+// ── Pull this bar's 1T ticks (same request/order as ticker-tape.pine) ──
+// expression order [close, volume, bid, ask] → destructured in the SAME order.
+[tickPrices, tickVolumes, tickBids, tickAsks] = request.security_lower_tf(
+     symbol            = syminfo.tickerid,
+     timeframe         = "1T",
+     expression        = [close, volume, bid, ask],
+     ignore_invalid_symbol = true,
+     ignore_invalid_timeframe = true,
+     calc_bars_count   = intrabarLookbackBars)
+
+// ── Per-bar recount: pure function of THIS bar's tick array (mirrors the recount
+// ticker-tape.pine runs at lines ~972-981). Nothing carried across bars, so a
+// reload or revised tail can never double-count. Net delta is the sum of each
+// block print's side via f_tickDirection — identical to the tape's exposed
+// (atAsk + aggBuy) − (atBid + aggSell), because those are exactly the +1/−1 sides. ──
+int blockCount    = 0
+int blockNetDelta = 0
+if not na(tickPrices) and tickPrices.size() > 0
+    int n = tickPrices.size()
+    for i = 0 to n - 1
+        float v = tickVolumes.get(index = i)
+        if not na(v) and v >= blockSizeThreshold
+            float p = tickPrices.get(index = i)
+            int cond = f_classifyTick(tickPrice = p, tickBid = tickBids.get(index = i), tickAsk = tickAsks.get(index = i), previousPrice = i > 0 ? tickPrices.get(index = i - 1) : na)
+            blockCount    += 1
+            blockNetDelta += f_tickDirection(tickCondition = cond)
+
+// ── Per-bar color from the net lean, faded into the close ──
+bool inCloseFadeWindow = fadeIntoClose and not na(time(timeframe = timeframe.period, session = closeFadeSession, timezone = "America/New_York"))
+color leanColor = blockNetDelta > 0 ? colBuy : blockNetDelta < 0 ? colSell : colNeutral
+color barColor  = inCloseFadeWindow ? color.new(color = leanColor, transp = 75) : leanColor
+
+// ── Render: one plot per style, only the selected one carries the series (the
+// rest go na). `style` must be a compile-time constant, so a single switchable
+// plot isn't possible — this is the standard four-plot pattern. ──
+float shown = blockCount
+plot(series = plotKind == PlotKind.columns   ? shown : na, title = "Blocks (Columns)",   style = plot.style_columns,   color = barColor, linewidth = 4)
+plot(series = plotKind == PlotKind.histogram ? shown : na, title = "Blocks (Histogram)", style = plot.style_histogram, color = barColor, linewidth = 2)
+plot(series = plotKind == PlotKind.area      ? shown : na, title = "Blocks (Area)",      style = plot.style_area,      color = barColor)
+plot(series = plotKind == PlotKind.line      ? shown : na, title = "Blocks (Line)",      style = plot.style_line,      color = barColor, linewidth = 2)
+
+hline(price = 0, title = "Zero", color = color.new(color = NORD3, transp = 40), linestyle = hline.style_dotted)
+
+// Expose the raw numbers for the Data Window / status line.
+plot(series = blockNetDelta, title = "Net Delta",         precision = 0, display = display.data_window + display.status_line, color = color.new(color = NORD3, transp = 100))
+plot(series = blockCount,    title = "Block Count (bar)", precision = 0, display = display.data_window + display.status_line, color = color.new(color = NORD3, transp = 100))

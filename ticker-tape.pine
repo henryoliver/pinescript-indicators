@@ -3,7 +3,7 @@
 // Ticker Tape - Tick-by-tick order flow tape
 
 //@version=6
-indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_bars_back = 0)
+indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_bars_back = 0, max_labels_count = 300)
 
 // Ticker tape, introduced in 1867 by Edward Calahan and perfected by Thomas Edison,
 // was the first mechanical system for transmitting stock prices over telegraph lines.
@@ -42,7 +42,23 @@ const string PAD_NBSP = " "
 // fallback must carry the tape for the rest of the bar.
 const int LTF_TICK_CAP = 1000
 
+// Ceiling on how TALL a bar's block-square column can grow. The per-type counts
+// and the total plot below stay exact past it, only the drawing stops. 25
+// squares is far beyond any realistic bar at a sane size threshold.
+const int BLOCK_SQUARE_MAX = 25
+
+// Square types — the five buckets a block print can land in, and the index of
+// its mask in a column. One label per TYPE (not per print) draws a whole bar's
+// column, so a bar costs five drawings however many blocks it printed.
+const int BLOCK_TYPE_AGG_BUY  = 0
+const int BLOCK_TYPE_AT_ASK   = 1
+const int BLOCK_TYPE_AT_BID   = 2
+const int BLOCK_TYPE_AGG_SELL = 3
+const int BLOCK_TYPE_MID      = 4
+const int BLOCK_TYPE_COUNT    = 5
+
 // Tick condition codes — precomputed at store time so the renderer doesn't need bid/ask.
+// <<SYNC block-cond BEGIN>> — source of truth; scripts/sync-block-engine.sh mirrors this into ticker-block-trades.pine
 const int COND_MID          = 0
 const int COND_AT_ASK       = 1
 const int COND_ABOVE_ASK    = 2
@@ -50,6 +66,7 @@ const int COND_ABOVE_PRICE  = 3
 const int COND_AT_BID       = 4
 const int COND_BELOW_BID    = 5
 const int COND_BELOW_PRICE  = 6
+// <<SYNC block-cond END>>
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧩 TYPE DEFINITIONS
@@ -106,7 +123,7 @@ showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Or
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all). Tape display only — it never filters block-trade counting.", group = GROUP_GENERAL)
-intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Both the tape rows and the block squares are computed from this window — the squares are plotshapes recomputed from each bar's ticks, so bars older than this window show no squares. Kept LOW on purpose: TradingView caps served intrabar history anyway, and the tape only needs the recent flow. Raise it for a deeper block-square backfill on fresh loads.", group = GROUP_GENERAL)
+intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Feeds the tape rows, the block counts behind the whale-cluster alert, and the Data Window numbers. The block squares themselves only ever draw on the current bar, so this window doesn't affect them. Kept LOW on purpose: TradingView caps served intrabar history anyway, and the tape only needs the recent flow.", group = GROUP_GENERAL)
 largeOrderSize = input.int(defval = 10000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
@@ -184,11 +201,20 @@ const string GROUP_BLOCK = "🐋 Block Trades"
 // a lot? No" — bare minimum 10,000 shares for ANY stock, then try 20k/50k/100k. The
 // default honors that stock floor for QQQ.
 blockSizeThreshold = input.int(defval = 10000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size mark the bar as a block trade. Barry's bare minimum for any stock is 10,000 shares (futures: ES 20+, E-minis 100). Tune by trial and error until spikes land at cycle highs/lows and breakouts; adjust day to day (lower on slow days, higher on busy days).", group = GROUP_BLOCK)
-// The single per-bar sentiment square colors by net block delta: buy-side blocks
-// (at/above ask) borrow the tape's Ask hue, sell-side (at/below bid) borrow its
-// Bid hue. A net-flat bar (all mid, or buy/sell tied) uses the neutral color here.
-blockNeutralColor = input.color(defval = color.new(color = NORD4, transp = 80), title = "Neutral Block Square", tooltip = "Color of the per-bar block square when the bar's block flow nets flat — only mid-spread prints, or buy-side and sell-side blocks tied. A net buy-side bar takes the tape's Above-Ask background color, a net sell-side bar takes its Below-Bid color, so the marker matches the tape's own type coloring. Default alpha matches those backgrounds (transp 80).", group = GROUP_BLOCK)
-fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so markers inside the window below are rendered faded.", inline = "close_fade", group = GROUP_BLOCK)
+// One square PER BLOCK PRINT, stacked below the current bar in the order they
+// printed, each in its own type's color. These are independent of the tape's
+// row colors on purpose: table cells sit behind text and want a faint wash,
+// chart glyphs sit on bare price and want to read at a glance. Defaults keep
+// the tape's hue mapping — Frost for buy-side, Aurora red for sell-side — with
+// the aggressive types solid and the passive at-quote types stepped back.
+blockAggBuyColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Aggressive Buy", tooltip = "Square color for a block that lifted the offer — printed above the ask, or above the previous price when quotes are missing.", inline = "sq_buy", group = GROUP_BLOCK)
+blockAtAskColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "At Ask", tooltip = "Square color for a block printed exactly at the ask — buy-side, but passive rather than aggressive.", inline = "sq_buy", group = GROUP_BLOCK)
+blockAtBidColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "At Bid", tooltip = "Square color for a block printed exactly at the bid — sell-side, but passive rather than aggressive.", inline = "sq_sell", group = GROUP_BLOCK)
+blockAggSellColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Aggressive Sell", tooltip = "Square color for a block that hit the bid — printed below the bid, or below the previous price when quotes are missing.", inline = "sq_sell", group = GROUP_BLOCK)
+blockNeutralColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Mid / Neutral", tooltip = "Square color for a block printed inside the spread — no directional lean.", group = GROUP_BLOCK)
+blockSquareSize = input.int(defval = 10, title = "Square Size", minval = 6, maxval = 30, tooltip = "Glyph size of each block square. The squares are stacked as text lines, so this also sets the gap between them — and that gap is a fixed pixel distance that never changes when the chart is rescaled or zoomed.", inline = "square", group = GROUP_BLOCK)
+blockHistoryBars = input.int(defval = 0, title = "Keep History (bars)", minval = 0, maxval = 50, tooltip = "How many CLOSED bars keep their block-trade squares. 0 (default) draws the forming bar only. Raise it to leave a trail behind — each closed bar's column is frozen at its own bar and drops off once the window slides past it. The forming bar always draws regardless.", inline = "square", group = GROUP_BLOCK)
+fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so squares inside the window below are rendered faded.", inline = "close_fade", group = GROUP_BLOCK)
 closeFadeSession = input.session(defval = "1530-1600", title = "", tooltip = "Session window (America/New_York) treated as into-the-close.", inline = "close_fade", group = GROUP_BLOCK)
 
 const string GROUP_PROFLOW = "📡 Pro Flow"
@@ -335,22 +361,29 @@ varip int fbLastUpdateTime = 0
 varip float barMaxChartVol = 0.0
 varip float barTickVolSum = 0.0
 varip BlockTradeState blockState = BlockTradeState.new()
-// 🐋 Per-bar block counts the RENDER + alerts read. blockState is only a
+// 🐋 Per-bar block counts the plots + alerts read. blockState is only a
 // per-execution ACCUMULATOR (an object, so it can be passed by-ref into the
 // rescan/fallback helpers) — but object FIELDS roll back on realtime ticks, and
 // on this plan the LTF tick array is EMPTY at the bar's confirmed tick, so the
 // rescan can't recompute there and blockState's fields read a stale value. The
-// plot commits at that confirmed tick, which froze the stale value into history
-// and made the squares vanish at the close. These standalone `varip` SCALARS
-// persist across realtime ticks and HOLD their last good value through the
-// data-less confirmed tick, so the count committed to each bar is correct and
-// the marker stays. Latched from blockState whenever it is freshly computed.
+// plots commit at that confirmed tick, which froze the stale value into history.
+// These standalone `varip` SCALARS persist across realtime ticks and HOLD their
+// last good value through the data-less confirmed tick, so the count committed
+// to each bar — and the whale-cluster window built on it — is correct.
+// Latched from blockState whenever it is freshly computed.
 varip int blockShownCount = 0
 varip int blockShownAggBuy = 0
 varip int blockShownAtAsk = 0
 varip int blockShownAtBid = 0
 varip int blockShownAggSell = 0
 varip int blockShownMid = 0
+// 🐋 The COND_* code of each block print in the current bar, in print order —
+// one entry per square in the column. varip for the same reason as the scalars
+// above (array mutations persist across realtime ticks), and filled by the same
+// two writers in lockstep with them, so it can never drift from the counts.
+// Capped at BLOCK_SQUARE_MAX: the counts above stay exact past it, only the
+// drawing stops.
+varip array<int> blockConditions = array.new<int>()
 
 // 🔔 Alert state. The block watermark tracks the last count already announced —
 // historical executions sync it silently, so a reload never replays pings for
@@ -387,6 +420,10 @@ var table tapeTable = table.new(position = tablePos, columns = 4, rows = totalRo
 // 🛠️ FUNCTIONS
 // Tape storage, classification, rendering, and block-trade helpers.
 // ═════════════════════════════════════════════════════════════════════════════
+// Reset/record are a PAIR and must stay one: both touch the global
+// blockConditions alongside the passed state, so the per-print list and the
+// bucket counts are written by the same two call sites and can never disagree.
+// (blockState is a singleton — it is an object only so it can be passed by-ref.)
 f_resetBlockTradeState(BlockTradeState state) =>
     state.count   := 0
     state.aggBuy  := 0
@@ -394,9 +431,10 @@ f_resetBlockTradeState(BlockTradeState state) =>
     state.atBid   := 0
     state.aggSell := 0
     state.mid     := 0
+    blockConditions.clear()
 
-// Bucket a block print by the SAME COND_* code the tape assigns its rows, so a
-// block's square lands in the color of the row it would occupy in the table.
+// Bucket a block print by the SAME COND_* code the tape assigns its rows, and
+// keep the code itself so the print gets its own square in that row's color.
 f_recordBlockTradeState(BlockTradeState state, int condition) =>
     state.count += 1
     if condition == COND_ABOVE_ASK or condition == COND_ABOVE_PRICE
@@ -409,6 +447,44 @@ f_recordBlockTradeState(BlockTradeState state, int condition) =>
         state.aggSell += 1
     else
         state.mid += 1
+    if blockConditions.size() < BLOCK_SQUARE_MAX
+        blockConditions.push(value = condition)
+
+// Square type of a print. The no-quote price fallbacks fold into the aggressive
+// buckets they stand in for — same classification the tape makes.
+f_blockTypeIndex(int condition) =>
+    switch condition
+        COND_ABOVE_ASK   => BLOCK_TYPE_AGG_BUY
+        COND_ABOVE_PRICE => BLOCK_TYPE_AGG_BUY
+        COND_AT_ASK      => BLOCK_TYPE_AT_ASK
+        COND_AT_BID      => BLOCK_TYPE_AT_BID
+        COND_BELOW_BID   => BLOCK_TYPE_AGG_SELL
+        COND_BELOW_PRICE => BLOCK_TYPE_AGG_SELL
+        => BLOCK_TYPE_MID
+
+f_blockTypeColor(int typeIndex, bool faded) =>
+    color typeColor = switch typeIndex
+        BLOCK_TYPE_AGG_BUY  => blockAggBuyColor
+        BLOCK_TYPE_AT_ASK   => blockAtAskColor
+        BLOCK_TYPE_AT_BID   => blockAtBidColor
+        BLOCK_TYPE_AGG_SELL => blockAggSellColor
+        => blockNeutralColor
+    faded ? color.new(color = typeColor, transp = 90) : typeColor
+
+// One bar's column, as five overlaid text masks — mask t holds "■" on the lines
+// whose print is type t and NBSP everywhere else. Drawn as five labels sharing
+// one anchor they read as a single multi-colored column, in print order, for
+// five drawings a bar instead of one per print.
+f_blockColumnMasks(array<int> conditions) =>
+    array<string> masks = array.new<string>(size = BLOCK_TYPE_COUNT, initial_value = "")
+    int lineCount = math.min(conditions.size(), BLOCK_SQUARE_MAX)
+    if lineCount > 0
+        for lineIndex = 0 to lineCount - 1
+            int lineType = f_blockTypeIndex(condition = conditions.get(index = lineIndex))
+            string lineBreak = lineIndex > 0 ? "\n" : ""
+            for maskIndex = 0 to BLOCK_TYPE_COUNT - 1
+                masks.set(index = maskIndex, value = masks.get(index = maskIndex) + lineBreak + (maskIndex == lineType ? "■" : PAD_NBSP))
+    masks
 
 f_insertSortedTick(array<TickData> ticks, TickData newTick, int maxRows) =>
     // LTF arrays arrive in chronological order, so the new tick is always newest:
@@ -579,27 +655,43 @@ f_renderHeader(int row, color headerBg) =>
     f_tapeCell(column = 2, row = row, cellText = f_padText(value = "SIZE", targetLength = sizePadChars, textAlign = headerTextAlign), cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
     f_tapeCell(column = 3, row = row, cellText = f_padText(value = "COND", targetLength = condPadChars, textAlign = headerTextAlign), cellHeight = headerHeight, textColor = defaultTextColor, textAlign = headerTextAlign, cellBg = headerBg, textFormatting = text.format_none)
 
-f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk, bool countBlock, bool capAggregate) =>
-    // Classify + set direction. Quotes are AUTHORITATIVE: when bid/ask are valid,
-    // the price's position vs the quote is the whole story — a print strictly
-    // inside the spread is MID (direction 0), never above-ask/below-bid. Tick-to-
-    // tick price direction is ONLY a fallback for when quotes are missing (it must
-    // never promote an inside-spread print to a quote-crossing label).
+// THE classifier — every path that needs a print's side reads it here, so the
+// tape rows, the block squares, and the historical fast-forward's eligibility
+// test can never drift apart. Quotes are AUTHORITATIVE: when bid/ask are valid,
+// the price's position vs the quote is the whole story — a print strictly inside
+// the spread is MID, never above-ask/below-bid. Tick-to-tick price direction is
+// ONLY a fallback for when quotes are missing (it must never promote an
+// inside-spread print to a quote-crossing label); pass previousPrice = na where
+// there is no prior print and the fallback yields MID on its own.
+// Returns the COND_* code ALONE. Buy/sell side is derived from it (f_tickDirection
+// below), never returned alongside — the two cannot be made to disagree.
+// <<SYNC block-classify BEGIN>> — source of truth; scripts/sync-block-engine.sh mirrors this into ticker-block-trades.pine
+f_classifyTick(float tickPrice, float tickBid, float tickAsk, float previousPrice) =>
     bool hasValidQuotes = not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
-    float previousPrice = tapeState.tapePrice
-    int tickDirection = 0
     int tickCondition = COND_MID
     if hasValidQuotes
         if tickPrice >= tickAsk
-            tickDirection := 1
             tickCondition := tickPrice == tickAsk ? COND_AT_ASK : COND_ABOVE_ASK
         else if tickPrice <= tickBid
-            tickDirection := -1
             tickCondition := tickPrice == tickBid ? COND_AT_BID : COND_BELOW_BID
     else
-        int syntheticDirection = na(previousPrice) ? 0 : (tickPrice > previousPrice ? 1 : tickPrice < previousPrice ? -1 : 0)
-        tickDirection := syntheticDirection
+        int syntheticDirection = na(previousPrice) ? 0 : tickPrice > previousPrice ? 1 : tickPrice < previousPrice ? -1 : 0
         tickCondition := syntheticDirection > 0 ? COND_ABOVE_PRICE : syntheticDirection < 0 ? COND_BELOW_PRICE : COND_MID
+    tickCondition
+
+// Buy-side / sell-side / neutral, straight off the condition code.
+f_tickDirection(int tickCondition) =>
+    tickCondition == COND_ABOVE_ASK or tickCondition == COND_AT_ASK or tickCondition == COND_ABOVE_PRICE ? 1 : tickCondition == COND_BELOW_BID or tickCondition == COND_AT_BID or tickCondition == COND_BELOW_PRICE ? -1 : 0
+// <<SYNC block-classify END>>
+
+// Aggressive = slippage prints only: through the ask / through the bid, or the
+// no-quote price fallback. Sitting exactly ON a quote is passive, not aggressive.
+f_isAggressive(int tickCondition) =>
+    tickCondition == COND_ABOVE_ASK or tickCondition == COND_BELOW_BID or tickCondition == COND_ABOVE_PRICE or tickCondition == COND_BELOW_PRICE
+
+f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tickBid, float tickAsk, bool countBlock, bool capAggregate) =>
+    int tickCondition = f_classifyTick(tickPrice = tickPrice, tickBid = tickBid, tickAsk = tickAsk, previousPrice = tapeState.tapePrice)
+    int tickDirection = f_tickDirection(tickCondition = tickCondition)
 
     // Incremental block counting covers ONLY the degraded no-tick-data fallback
     // (countBlock = true). With real 1T data the BLOCK TRADES section recounts
@@ -616,9 +708,7 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
     // equal-size bursts, i.e. precisely iceberg slices and rapid institutional
     // repeats — silently eating them from the tape.
     if tapeEnabled and tickVolume >= minimumSize
-        // Aggressive = slippage prints only: above the ask / below the bid, or the no-quote price fallback.
-        bool isAggressivePrint = tickCondition == COND_ABOVE_ASK or tickCondition == COND_BELOW_BID or tickCondition == COND_ABOVE_PRICE or tickCondition == COND_BELOW_PRICE
-        if not showAggressiveOnly or isAggressivePrint
+        if not showAggressiveOnly or f_isAggressive(tickCondition = tickCondition)
             [storedTick, storedInstitutional, icebergRepeats] = f_storeTick(tickPrice = tickPrice, tickVolume = tickVolume, tickTime = tickTime, tickDirection = tickDirection, tickCondition = tickCondition, capAggregate = capAggregate)
             // 🔔 Print alerts — realtime only, real 1T prints only (delta
             // aggregates, whether from the no-tick-data fallback or a capped
@@ -732,16 +822,16 @@ if tapeEnabled or blockTradesActive
                     if backComplete and backVolume >= minimumSize
                         bool backEligible = true
                         if showAggressiveOnly
-                            // Mirrors the store path: aggressive is any directional
-                            // print NOT sitting exactly on its own quote.
-                            float backBid = tickBids.get(index = backIndex)
-                            float backAsk = tickAsks.get(index = backIndex)
-                            bool backHasQuotes = not na(backBid) and not na(backAsk) and backBid > 0 and backAsk > 0
-                            int backDirection = backHasQuotes ? (backPrice >= backAsk ? 1 : backPrice <= backBid ? -1 : 0) : 0
-                            if backDirection == 0 and backIndex > 0
-                                float backPreviousPrice = tickPrices.get(index = backIndex - 1)
-                                backDirection := na(backPreviousPrice) ? 0 : backPrice > backPreviousPrice ? 1 : backPrice < backPreviousPrice ? -1 : 0
-                            backEligible := backDirection > 0 ? not (backHasQuotes and backPrice == backAsk) : backDirection < 0 ? not (backHasQuotes and backPrice == backBid) : false
+                            // Through the SAME classifier the store path uses. The
+                            // hand-rolled copy this replaced fell back to
+                            // tick-to-tick direction for prints INSIDE the spread
+                            // (the store keeps quotes authoritative and calls those
+                            // MID), so it scored non-aggressive prints as
+                            // candidates, banked its quota early, and could jump in
+                            // past prints that belonged in the table.
+                            backEligible := f_isAggressive(tickCondition = f_classifyTick(tickPrice = backPrice,
+                                 tickBid = tickBids.get(index = backIndex), tickAsk = tickAsks.get(index = backIndex),
+                                 previousPrice = backIndex > 0 ? tickPrices.get(index = backIndex - 1) : na))
                         if backEligible
                             // EXACT mirror of f_storeTick's routing predicates.
                             bool backInInstitutional = instRowsActive > 0 and backVolume >= institutionalMinSize and (institutionalMaxSize <= 0 or backVolume <= institutionalMaxSize)
@@ -839,11 +929,11 @@ if tapeEnabled or blockTradesActive
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🐋 BLOCK TRADES
-// Render the per-bar block squares — one stacked square per print-type present
-// (aggressive buy / at ask / at bid / aggressive sell / mid), each colored by
-// the tape's own row background for that type. Opacity encodes that bucket's
-// COUNT (a cluster of ~5 saturates the square). Into-the-close prints are faded
-// because they are mostly position-squaring, not directional.
+// Count each bar's block prints and stack ONE square per print below the bar, in
+// print order, each in its own type's color (aggressive buy / at ask / at bid /
+// aggressive sell / mid). The forming bar always draws; "Keep History (bars)"
+// decides how many closed bars keep their column behind it. Into-the-close
+// prints are faded because they are mostly position-squaring, not directional.
 // ═════════════════════════════════════════════════════════════════════════════
 // PER-BAR RECOUNT — the count is a pure function of the CURRENT bar's tick
 // array, recomputed from scratch whenever that array changes. Nothing is carried between
@@ -874,29 +964,15 @@ if blockTradesActive and lowerTfTicksChangedThisExec and (lowerTfDataSeen or tic
             float rescanVolume = tickVolumes.get(index = rescanIndex)
             if not na(rescanVolume) and rescanVolume >= blockSizeThreshold
                 float rescanPrice = tickPrices.get(index = rescanIndex)
-                float rescanBid = tickBids.get(index = rescanIndex)
-                float rescanAsk = tickAsks.get(index = rescanIndex)
-                // Quotes are AUTHORITATIVE (same rule as the tape): inside the
-                // spread is MID, never above-ask/below-bid. Tick-to-tick direction
-                // is only a fallback when quotes are missing.
-                bool rescanHasQuotes = not na(rescanBid) and not na(rescanAsk) and rescanBid > 0 and rescanAsk > 0
-                int rescanDirection = 0
-                int rescanCondition = COND_MID
-                if rescanHasQuotes
-                    if rescanPrice >= rescanAsk
-                        rescanDirection := 1
-                        rescanCondition := rescanPrice == rescanAsk ? COND_AT_ASK : COND_ABOVE_ASK
-                    else if rescanPrice <= rescanBid
-                        rescanDirection := -1
-                        rescanCondition := rescanPrice == rescanBid ? COND_AT_BID : COND_BELOW_BID
-                else if rescanIndex > 0
-                    float rescanPreviousPrice = tickPrices.get(index = rescanIndex - 1)
-                    rescanDirection := na(rescanPreviousPrice) ? 0 : rescanPrice > rescanPreviousPrice ? 1 : rescanPrice < rescanPreviousPrice ? -1 : 0
-                    rescanCondition := rescanDirection > 0 ? COND_ABOVE_PRICE : rescanDirection < 0 ? COND_BELOW_PRICE : COND_MID
+                // Same classifier as the tape's own rows — a block's square can
+                // never disagree with the row that print occupies in the table.
+                int rescanCondition = f_classifyTick(tickPrice = rescanPrice,
+                     tickBid = tickBids.get(index = rescanIndex), tickAsk = tickAsks.get(index = rescanIndex),
+                     previousPrice = rescanIndex > 0 ? tickPrices.get(index = rescanIndex - 1) : na)
                 f_recordBlockTradeState(state = blockState, condition = rescanCondition)
                 newestBlockVolume := rescanVolume
                 newestBlockPrice := rescanPrice
-                newestBlockDirection := rescanDirection
+                newestBlockDirection := f_tickDirection(tickCondition = rescanCondition)
     // Latch the freshly-rebuilt counts into the varip scalars the render reads.
     // This runs only when the rescan ran (data present) — the data-less confirmed
     // tick skips it, so the scalars HOLD this last-good value and the plot commits
@@ -941,32 +1017,67 @@ else
     else if not whaleClusterActive
         clusterAlertLatched := false
 
+// 🐋 SQUARE STACK — one square per block print, hanging below that bar's low in
+// print order (oldest nearest the bar, so an arriving print appends downward and
+// never shifts the ones already drawn). The forming bar always draws; closed
+// bars keep their column for as many bars back as "Keep History" allows (0 =
+// forming bar only).
+// SPACING IS IN PIXELS, NOT PRICE. Offsetting each square by a price step (an
+// ATR fraction, ticks, anything) makes the stack breathe with the vertical
+// scale — squares crowd when you zoom out and scatter when you zoom in. So the
+// stack is built out of TEXT LINES instead: every square is one line of a
+// column, and line spacing comes from the font, which no chart rescale touches.
+// A label carries a single textcolor, so the column is drawn as five overlaid
+// type MASKS sharing one anchor (f_blockColumnMasks). Identical line counts and
+// identical glyph sets give the five labels identical box geometry, so they land
+// on one shared grid and read as a single multi-colored column — five drawings
+// a bar however many blocks it printed. style_label_up hangs the box below the
+// anchor, so the column grows downward and already-drawn squares hold their
+// pixel position as new ones arrive. Filler lines use NBSP — a plain space gets
+// collapsed (same reason the table pads with it).
+// "■" (U+25A0) is deliberate — the emoji squares (◾ ◽ ◼) render in a fixed
+// dark color and ignore textcolor, which would throw away the type coloring.
+//
+// TWO RENDERERS, split on commitment — the repo's drawing lifecycle rule (a
+// .new on an uncommitted realtime tick rolls back while a .delete commits, so
+// neither may run intrabar):
+//   • FORMING BAR — a fixed pool of five labels created once and only set_*'d
+//     after, repainted on EVERY last-bar execution for the same reason the
+//     table is: mutations made on an uncommitted tick are rolled back, so a
+//     tick that skipped the repaint would show a stale column.
+//   • CLOSED BARS — minted at the bar's CONFIRM (a committed tick) and frozen
+//     there, then deleted when the Keep History window slides past them. Only
+//     bars inside the window are ever minted, so a fresh load doesn't churn
+//     thousands of drawings it would immediately throw away.
 bool inCloseFadeWindow = fadeIntoClose and not na(time(timeframe = timeframe.period, session = closeFadeSession, timezone = "America/New_York"))
-// ONE sentiment square per bar (order-flow delta convention). Net block delta =
-// buy-side (at ask + above ask) − sell-side (at bid + below bid); mid prints are
-// neutral. The SIGN picks the color, taken VERBATIM from the tape's own type
-// backgrounds so the marker matches the row colors: net buy = Above-Ask BG, net
-// sell = Below-Bid BG, net-flat (all mid, or buy/sell tied) = the Neutral input.
-// Only the into-the-close window overrides the alpha, fading the marker. The
-// per-type count plots below carry the exact breakdown and the net-delta number.
-int blockBuySide = blockShownAtAsk + blockShownAggBuy
-int blockSellSide = blockShownAtBid + blockShownAggSell
-int blockNetDelta = blockBuySide - blockSellSide
-color blockSentimentBase = blockNetDelta > 0 ? aboveAskBackgroundColor : blockNetDelta < 0 ? belowBidBackgroundColor : blockNeutralColor
-color blockSentimentColor = inCloseFadeWindow ? color.new(color = blockSentimentBase, transp = 90) : blockSentimentBase
-// Two renders, one handing off to the other at the bar's close:
-//   • LIVE forming bar — the original plotshape square at size.tiny, untouched.
-//   • CLOSED bars — a "■" glyph (U+25A0). It MUST be a text-presentation square:
-//     emoji squares (◾ ◽ ◼) render in a fixed dark color and ignore the `color`
-//     arg, so the net-delta color is lost. "■" respects color and, as a char,
-//     draws a touch smaller than the plotshape square. The plotshape is gated OFF
-//     at confirm and the plotchar records the bar, so one marker shows per bar.
-// Fixed sizes/glyphs: LIVE forming bar = "■" at tiny; CLOSED bars = "▪" at small.
-// Both are text-presentation squares that honor the net-delta color. The live
-// plot is gated OFF at confirm and the historical one records the bar, so exactly
-// one marker shows per bar.
-plotchar(series = blockTradesActive and blockShownCount > 0 and not barstate.isconfirmed ? 1 : na, title = "Block Sentiment (live)", char = "■", location = location.belowbar, color = blockSentimentColor, size = size.tiny, display = display.pane)
-plotchar(series = blockTradesActive and blockShownCount > 0 and barstate.isconfirmed ? 1 : na, title = "Block Sentiment", char = "▪", location = location.belowbar, color = blockSentimentColor, size = size.small, display = display.pane)
+
+var array<label> blockLiveColumn = array.new<label>()
+if blockTradesActive and barstate.isfirst
+    for typeIndex = 0 to BLOCK_TYPE_COUNT - 1
+        blockLiveColumn.push(value = label.new(x = bar_index, y = close, text = "", style = label.style_label_up, color = color.new(color = color.gray, transp = 100), textcolor = color.new(color = color.gray, transp = 100), size = blockSquareSize, textalign = text.align_center))
+
+if barstate.islast and blockLiveColumn.size() > 0
+    array<string> liveMasks = f_blockColumnMasks(conditions = blockConditions)
+    for typeIndex = 0 to BLOCK_TYPE_COUNT - 1
+        label liveLabel = blockLiveColumn.get(index = typeIndex)
+        label.set_xy(id = liveLabel, x = bar_index, y = low)
+        label.set_text(id = liveLabel, text = liveMasks.get(index = typeIndex))
+        label.set_textcolor(id = liveLabel, textcolor = f_blockTypeColor(typeIndex = typeIndex, faded = inCloseFadeWindow))
+
+// Closed-bar trail. The bar-index list runs one entry per COLUMN (five labels),
+// in bar order, so sliding the window is a shift from the front.
+var array<label> blockTrailLabels = array.new<label>()
+var array<int> blockTrailBars = array.new<int>()
+if blockTradesActive and blockHistoryBars > 0 and barstate.isconfirmed
+    if blockConditions.size() > 0 and bar_index > last_bar_index - blockHistoryBars
+        array<string> barMasks = f_blockColumnMasks(conditions = blockConditions)
+        for typeIndex = 0 to BLOCK_TYPE_COUNT - 1
+            blockTrailLabels.push(value = label.new(x = bar_index, y = low, text = barMasks.get(index = typeIndex), style = label.style_label_up, color = color.new(color = color.gray, transp = 100), textcolor = f_blockTypeColor(typeIndex = typeIndex, faded = inCloseFadeWindow), size = blockSquareSize, textalign = text.align_center))
+        blockTrailBars.push(value = bar_index)
+    while blockTrailBars.size() > 0 and blockTrailBars.get(index = 0) <= bar_index - blockHistoryBars
+        blockTrailBars.shift()
+        for typeIndex = 0 to BLOCK_TYPE_COUNT - 1
+            label.delete(id = blockTrailLabels.shift())
 // Expose the per-bar counts as numbers, one plot PER TYPE (never merged) plus the
 // total, so every bucket is independently auditable in the Data Window / status
 // line / crosshair popup — the actual counts, not the squares' 0/1 presence.
@@ -976,8 +1087,10 @@ plot(series = blockTradesActive ? blockShownAtBid   : 0, title = "Block At Bid",
 plot(series = blockTradesActive ? blockShownAggSell : 0, title = "Block Sell (aggressive)", precision = 0, display = display.data_window + display.status_line)
 plot(series = blockTradesActive ? blockShownMid     : 0, title = "Block Mid / Neutral",      precision = 0, display = display.data_window + display.status_line)
 plot(series = blockTradesActive ? blockShownCount   : 0, title = "Block Total (this bar)",   precision = 0, display = display.data_window + display.status_line)
-// Net block delta — the sentiment number driving the square's color/opacity
-// (+ = buy-side blocks dominate, − = sell-side).
+// Net block delta — the bar's order-flow lean in one number: buy-side (at ask +
+// above ask) − sell-side (at bid + below bid), mid prints neutral. The squares
+// now show every print's own type, so this is the summary read, not a color source.
+int blockNetDelta = (blockShownAtAsk + blockShownAggBuy) - (blockShownAtBid + blockShownAggSell)
 plot(series = blockTradesActive ? blockNetDelta     : 0, title = "Block Net Delta",          precision = 0, display = display.data_window + display.status_line)
 
 // ═════════════════════════════════════════════════════════════════════════════
