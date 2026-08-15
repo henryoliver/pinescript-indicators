@@ -15,9 +15,13 @@ indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_b
 // feed has nothing, the tape shows nothing.
 //
 // What that costs, accepted deliberately:
-//   · Capped bars. TradingView serves ~1,002 ticks per bar; past that the forming
-//     bar's array pins and the tape stops advancing until the next bar opens. Trade
-//     down a timeframe if that bites on your symbol.
+//   · A budget, not the whole tape. Pine caps requested ticks at 100,000 (Basic →
+//     Premium) / 125,000 (Expert) / 200,000 (Ultimate) for the entire request. Past
+//     it the array stops growing and the tape stops advancing. Trade down a timeframe
+//     if that bites on your symbol. There also appears to be a PER-BAR ceiling of
+//     ~1,002 entries — undocumented, but measured here on 2026-07-29 (minutes carrying
+//     >1,000 trades lost 15-20% of their volume against the raw feed). Crosshair the
+//     "Ticks Served" readout below to see what a given bar was actually handed.
 //   · Symbols/plans/sessions with no live 1T stream show an empty tape rather than a
 //     rolling approximation.
 //
@@ -57,10 +61,14 @@ const color NORD15 = #B48EAD
 // NBSP survives, so it's the padding unit that keeps auto-sized columns stable.
 const string PAD_NBSP = " "
 
-// TradingView serves at most ~1,002 1T intrabars per chart bar. Once the forming
-// bar's array pins there, later trades of that bar never arrive and the tape stops
-// advancing until the next bar opens. That is ACCEPTED: see the ⚡ note at the top.
-// Nothing in this script fabricates prints to cover the gap.
+// The 1T stream is finite: Pine serves up to the plan's intrabar budget (see the Tick
+// Budget input) and then stops. Once a bar's array stops growing, later trades of that
+// bar never arrive and the tape stops advancing until the next bar opens. That is
+// ACCEPTED: see the ⚡ note at the top. Nothing in this script fabricates prints to
+// cover the gap. The PER-BAR ceiling (~1,002 entries) is measured, not documented —
+// re-measure with this file's "Ticks Served" readout before trusting the number. The
+// 🐋 Block Trades panel no longer publishes one: it was stripped to a single plot on
+// 2026-08-14, so this file is the only place left to take that measurement.
 
 // Ceiling on how TALL a bar's block-square column can grow. The per-type counts
 // and the total plot below stay exact past it, only the drawing stops. 25
@@ -142,7 +150,27 @@ showAggressiveOnly = input.bool(defval = false, title = "Show Only Aggressive Or
 timeFormat = input.string(defval = "hh:mm:ss", title = "Time Format", tooltip = "Time display format (hh:mm:ss a = 12-hour with AM/PM, HH:mm:ss = 24-hour)", group = GROUP_GENERAL)
 priceDecimals = input.int(defval = 2, title = "Price Decimal Points", minval = 0, maxval = 4, step = 1, tooltip = "Number of decimal places for price display", group = GROUP_GENERAL)
 minimumSize = input.int(defval = 0, title = "Minimum Size Filter", minval = 0, step = 1, tooltip = "Only show orders with this many shares or more (0 = show all). Tape display only — it never filters block-trade counting.", group = GROUP_GENERAL)
-intrabarLookbackBars = input.int(defval = 500, title = "Intrabar History Bars", minval = 50, maxval = 5000, step = 50, tooltip = "How many recent bars to fetch tick-level data from. Feeds the tape rows, the block counts behind the whale-cluster alert, and the Data Window numbers. The block squares themselves only ever draw on the current bar, so this window doesn't affect them. Kept LOW on purpose: TradingView caps served intrabar history anyway, and the tape only needs the recent flow.\n\nKeep this EQUAL to the 🐋 Block Trades panel's Intrabar History Bars. It is a hard coverage cutoff — bars older than it have no tick data and count as zero blocks — so a mismatch makes the two disagree on exactly the bars only one of them can see.", group = GROUP_GENERAL)
+// ⚠️ CORRECTED 2026-08-14 — was defval 500, described as a chart-bar coverage window.
+// It is `calc_bars_count`, which counts bars OF THE REQUESTED CONTEXT; the context is
+// "1T", so the unit is TICKS, and the budget covers the WHOLE request, spent from the
+// newest bar backwards. Verified against TradingView's docs, quoting sentences that
+// are actually on the page (an earlier draft here cited a "100000 / 60 = 1666" worked
+// example that is not in the docs — it was removed on the same day it was written):
+//   · Limitations: up to 100K intrabars on Basic/Essential/Plus/Premium, 125K on
+//     Expert, 200K on Ultimate, via request.security() / request.security_lower_tf().
+//   · Other timeframes and data: "Scripts can retrieve up to 200,000 intrabars from a
+//     lower-timeframe context", and "The number of chart bars with available intrabar
+//     data varies with the requested lower timeframe, the calc_bars_count value, and
+//     the user's plan."
+// The second sentence is what settles the unit: chart-bar coverage is the DERIVED
+// quantity, not the argument. Asking for 500 asked for the last 500 prints.
+// 200,000 is the Ultimate ceiling and the default here; the plan ceiling applies to
+// anything above it, so the default is safe on any account. The docs do not say an
+// over-plan value is rejected, and they do not say it is clamped either — do not
+// claim either without a citation.
+// HENRY'S ACCOUNT IS ULTIMATE (confirmed 2026-08-14), so on his charts this default is
+// served in full at 200,000 — the plan hedging above is for anyone else running it.
+tickBudget = input.int(defval = 200000, title = "Tick Budget", minval = 1000, maxval = 200000, step = 1000, tooltip = "calc_bars_count for the 1T request — the number of TICKS this indicator asks TradingView for across the whole request, not per bar. The budget is spent from the newest bar backwards, so it decides how far back this script has any tape at all. Feeds the tape rows, the block counts behind the whale-cluster alert, and the Data Window numbers. The block squares themselves only ever draw on the current bar, so this budget doesn't affect them.\n\nCeilings are per plan: 100,000 on Basic/Essential/Plus/Premium, 125,000 on Expert, 200,000 on Ultimate. Your plan's ceiling applies to anything above it, so this default is safe everywhere.\n\nKeep this EQUAL to the 🐋 Block Trades panel's Tick Budget — a mismatch makes the two disagree on exactly the prints only one of them was given. Lower both together if the chart loads slowly; that is the only reason to.", group = GROUP_GENERAL)
 largeOrderSize = input.int(defval = 10000, title = "Large Order Threshold", minval = 0, step = 10, tooltip = "Orders >= this size will be highlighted in the table. This is a fixed raw-size highlight only and does not control the institutional or block classifications.", group = GROUP_GENERAL)
 largeOrderTextColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "Large Order Text", tooltip = "Text color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
 largeOrderBackgroundColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Large Order BG", tooltip = "Background color for highlighted large orders.", inline = "large", group = GROUP_GENERAL)
@@ -232,7 +260,22 @@ blockAggBuyColor = input.color(defval = color.new(color = NORD8, transp = 20), t
 blockAtAskColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "At Ask", tooltip = "Square color for a block printed exactly at the ask — buy-side, but passive rather than aggressive.", inline = "sq_buy", group = GROUP_BLOCK)
 blockAtBidColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "At Bid", tooltip = "Square color for a block printed exactly at the bid — sell-side, but passive rather than aggressive.", inline = "sq_sell", group = GROUP_BLOCK)
 blockAggSellColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "Aggressive Sell", tooltip = "Square color for a block that hit the bid — printed below the bid, or below the previous price when quotes are missing.", inline = "sq_sell", group = GROUP_BLOCK)
-blockNeutralColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Mid / Neutral", tooltip = "Square color for a block printed inside the spread — no directional lean.", group = GROUP_BLOCK)
+// ⚠️ AMBER, NOT GRAY, since 2026-08-14 — and renamed from "Mid / Neutral", because
+// for a SQUARE that label was always wrong. A square is one print, and a print inside
+// the spread is not "neutral", it is a specific event: on a penny-wide symbol there is
+// no on-exchange price strictly between bid and ask, so a mid print is almost always
+// an OFF-EXCHANGE cross — dark pool / ATS working size where the lit book can't see it.
+// Calling that "no lean" and painting it the dimmest gray hid the most interesting
+// print type on the tape. NORD13 (Aurora amber) is neither the cyan buy side nor the
+// red sell side, which is exactly right: it is not a side.
+//
+// It also removes a collision. Against the chart background the old NORD4 @ 60 rendered
+// #727883 and At Ask (NORD8 @ 60) renders #526C7A — both muted blue-grays, RGB delta
+// (32, 12, 9), at a 10px glyph. The 🐋 Block Trades panel had the same failure in a worse
+// form (delta 7, 8, 9) and was fixed the same day; this is the same lesson applied to the
+// squares. The panel's mid-dominant COLUMNS use NORD13 too, so a midpoint print on price
+// and the amber column under it now read as one statement.
+blockMidColor = input.color(defval = color.new(color = NORD13, transp = 40), title = "Dark Pool / Mid", tooltip = "Square color for a block printed inside the spread — no side took it across the quote, which on a liquid symbol almost always means an off-exchange (dark pool / ATS) cross at the midpoint. Amber because it is neither the buy nor the sell side, and because it is information rather than the absence of it. Matches the 🐋 Block Trades panel's Dark Pool color for bars where mid prints outnumber both sides.", group = GROUP_BLOCK)
 blockSquareSize = input.int(defval = 10, title = "Square Size", minval = 6, maxval = 30, tooltip = "Glyph size of each block square. The squares are stacked as text lines, so this also sets the gap between them — and that gap is a fixed pixel distance that never changes when the chart is rescaled or zoomed.", inline = "square", group = GROUP_BLOCK)
 blockHistoryBars = input.int(defval = 0, title = "Keep History (bars)", minval = 0, maxval = 50, tooltip = "How many CLOSED bars keep their block-trade squares. 0 (default) draws the forming bar only. Raise it to leave a trail behind — each closed bar's column is frozen at its own bar and drops off once the window slides past it. The forming bar always draws regardless.", inline = "square", group = GROUP_BLOCK)
 fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so squares inside the window below are rendered faded.", inline = "close_fade", group = GROUP_BLOCK)
@@ -316,7 +359,7 @@ if tapeEnabled or blockTradesActive
          expression        = [close, volume, time, bid, ask],
          ignore_invalid_symbol = true,
          ignore_invalid_timeframe = true,
-         calc_bars_count   = intrabarLookbackBars
+         calc_bars_count   = tickBudget
     )
     // The request returns na (not arrays) when tick data is unavailable for the
     // symbol/plan; the empty defaults then stand and the tape simply shows nothing.
@@ -455,7 +498,7 @@ f_blockTypeColor(int typeIndex, bool faded) =>
         BLOCK_TYPE_AT_ASK   => blockAtAskColor
         BLOCK_TYPE_AT_BID   => blockAtBidColor
         BLOCK_TYPE_AGG_SELL => blockAggSellColor
-        => blockNeutralColor
+        => blockMidColor
     faded ? color.new(color = typeColor, transp = 90) : typeColor
 
 // One bar's column, as five overlaid text masks — mask t holds "■" on the lines
@@ -699,9 +742,19 @@ f_processAndStoreTick(float tickPrice, float tickVolume, int tickTime, float tic
 // idempotent per-bar rescan of that same array; tape storage applies its own
 // display filters. Nothing else can enter a print.
 // ═════════════════════════════════════════════════════════════════════════════
+// 🔬 HOW MUCH TAPE DID WE ACTUALLY GET — mirrored out of the tick block below so it can
+// reach the Data Window. Every count, every square and every alert in this file is a
+// conclusion drawn from the prints TradingView chose to serve, and until this was
+// exposed there was no way to separate "quiet bar" from "the rest never arrived".
+// Same readout, same name, as the 🐋 Block Trades panel's, so the two can be compared
+// bar for bar when both are on the chart. varip because it is latched inside a realtime
+// block; reset with the bar so a data-less execution can't carry a stale number forward.
+varip int tapeAvailableTickCount = 0
+
 // Keep the tape rolling across bars; row caps trim the oldest visible records automatically.
 if barstate.isnew
     tapeProcessedTickCount := 0
+    tapeAvailableTickCount := 0
     f_resetBlockTradeState(state = blockState)
     // Clear the shown counts too so a fresh bar starts empty before its first
     // data tick latches a new value.
@@ -723,6 +776,7 @@ if tapeEnabled or blockTradesActive
     // watermark alone is the correct, dupe-free trigger; a revising tail just
     // shows its prior value for ~1s until the next tick appends.
     int availableTickCount = tickPrices.size()
+    tapeAvailableTickCount := availableTickCount
     bool newTicksThisExec = availableTickCount > tapeProcessedTickCount
     lowerTfTicksChangedThisExec := newTicksThisExec
 
@@ -980,6 +1034,13 @@ plot(series = blockTradesActive ? blockShownCount   : 0, title = "Block Total (t
 // now show every print's own type, so this is the summary read, not a color source.
 int blockNetDelta = (blockShownAtAsk + blockShownAggBuy) - (blockShownAtBid + blockShownAggSell)
 plot(series = blockTradesActive ? blockNetDelta     : 0, title = "Block Net Delta",          precision = 0, display = display.data_window + display.status_line)
+
+// THE HONESTY READOUT — raw 1T prints served for this bar, before minimumSize, before
+// the block threshold, before any filter. Read it whenever a bar looks quiet: a thin
+// tape and a truncated tape are indistinguishable in every other number this script
+// publishes. Data Window only — it is a different unit from the block counts and has no
+// business in the status line next to them.
+plot(series = tapeAvailableTickCount, title = "Ticks Served", precision = 0, display = display.data_window)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⚡ PERFORMANCE

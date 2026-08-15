@@ -1172,15 +1172,37 @@ enum TrendDir
 
 12. **`ticker-tape.pine`**
     - Realtime time-and-sales tape + block-trade engine on
-      `request.security_lower_tf("1T")` with a degraded no-tick-data fallback,
-      iceberg detection, pro-flow readout, and gated alerts
+      `request.security_lower_tf("1T")`, with iceberg detection, pro-flow
+      readout, and gated alerts
+    - REAL PRINTS ONLY — the chart-volume-delta fallback (one Σ-tagged aggregate
+      row standing in for unseen trades) was removed 2026-08-10 and must not be
+      reintroduced: a sum of unseen trades rendered as a trade cannot be
+      classified, cannot be a block, and reads as order flow that never
+      happened. A dead feed shows an empty tape
+    - Source of truth for the shared block classifier — the `<<SYNC …>>` regions
+      are mirrored into `ticker-block-trades.pine` by
+      `scripts/sync-block-engine.sh` (run `--check` in CI/pre-commit)
     - Intraday tool — a daily chart exhausts the lower-timeframe allotment
 
 13. **`hoi.pine`**
     - Hindenburg Omen signal: new highs/lows breadth thresholds, positive-trend
       and McClellan filters, rolling cluster-window confirmation
 
-14. **`obv.pine`**
+14. **`ticker-block-trades.pine`**
+    - Sub-pane companion to `ticker-tape.pine`: histogram of block-trade COUNT
+      per bar (individual prints ≥ the size threshold, never cumulative volume)
+    - Exists as a separate file because `overlay` is fixed at compile time — a
+      pane version cannot be a runtime toggle on the tape
+    - Classifier + `COND_*` codes are GENERATED from `ticker-tape.pine` between
+      the `<<SYNC …>>` markers; edit them there, then run
+      `scripts/sync-block-engine.sh`. Never hand-edit a synced region
+    - Bar color = order-flow lean: NORD8 cyan buy-side / NORD11 red sell-side,
+      two tiers per side (transp 45 aggressive, transp 70 passive) reusing the
+      tape's five block-square color slots and names
+    - Watermark-gated per-bar recount held in `varip` SCALARS; zero-block bars
+      plot `na` (not 0) so the baseline stays bare
+
+15. **`obv.pine`**
     - On Balance Volume (Barry Burns methodology) — smart-money/accumulation
       detector in its own pane
     - OBV drawn thin/neutral (like the MACD line); a 20-period SIMPLE MA OF OBV
