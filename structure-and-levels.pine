@@ -199,17 +199,32 @@ const int LONG_TERM_MAX_LINE_WIDTH = 4
 // Strength → brightness mapping shared by the solid and above/below-zero color
 // systems: the strongest drawn level on a side is the brightest, the weakest
 // the faintest — same per-side, top-anchored ranking the width uses.
-const int LONG_TERM_STRONGEST_TRANSP = 30
-const int LONG_TERM_WEAKEST_TRANSP = 75
+//
+// The ramp is ANCHORED ON THE INPUT'S OWN OPACITY, not on a hardcoded pair. The
+// picker's alpha is what the STRONGEST level on a side draws at, and weaker
+// levels fade away from it — so the color inputs behave the way every other
+// color input in the repo does, and the strength ranking stays a RELATIVE
+// signal on top of it rather than a fixed brightness the setting cannot reach.
+// The fade eats a fraction of the transparency HEADROOM (the distance from the
+// chosen alpha to invisible) rather than a fixed number of points, so the
+// ranking survives a faint baseline instead of collapsing every weak level to
+// invisible. 0.65 of the headroom reproduces the previous 30 → 75 spread at the
+// default alpha exactly.
+const float LONG_TERM_STRENGTH_FADE = 0.65
+// Floor on how faint the weakest level may be pushed, so the bottom of the
+// ranking stays readable. Clamped up to the baseline itself when the user picks
+// an alpha fainter than this, which keeps weak levels from inverting and
+// drawing BRIGHTER than the strong ones.
+const int LONG_TERM_FAINTEST_TRANSP = 90
 
 bool showLongTermStructure = input.bool(defval = true, title = "Show", tooltip = "Draws strength-ranked pivot-cluster support/resistance levels from the selected source: confirmed pivots on the Timeframe over the Lookback window cluster into levels, and repeated, recently retested clusters rank above single or stale touches and draw thicker and brighter.", group = GROUP_LONG_TERM)
 string longTermTimeframe = input.timeframe(defval = "15", title = "Timeframe", tooltip = "Higher timeframe the long-term pivots are detected on. Must be at or above the chart timeframe. This is the significance filter: a confirmed pivot here is a real multi-hour swing, and the level map stays identical whichever chart timeframe you read it on.", group = GROUP_LONG_TERM)
 int longTermLookbackDays = input.int(defval = 22, title = "Lookback (Trading Days)", minval = 10, maxval = 90, tooltip = "How many trading days of Timeframe pivots are scanned for repeated levels.", group = GROUP_LONG_TERM)
-int longTermLevelsPerSide = input.int(defval = 4, title = "Levels Above/Below", minval = 0, maxval = 10, tooltip = "Exact number of long-term levels drawn per side, strongest first — strength is the recency-weighted touch count, so repeated and recently retested pivot clusters outrank single or stale touches. 0 disables the lines while keeping the engine's state warm. Width and brightness are ranked PER SIDE among the drawn levels only, anchored at the top: each side's strongest level always draws at full width and full brightness and the rest rank down, so a side with a single line draws at full strength. Fewer only draw when the lookback simply has no more pivots on that side. On ordinary sources the sides split around the current reading. When the source's scale contains zero (breadth/volume indexes) they split around ZERO — the source methodology draws levels above the 0 line and below it.", group = GROUP_LONG_TERM)
+int longTermLevelsPerSide = input.int(defval = 4, title = "Levels Above/Below", minval = 0, maxval = 10, tooltip = "Exact number of long-term levels drawn per side, strongest first — strength is the recency-weighted touch count, so repeated and recently retested pivot clusters outrank single or stale touches. 0 disables the lines while keeping the engine's state warm. Width and brightness are ranked PER SIDE among the drawn levels only, anchored at the top: each side's strongest level always draws at full width and at its color's own set opacity, and the rest rank down and fade from there, so a side with a single line draws at full strength. Fewer only draw when the lookback simply has no more pivots on that side. On ordinary sources the sides split around the current reading. When the source's scale contains zero (breadth/volume indexes) they split around ZERO — the source methodology draws levels above the 0 line and below it.", group = GROUP_LONG_TERM)
 int longTermRecencyHalfLifeDays = input.int(defval = 11, title = "Recency Half-Life (Days)", minval = 0, maxval = 90, tooltip = "Ages each pivot touch before it counts toward level strength: a touch this many trading days old counts half as much as one from today, twice as old a quarter, and so on — recent retests outrank stale history with the same raw touch count, and each level's price is the recency-weighted mean of its touches. 0 disables aging: every touch counts fully (pure touch-count strength). Default 11 is half the default lookback, so the oldest touches in the default window still count about 25%.", group = GROUP_LONG_TERM)
-color longTermSolidColor = input.color(defval = NORD3, title = "Solid Color", tooltip = "Color for all long-term levels when the source does NOT trade on both sides of zero (ordinary price or one-sided sources). The mode is automatic. Strength sets each line's brightness, so this color's own opacity slider is overridden.", group = GROUP_LONG_TERM)
-color longTermAboveZeroColor = input.color(defval = NORD8, title = "Above Zero Color", tooltip = "Color for long-term levels above zero when the source trades on both sides of zero. The mode is automatic. Strength sets each line's brightness, so this color's own opacity slider is overridden.", group = GROUP_LONG_TERM)
-color longTermBelowZeroColor = input.color(defval = NORD11, title = "Below Zero Color", tooltip = "Color for long-term levels below zero when the source trades on both sides of zero. The mode is automatic. Strength sets each line's brightness, so this color's own opacity slider is overridden.", group = GROUP_LONG_TERM)
+color longTermSolidColor = input.color(defval = color.new(color = NORD3, transp = 30), title = "Solid Color", tooltip = "Color for all long-term levels when the source does NOT trade on both sides of zero (ordinary price or one-sided sources). The mode is automatic. This color's opacity slider is the BASELINE: the strongest level on each side draws at exactly the opacity set here, and weaker levels fade away from it. Raise the opacity to brighten the whole ranking, lower it to sink the levels into the background.", group = GROUP_LONG_TERM)
+color longTermAboveZeroColor = input.color(defval = color.new(color = NORD8, transp = 30), title = "Above Zero Color", tooltip = "Color for long-term levels above zero when the source trades on both sides of zero. The mode is automatic. This color's opacity slider is the BASELINE: the strongest level above zero draws at exactly the opacity set here, and weaker levels fade away from it.", group = GROUP_LONG_TERM)
+color longTermBelowZeroColor = input.color(defval = color.new(color = NORD11, transp = 30), title = "Below Zero Color", tooltip = "Color for long-term levels below zero when the source trades on both sides of zero. The mode is automatic. This color's opacity slider is the BASELINE: the strongest level below zero draws at exactly the opacity set here, and weaker levels fade away from it.", group = GROUP_LONG_TERM)
 
 if showLongTermStructure and timeframe.in_seconds() > timeframe.in_seconds(timeframe = longTermTimeframe)
     runtime.error(message = "Structure & Levels: chart timeframe is above the Long-Term S/R Timeframe (" + longTermTimeframe + "). Raise that Timeframe or disable Long-Term S/R.")
@@ -317,8 +332,14 @@ f_renderLongTermSideLevels(array<line> lines, array<KeyLevel> sideLevels, bool z
             if sideMaxStrength > sideMinStrength
                 sideStrengthRatio := (sideMaxStrength - sideLevel.strength) / (sideMaxStrength - sideMinStrength)
             int sideLevelWidth = LONG_TERM_MAX_LINE_WIDTH - math.round(number = sideStrengthRatio * (LONG_TERM_MAX_LINE_WIDTH - LONG_TERM_MIN_LINE_WIDTH))
-            int sideLevelTransp = LONG_TERM_STRONGEST_TRANSP + math.round(number = sideStrengthRatio * (LONG_TERM_WEAKEST_TRANSP - LONG_TERM_STRONGEST_TRANSP))
-            color sideLevelColor = color.new(color = f_longTermLevelBaseColor(zeroAwareMode = zeroAwareMode, levelPrice = sideLevel.price), transp = sideLevelTransp)
+            color sideLevelBaseColor = f_longTermLevelBaseColor(zeroAwareMode = zeroAwareMode, levelPrice = sideLevel.price)
+            // The picked alpha IS the strongest level's alpha. color.new replaces
+            // transparency outright rather than compounding it, so the baseline
+            // has to be read back off the input and fed in as the ramp's origin.
+            float sideBaselineTransp = color.t(sideLevelBaseColor)
+            float sideWeakestTransp = math.min(sideBaselineTransp + (100.0 - sideBaselineTransp) * LONG_TERM_STRENGTH_FADE, math.max(sideBaselineTransp, LONG_TERM_FAINTEST_TRANSP))
+            int sideLevelTransp = int(math.round(number = sideBaselineTransp + sideStrengthRatio * (sideWeakestTransp - sideBaselineTransp)))
+            color sideLevelColor = color.new(color = sideLevelBaseColor, transp = sideLevelTransp)
             line sideLevelLine = line.new(x1 = bar_index - 1, y1 = sideLevel.price, x2 = bar_index, y2 = sideLevel.price, xloc = xloc.bar_index, extend = extend.both, color = sideLevelColor, width = sideLevelWidth, style = line.style_solid)
             array.push(id = lines, value = sideLevelLine)
 

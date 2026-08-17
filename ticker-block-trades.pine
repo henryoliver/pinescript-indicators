@@ -93,10 +93,27 @@ const string GROUP_STYLE = "🎨 Style"
 
 // Barry's sizing rule: tune per market until block spikes land at meaningful spots
 // (cycle highs/lows, breakouts). His numbers — futures: ES/YM 20+, E-minis 100 /
-// Nasdaq 50. Stocks: 10,000-share bare minimum for ANY stock. The panel's default
-// is the tape's institutional floor (1,000), which keeps the sub-pane populated on
-// normal symbols; raise it toward Barry's stock floor to isolate the real whales.
-blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size count as a block on the bar. 1,000 is the tape's institutional floor and keeps this panel populated; Barry's bare minimum for a real stock block is 10,000 shares (futures: ES/YM 20+, E-minis 100). Set this to match Ticker Tape's own Block Size Threshold if you want the panel and the squares to agree print-for-print. Tune by trial and error until spikes land at cycle highs/lows and breakouts.", group = GROUP_DATA)
+// Nasdaq 50. Stocks: 10,000-share bare minimum for ANY stock.
+//
+// ⚠️ THE 10,000 DOES NOT PORT TO A HIGH-PRICED ETF — it is a GENERIC-stock figure, given
+// in the same breath as "it depends on the volume that trades in that market, which can
+// be dramatically different from stock to stock… there's no simple answer." His actual
+// criterion is the size of the ACCOUNT behind the order: "we're not only capturing the
+// institutions here. We're just capturing people who are trading big enough accounts
+// with big enough size that the odds are they're probably making money at this point in
+// their lives." An amateur-exclusion filter, not a whale detector.
+//
+// That criterion is what makes his own numbers agree, and they only agree in account
+// size — never in notional, because futures run 50-100:1 intraday and equities 4:1:
+//   ES 100 / NQ 50 / YM 20 contracts   →  ~$20-150k of day margin
+//   10,000 shares of a $50 stock       →  ~$125k at 4:1
+//   1,000 shares of QQQ at ~$733       →  ~$188k at 4:1   ← the default, already at the
+//   10,000 shares of QQQ at ~$733      →  ~$1.83M           top of his band; 10k here is
+//                                                            ~40x past what he meant
+// So the 1,000 default is not a placeholder waiting to be raised to Barry's stock floor.
+// If you move it, 1,500-2,500 is the defensible direction. And tune it PER SYMBOL from
+// the Max Print readout below — never by porting a number off another instrument.
+blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", minval = 1, step = 1, tooltip = "Trades at or above this size count as a block on the bar. 1,000 is the tape's institutional floor and keeps this panel populated.\n\nBarry's numbers: futures ES/YM 20+, E-minis 100, Nasdaq 50; stocks a 10,000-share bare minimum. ⚠️ That 10,000 is a GENERIC-stock figure and does NOT port to a high-priced ETF — on QQQ at ~$733 it is ~$7.3M a print (~$1.8M of buying power), roughly 40x the account size his own futures settings imply. The 1,000 default already needs ~$188k at 4:1 intraday, which is at the top of his $20k-150k band.\n\nTune PER SYMBOL, by trial and error, until spikes land at cycle highs/lows and breakouts. Use the 'Max Print (size)' series in the Data Window to see where this symbol's print-size tail actually starts, rather than guessing or porting a number from another instrument.\n\nSet this to match Ticker Tape's own Block Size Threshold if you want the panel and the squares to agree print-for-print.", group = GROUP_DATA)
 
 // ⚠️ THIS NUMBER MUST EQUAL Ticker Tape's own. It is `calc_bars_count`, and it is THE
 // budget for the entire request — raise it and you get more tape, full stop.
@@ -235,7 +252,22 @@ bool quotesServed = not na(tickBids) and not na(tickAsks)
 // Where the tape must gate on `>` (its tick pipeline stores incrementally and a
 // shrinking array would replay rows), this rescan is fully idempotent, so it gates
 // on `!=` — a feed revision that shortens the array resyncs instead of holding a
-// stale, too-high count. The one accepted cost is the tape's: a forming 1T sub-bar
+// stale, too-high count.
+//
+// ⚠️ BUT NEVER ON AN EMPTY ARRAY, and that guard is not optional. `!=` on its own
+// treats "the request served nothing this execution" as a revision down to zero:
+// the rescan reruns over 0 ticks, latches every bucket to 0, and the plot commits
+// `na` onto a bar that printed blocks. The bar is closed by then — nothing later
+// puts the column back. It is exactly the failure ticker-tape.pine defends against
+// by gating on `>` (see its varip-scalar note: the LTF array can be EMPTY at the
+// bar's confirmed tick, which is the tick the plots commit at), and a transient
+// na batch — `tickBatchValid` false — lands in the same place. So the gate carries
+// `availableTickCount > 0`: a genuine shrink to 1..n still resyncs, a data-less
+// execution HOLDS the last good count. No stale-count risk in the other direction,
+// because `barstate.isnew` has already zeroed every bucket, so a bar that truly
+// served no prints stays at 0 without the rescan ever running.
+//
+// The one accepted cost is the tape's: a forming 1T sub-bar
 // whose volume revises upward past the threshold WITHOUT appending an index shows
 // its prior count until the next print lands (~1s). Self-correcting, and cheap
 // next to a full rescan on every quote update.
@@ -256,6 +288,16 @@ varip int blockShownAtBid = 0
 varip int blockShownAggSell = 0
 varip int blockShownMid = 0
 
+// 🔬 CALIBRATION AID — the largest single print on the bar, in shares/contracts,
+// measured across EVERY served print rather than only the ones that cleared the
+// threshold. Data Window only; it never draws and never touches the pane's scale.
+// This is what makes Barry's "play around with it until you start to see the
+// meaningful patterns" tunable per symbol instead of guessed: crosshair the bars that
+// matter (cycle turns, breakouts, the open) and read where this symbol's print-size
+// tail actually begins. The whole question is what the distribution looks like BELOW
+// the current cut, which is exactly what the block count cannot show you.
+varip float blockShownMaxSize = na
+
 if barstate.isnew
     blockProcessedTickCount := 0
     blockShownCount := 0
@@ -264,17 +306,22 @@ if barstate.isnew
     blockShownAtBid := 0
     blockShownAggSell := 0
     blockShownMid := 0
+    blockShownMaxSize := na
 
-if availableTickCount != blockProcessedTickCount
+if availableTickCount != blockProcessedTickCount and availableTickCount > 0
     int rebuiltCount = 0
     int rebuiltAggBuy = 0
     int rebuiltAtAsk = 0
     int rebuiltAtBid = 0
     int rebuiltAggSell = 0
     int rebuiltMid = 0
+    float rebuiltMaxSize = na
     if availableTickCount > 0
         for tickIndex = 0 to availableTickCount - 1
             float tickVolume = tickVolumes.get(index = tickIndex)
+            // 🔬 Calibration aid — every served print, qualifying or not.
+            if not na(tickVolume)
+                rebuiltMaxSize := na(rebuiltMaxSize) ? tickVolume : math.max(rebuiltMaxSize, tickVolume)
             if not na(tickVolume) and tickVolume >= blockSizeThreshold
                 // Same classifier as the tape's own rows — a block counted here can
                 // never disagree with the square the tape stacks for that print.
@@ -302,6 +349,7 @@ if availableTickCount != blockProcessedTickCount
     blockShownAtBid := rebuiltAtBid
     blockShownAggSell := rebuiltAggSell
     blockShownMid := rebuiltMid
+    blockShownMaxSize := rebuiltMaxSize
     blockProcessedTickCount := availableTickCount
 
 // Net block delta — the bar's order-flow lean in one number: buy-side (at ask +
@@ -370,12 +418,14 @@ float blockShownBlocks = blockShownCount > 0 ? blockShownCount : na
 // (Histogram / Columns / Line / Area / Step Line / Cross / Circles), so the histogram
 // here is a default, not a lock-in.
 //
-// linewidth IS THE COLUMN WIDTH on a histogram — not a line thickness. At 2 it renders
-// 2 device pixels per column on a 2× display against a ~13.5-pixel slot per 1-min bar:
-// 15% fill, too thin to show which colour it even was. 4 is TradingView's maximum and
-// fills roughly 60% of the slot at normal zoom. If the columns start touching, zoom in
-// rather than dropping this back — an unreadable colour is worse than a crowded one.
-plot(series = blockShownBlocks, title = "Blocks", style = plot.style_histogram, color = blockBarColor, linewidth = 4, precision = 0, display = display.pane + display.data_window + display.status_line)
+// linewidth IS THE COLUMN WIDTH on a histogram — not a line thickness. 2 renders 2
+// device pixels per column on a 2× display against a ~13.5-pixel slot per 1-min bar,
+// so the columns read as thin ticks with clear air between them. The tradeoff to know
+// about: at this width the COLOUR is a narrow sliver, and the colour is where the
+// side/aggression breakdown lives — zoom in when you need to read it, or raise this to
+// 4 (TradingView's maximum, ~60% slot fill) if you would rather trade crowding for
+// legibility. Set to 2 by Henry on 2026-08-15.
+plot(series = blockShownBlocks, title = "Blocks", style = plot.style_histogram, color = blockBarColor, linewidth = 2, precision = 0, display = display.pane + display.data_window + display.status_line)
 
 // Scale anchors — see the Scale Maximum input. These draw nothing, are not editable
 // and are not readable anywhere; they exist only so the pane's autoscale runs
@@ -384,3 +434,8 @@ plot(series = blockShownBlocks, title = "Blocks", style = plot.style_histogram, 
 // switch to Line; the CEILING anchor is what stops a 1-block bar filling the pane.
 plot(series = 0,            title = "Scale Floor",   color = color.new(color = NORD3, transp = 100), display = display.pane, editable = false)
 plot(series = scaleMaximum, title = "Scale Ceiling", color = color.new(color = NORD3, transp = 100), display = display.pane, editable = false)
+
+// 🔬 CALIBRATION READOUT — Data Window ONLY. Not on the pane, not in the status line,
+// not in the autoscale, so it cannot disturb the columns. See the varip declaration
+// above: this is the evidence you set Block Size Threshold from, per symbol.
+plot(series = blockShownMaxSize, title = "Max Print (size)", display = display.data_window, editable = false)

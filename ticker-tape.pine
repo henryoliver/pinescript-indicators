@@ -134,11 +134,37 @@ type BlockTradeState
     int mid     = 0 // no directional lean
 
 type TapeProcessingState
-    float tapePrice = na
+    // varip ON THE FIELD, not just on the variable holding the object. The object
+    // lives in a `varip` (see tapeState), but a plain field's `:=` still ROLLS BACK
+    // to the last committed value on every realtime tick — the exact class that
+    // froze this file's tick watermark. This field is the previous-print price the
+    // classifier falls back to when a symbol serves no bid/ask, and it is written
+    // once per print on realtime ticks, so a rollback made the first print of each
+    // execution read its direction against a stale (last-confirmed-bar) price —
+    // and disagree with the block rescan, which seeds previousPrice from the tick
+    // array instead. Quotes short-circuit the fallback, so this only ever showed on
+    // quoteless symbols, which is why it survived this long.
+    varip float tapePrice = na
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎛️ USER INPUT SETTINGS
 // Shared controls and section-owned inputs for tape rendering and block markers.
+//
+// THE SANCTIONED EXCEPTION (docs/AI.md) — inputs live here, not in their owning
+// sections, and the constraint that forces it is documented per that rule:
+//   1. ONE PIPELINE, EVERY GROUP. This file has no independent subsystems to give
+//      the inputs back to. A single 1T pass feeds the tape rows, the block buckets,
+//      pro flow, iceberg detection and the alerts, and the helpers in 🛠️ FUNCTIONS
+//      that run it (f_storeTick, f_renderTickRow, f_processAndStoreTick) close over
+//      inputs from nearly every group at once. Pine has no hoisting, so all of them
+//      must be declared above those helpers regardless of which feature "owns" them.
+//   2. DIALOG ORDER ≠ EXECUTION ORDER. The settings dialog lists groups in
+//      declaration order, and the order a user wants to read them (General → Table →
+//      Layout → Retail → Institutional → Block → Pro Flow → Iceberg → Alerts) is not
+//      the order the code has to run in (data → functions → tape → blocks → render).
+//      Section-local inputs would sort the dialog by the pipeline instead of by the
+//      user's mental model.
+// Group constants stay next to the inputs they group, so ownership is still legible.
 // ═════════════════════════════════════════════════════════════════════════════
 
 const string GROUP_GENERAL = "⚙️ General"
@@ -272,10 +298,18 @@ blockAggSellColor = input.color(defval = color.new(color = NORD11, transp = 20),
 // It also removes a collision. Against the chart background the old NORD4 @ 60 rendered
 // #727883 and At Ask (NORD8 @ 60) renders #526C7A — both muted blue-grays, RGB delta
 // (32, 12, 9), at a 10px glyph. The 🐋 Block Trades panel had the same failure in a worse
-// form (delta 7, 8, 9) and was fixed the same day; this is the same lesson applied to the
-// squares. The panel's mid-dominant COLUMNS use NORD13 too, so a midpoint print on price
-// and the amber column under it now read as one statement.
-blockMidColor = input.color(defval = color.new(color = NORD13, transp = 40), title = "Dark Pool / Mid", tooltip = "Square color for a block printed inside the spread — no side took it across the quote, which on a liquid symbol almost always means an off-exchange (dark pool / ATS) cross at the midpoint. Amber because it is neither the buy nor the sell side, and because it is information rather than the absence of it. Matches the 🐋 Block Trades panel's Dark Pool color for bars where mid prints outnumber both sides.", group = GROUP_BLOCK)
+// form (delta 7, 8, 9) and was fixed the same day — but it was fixed the OTHER WAY, and
+// the two files do NOT share a dark-pool color. Do not "restore" one to the other:
+//   · HERE (a square) hue carries the type, because a square is ONE print sitting on bare
+//     price next to squares of every other type. Amber is the only slot that is neither
+//     cyan nor red, which is the whole point — a mid print is not a side.
+//   · THE PANEL (a column) is one bar wearing one color, and it ranks its states by ALPHA
+//     on a NORD4 base: dark-pool NORD4 @ 80, no-lean NORD4 @ 90. Those are the two
+//     "nothing directional here" readings, and Henry deliberately put them 10 alpha
+//     points apart on 2026-08-14 so mistaking one for the other costs nothing.
+// So the square and the column mark the same event in different alphabets. Match them on
+// the READING (mid prints dominated this bar), never on the swatch.
+blockMidColor = input.color(defval = color.new(color = NORD13, transp = 40), title = "Dark Pool / Mid", tooltip = "Square color for a block printed inside the spread — no side took it across the quote, which on a liquid symbol almost always means an off-exchange (dark pool / ATS) cross at the midpoint. Amber because it is neither the buy nor the sell side, and because it is information rather than the absence of it. The 🐋 Block Trades panel marks the same event on its own bars, but in a different alphabet — its mid-dominant columns are neutral NORD4, separated from the rest by opacity instead of hue, because a column can only wear one color. Read the two together by the verdict (mid prints dominated this bar), not by the swatch.", group = GROUP_BLOCK)
 blockSquareSize = input.int(defval = 10, title = "Square Size", minval = 6, maxval = 30, tooltip = "Glyph size of each block square. The squares are stacked as text lines, so this also sets the gap between them — and that gap is a fixed pixel distance that never changes when the chart is rescaled or zoomed.", inline = "square", group = GROUP_BLOCK)
 blockHistoryBars = input.int(defval = 0, title = "Keep History (bars)", minval = 0, maxval = 50, tooltip = "How many CLOSED bars keep their block-trade squares. 0 (default) draws the forming bar only. Raise it to leave a trail behind — each closed bar's column is frozen at its own bar and drops off once the window slides past it. The forming bar always draws regardless.", inline = "square", group = GROUP_BLOCK)
 fadeIntoClose = input.bool(defval = true, title = "De-emphasize Into the Close", tooltip = "Block spikes near the session close are mostly position-squaring, not directional, so squares inside the window below are rendered faded.", inline = "close_fade", group = GROUP_BLOCK)
