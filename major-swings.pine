@@ -1,6 +1,22 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Major Swings - standalone extraction of the Support & Resistance swing engine
+// Major Swings — two-degree swing structure as support & resistance.
+//
+// MEDIUM (degree 1): a pivot with `Swing Strength` bars of containment on each
+//   side. Same definition as support-resistance.pine's "Swing Strength" — bars
+//   required each side to confirm a swing high or low. Drawn thin.
+// MAJOR (degree 2): "a major swing high happens when a swing high has a lower
+//   SWING high to the left and to the right." Majorness is NESTING, not window
+//   width. A medium is UPGRADED IN PLACE when both flanking mediums are lower (or
+//   both higher), so one swing is one object and no level is ever drawn twice.
+//   Drawn bold.
+// STRONG structure: a break of structure promotes the origin of the breaking leg
+//   to a strong extreme — the one "that will not be violated and therefore can
+//   be used as a safer place to put stop losses". This is a SEQUENCE property,
+//   which is why prominence and touch counts cannot see it.
+// BREAK vs PIERCE is Barry's rule, not Fractal Flow's close-based one: a zone is
+//   broken only when the whole bar clears it. Part of a bar through is a pierce,
+//   the zone stays live, and that is the fade setup.
 
 //@version=6
 indicator(title = "Major Swings", shorttitle = "💦 Swings", overlay = true, max_lines_count = 100, max_labels_count = 100, max_bars_back = 1000, calc_bars_count = 5000)
@@ -35,440 +51,515 @@ const color NORD15 = #B48EAD
 // 🧩 TYPE DEFINITIONS
 // Custom Pine types and enums used by the indicator.
 // ═════════════════════════════════════════════════════════════════════════════
-enum SwingSourceMode
+enum LevelSourceMode
     BODIES = "Bodies"
     WICKS  = "Wicks"
-
-enum LookbackUnitMode
-    MINUTES = "Minutes"
-    BARS    = "Bars"
 
 enum LineStyleMode
     SOLID  = "Solid"
     DASHED = "Dashed"
     DOTTED = "Dotted"
 
-enum LevelAnchorMode
-    BODY = "Body Edge"
-    WICK = "Wick Edge"
-    MID  = "Zone Mid"
-
-enum LevelExtendMode
-    FOREVER = "Right Forever"
-    FIXED   = "Fixed Bars"
-
-// A swing is stored as a ZONE even though it DRAWS as a single line. Barry's
-// rule (2026-06-20, "Your Swing High Strategy Is Wrong"): "all of these levels
-// are really zones. Zones, not lines… connect from the real body to the high,
-// and then there's your zone." The rectangle proved too loud on a 3m/1m chart,
-// so the zone survives as the tolerance band the pierce and breakout tests
-// measure against — `zoneTop`/`zoneBottom` after the minimum-height floor —
-// while the chart shows one faint line on the edge chosen by Line Anchor.
+// A swing DRAWS as one line but is STORED as a zone. Barry: "all of these levels
+// are really zones. Zones, not lines… connect from the real body to the high, and
+// then there's your zone." The rectangle proved too loud on a 3m/1m chart, so the
+// zone survives only as the tolerance band the pierce and break tests measure
+// against, while the chart shows one line at `levelPrice`.
 type Swing
-    float outerEdge
-    // Raw real-body extreme, untouched by the minimum-height floor, so a
-    // body-anchored line sits exactly on the candle body it came from.
-    float bodyEdge
+    float levelPrice
     float zoneTop
     float zoneBottom
     int barIndex
     bool isHigh
+    // DEGREE_MEDIUM on registration, upgraded IN PLACE to DEGREE_MAJOR when the
+    // nesting test passes. Because the upgrade mutates the stored object rather
+    // than creating a second one, a promoted swing carries its zone, touch count
+    // and break state across the promotion, and the two tiers can never paint the
+    // same price twice.
+    int degree
     string structureType
     bool isBroken
     bool isPierced
     int touchCount
-    // Prominence = how far the swing stands out of its own neighbourhood,
-    // measured in units of the volatility yardstick. This is what makes a swing
-    // "major": "anything that stands out to the naked eye as major swing highs".
+    // Topographic prominence: how far this peak stands above the HIGHER of its two
+    // flanking peaks of the same degree, in units of the yardstick. Measuring
+    // height above a detection window's LOW instead scored the size of the leg
+    // into the swing rather than the dominance of the swing itself. Only set at
+    // the nesting test, so it stays 0 for anything still degree-1.
     float prominence
-    float volume
-    // Volume baseline captured at the swing bar, so the volume bonus compares the
-    // swing against the participation regime it actually formed in.
-    float volumeBaseline
+    bool isStrong
+    int brokenBarIndex
+    // Re-entry latch. Without it, price parked at a level for ten bars scored ten
+    // touches — one visit, not ten respected tests.
+    bool isInsideZone
+
+// One drawing pool slot. The line and the label are always allocated, parked and
+// painted together, so they travel as one object rather than as two arrays held
+// in lockstep by a shared index.
+type LevelSlot
+    line levelLine
+    label levelLabel
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🧮 SHARED CALCULATIONS
-// Shared helpers and orchestration only.
+// ⚙️ GENERAL
+// Shared controls and state read by more than one section below.
 // ═════════════════════════════════════════════════════════════════════════════
+// All three groups are populated from BOTH sections — detection owns the strength
+// and the pivot source, render owns the slot counts, separation and colors — so the
+// group names are shared infrastructure rather than section-local constants.
+const string GROUP_STRUCTURE = "🌊 Structure"
+const string GROUP_LEVELS = "🎚️ Levels"
+const string GROUP_STYLE = "🎨 Style"
+
+const int DEGREE_MEDIUM = 1
+const int DEGREE_MAJOR = 2
+
 bool confirmedBar = barstate.isconfirmed
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🌊 MAJOR SWINGS
-// Stores recent confirmed swing zones as raw structure references.
-// Exports the swing store for the render engine.
+// 🌊 DETECTION
+// Two-pass, two-degree swing detection. Exports the swing store, the volatility
+// yardstick, the reference window and the structure stamp for the sections below.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_SWINGS = "🌊 Major Swings"
 const int MAX_SWINGS_STORED = 40
+// Left, middle, right — the three consecutive mediums the nesting test needs.
+const int NESTING_DEPTH = 3
+const int MEDIUM_BUFFER = 4
+// Floor on the thickness of the invisible body-to-wick zone the pierce and break
+// tests measure against, as a share of the yardstick. Intraday bodies and wicks
+// sit pennies apart, so without a floor a one-tick poke would read as a pierce.
+const float ZONE_TOLERANCE_PERCENT = 5.0
+// The yardstick window is this multiple of the swing strength. Scaling it off the
+// strength keeps every percentage threshold meaning the same thing when the
+// strength changes.
+const int YARDSTICK_MULTIPLE = 8
 
-LookbackUnitMode lookbackUnits = input.enum(defval = LookbackUnitMode.MINUTES, title = "Lookback Units", tooltip = "Minutes keeps the SAME zones on every intraday interval: 30 minutes is 10 bars on a 3m chart and 30 bars on a 1m chart, so the 1m confirmation chart shows the 3m setup chart's levels instead of its own noise. Switch to Bars on daily or higher charts, where minutes cannot resolve.", group = GROUP_SWINGS)
-int swingLookbackInput = input.int(defval = 30, title = "Swing Lookback", minval = 1, maxval = 600, tooltip = "How far LEFT of a bar price must stay below (or above) it for that bar to count as a swing. Units follow the Lookback Units setting.", group = GROUP_SWINGS)
-int swingConfirmInput = input.int(defval = 9, title = "Swing Confirmation", minval = 1, maxval = 600, tooltip = "How far RIGHT of the swing bar price must stay contained before the zone is published. This is pure lag: 9 minutes means a 10:00 swing high is drawn at 10:09. Keep it well under the lookback so intraday levels arrive while they are still tradeable.", group = GROUP_SWINGS)
-SwingSourceMode swingSourceMode = input.enum(defval = SwingSourceMode.BODIES, title = "Pivot Source", tooltip = "Which extreme locates the swing bar. Bodies matches Barry's 'I would draw it from the real body'. The body-to-wick tolerance zone behind the pierce and breakout tests is built regardless of this setting; only the pivot search uses it.", group = GROUP_SWINGS)
-float minProminencePercent = input.float(defval = 25.0, title = "Min Prominence (%)", minval = 0.0, maxval = 200.0, step = 5.0, tooltip = "A swing is only kept if it stands out of its own neighbourhood by at least this much of the recent range. This is the 'major' filter — it throws away the micro-shelves a 1m chart produces by the dozen. 0 keeps everything.", group = GROUP_SWINGS)
-int swingLevelsPerSide = input.int(defval = 3, title = "Max Levels Per Side", minval = 1, maxval = 20, tooltip = "Maximum number of swing zones above and below to keep visible, newest first. Lower values produce a cleaner, stronger map.", group = GROUP_SWINGS)
-float minSeparationPercent = input.float(defval = 10.0, title = "Min Separation (%)", minval = 0.0, maxval = 100.0, step = 5.0, tooltip = "Zones on the same side closer together than this much of the recent range are collapsed to the newest one. Stops three readings of the same shelf eating all three slots.", group = GROUP_SWINGS)
-bool swingPrioritizeUnbroken = input.bool(defval = true, title = "Prioritize Unbroken Levels", tooltip = "When on, zones price has not broken are kept ahead of already-broken zones when the per-side limit is reached.", group = GROUP_SWINGS)
-float minZoneHeightPercent = input.float(defval = 5.0, title = "Min Zone Tolerance (%)", minval = 0.0, maxval = 50.0, step = 1.0, tooltip = "Floor on the thickness of the invisible body-to-wick zone that the pierce and breakout tests use, as a share of the recent range. Intraday bodies and wicks sit pennies apart, so without a floor a one-tick poke would register as a pierce. Does not move the drawn line.", group = GROUP_SWINGS)
-float volumeSurgeMultiple = input.float(defval = 2.0, title = "Volume Surge Multiple", minval = 1.0, maxval = 10.0, step = 0.25, tooltip = "Volume at the swing bar must exceed its own baseline by this multiple to earn the strength bonus. On 1m charts a single bar doubles its baseline often, so raise this toward 2.5-3.0 there.", group = GROUP_SWINGS)
-int minStrengthToPlot = input.int(defval = 2, title = "Min Strength", minval = 1, maxval = 3, tooltip = "Strength floor a zone must reach to be drawn at all. Strength is 1 for a swing that clears its neighbourhood by less than half the recent range, 2 at half, 3 at a full range, plus one point each for a volume surge and for two or more respected touches, capped at 3. At 1 every surviving swing competes for a slot, including the shelves that only just cleared Min Prominence. 2 keeps the map to zones that genuinely stand out.", group = GROUP_SWINGS)
+int swingStrength = input.int(defval = 11, title = "Swing Strength", minval = 2, maxval = 30, tooltip = "Bars required on each side to confirm a swing high or swing low — this is the MEDIUM (degree-1) tier, and it is the same meaning the input carries in support-resistance.pine. A degree-2 MAJOR is then a medium swing with a lower medium swing on each side.\n\nCounted in BARS, so each interval resolves its own swings. To keep Barry's 3:1 fractal alignment by hand, set 33 here on a 1m confirmation chart against 11 on a 3m setup chart, and both will show the same levels.", group = GROUP_STRUCTURE)
+float minProminencePercent = input.float(defval = 10.0, title = "Min Prominence (%)", minval = 0.0, maxval = 100.0, step = 1.0, tooltip = "How far a medium swing must stand above the HIGHER of its two flanking mediums, as a share of the reference range, to be upgraded to MAJOR. Nesting alone decides majorness; this drops the ones that only just cleared their neighbours. 0 promotes every nested swing.", group = GROUP_STRUCTURE)
+LevelSourceMode levelSource = input.enum(defval = LevelSourceMode.BODIES, title = "Level Source", tooltip = "Which extreme locates the pivots, drives the nesting comparison, and carries the drawn line. Bodies is Barry's rule — 'I would draw it from the real body, not from the high' — and is the edge price meets first on the approach. The tolerance zone always spans body to wick regardless.", group = GROUP_STRUCTURE)
 
-// Resolve every window to bars from a wall-clock intent, so the 3m setup chart
-// and the 1m confirmation chart publish the SAME zones (Barry's 3:1 fractal
-// rule: the confirmation chart confirms the setup chart's levels, it does not
-// invent its own). A bar-count window cannot do this — 11 bars is 33 minutes on
-// one chart and 11 on the other.
-f_resolveBars(int amount) =>
-    int rawBars = lookbackUnits == LookbackUnitMode.BARS ? amount : int(math.round(number = amount * 60.0 / timeframe.in_seconds()))
-    math.min(math.max(rawBars, 2), 200)
-
-// Cast: math.min/max expressions can resolve as float in Pine, and every one of
-// these feeds a bar-count parameter.
-int swingLeftBars = int(f_resolveBars(amount = swingLookbackInput))
-int swingRightBars = int(f_resolveBars(amount = swingConfirmInput))
-int swingWindowBars = swingLeftBars + swingRightBars + 1
-// Volatility yardstick: the RANGE of a fixed wall-clock window, not ATR. ATR is
-// a mean per-bar range, so it scales with the interval and would make the
-// percentage thresholds above behave differently on 1m than on 3m. A window
-// high-minus-low is interval-invariant.
-int volatilityRefBars = int(math.min(math.max(swingWindowBars * 2, 20), 500))
+// EXPORTED to the render section as the role-flip retest window. Also the
+// volatility yardstick's window: every percentage threshold is measured against a
+// window RANGE, which is interval-invariant, unlike ATR — a mean per-bar range
+// would make the same percentage mean different things on 1m and 3m.
+int referenceBars = int(math.min(math.max(swingStrength * YARDSTICK_MULTIPLE, 20), 200))
 
 var array<Swing> structuralSwings = array.new<Swing>()
-var float structLastSH = na
-var float structLastSL = na
-var float nearestLiveHighEdge = na
-var float nearestLiveLowEdge = na
+// Buffers of recent mediums, newest first. They hold REFERENCES into the store,
+// which is what lets the nesting test upgrade a stored swing in place.
+var array<Swing> mediumHighs = array.new<Swing>()
+var array<Swing> mediumLows = array.new<Swing>()
+var float lastHighPrice = na
+var float lastLowPrice = na
+var string lastHighType = na
+var string lastLowType = na
+// 1 uptrend, -1 downtrend, 0 range. Used for one thing: a broken high is only a
+// tradeable role-flip in an uptrend. In a downtrend it is a stop-run.
+var int trendState = 0
+// EXPORTED to the render section. Bumped once per pivot event — every event both
+// registers a medium and may upgrade one, and both change what belongs in which
+// tier. The render pass reselects ONLY when this moves, which is what keeps drawn
+// lines in place instead of letting a re-shuffled ranking hide them.
+var int structureStamp = 0
 
-float volatilityYardstick = ta.highest(source = high, length = volatilityRefBars) - ta.lowest(source = low, length = volatilityRefBars)
-float swingVolumeAverage = ta.sma(source = volume, length = volatilityRefBars)
-float currentBodyHigh = math.max(open, close)
-float currentBodyLow = math.min(open, close)
+// EXPORTED to the render section as the unit behind Min Separation.
+float yardstick = ta.highest(source = high, length = referenceBars) - ta.lowest(source = low, length = referenceBars)
+float bodyHigh = math.max(open, close)
+float bodyLow = math.min(open, close)
+bool useWicks = levelSource == LevelSourceMode.WICKS
 
-float swingHighSource = swingSourceMode == SwingSourceMode.WICKS ? high : currentBodyHigh
-float swingLowSource = swingSourceMode == SwingSourceMode.WICKS ? low : currentBodyLow
-float confirmedSwingHighRaw = ta.pivothigh(source = swingHighSource, leftbars = swingLeftBars, rightbars = swingRightBars)
-float confirmedSwingLowRaw = ta.pivotlow(source = swingLowSource, leftbars = swingLeftBars, rightbars = swingRightBars)
-bool hasSwingHigh = confirmedBar and not na(confirmedSwingHighRaw)
-bool hasSwingLow = confirmedBar and not na(confirmedSwingLowRaw)
+// PASS ONE — medium (degree-1) pivots. Symmetric by definition: a swing has a
+// lower high on BOTH sides, so there is no asymmetry to tune.
+float pivotHigh = ta.pivothigh(source = useWicks ? high : bodyHigh, leftbars = swingStrength, rightbars = swingStrength)
+float pivotLow = ta.pivotlow(source = useWicks ? low : bodyLow, leftbars = swingStrength, rightbars = swingStrength)
 
-// Neighbourhood extremes across the full swing window, read at the confirming
-// bar: the window spans exactly bar_index - left - right through bar_index.
-float windowHighest = ta.highest(source = high, length = swingWindowBars)
-float windowLowest = ta.lowest(source = low, length = swingWindowBars)
-float swingYardstick = nz(source = volatilityYardstick[swingRightBars], replacement = volatilityYardstick)
-float swingBodyHigh = currentBodyHigh[swingRightBars]
-float swingBodyLow = currentBodyLow[swingRightBars]
-float swingWickHigh = high[swingRightBars]
-float swingWickLow = low[swingRightBars]
-// Hoisted out of f_registerStructuralSwing: history references inside a
-// conditionally-called function can defeat Pine's referencing-length detection.
-float swingBarVolume = volume[swingRightBars]
-float swingBarVolumeBaseline = swingVolumeAverage[swingRightBars]
+// Hoisted out of the conditional blocks below, because history references inside
+// a conditionally-called function can defeat Pine's referencing-length detection.
+// Every offset is the constant `swingStrength` — no dynamic-offset history anywhere.
+float pivotWickHigh = high[swingStrength]
+float pivotWickLow = low[swingStrength]
+float pivotBodyHigh = bodyHigh[swingStrength]
+float pivotBodyLow = bodyLow[swingStrength]
+int pivotBarIndex = bar_index - swingStrength
 
-f_getNearestLiveEdges() =>
-    float refreshedHighEdge = na
-    float refreshedLowEdge = na
-    for trackedSwing in structuralSwings
-        if not trackedSwing.isBroken
-            if trackedSwing.isHigh
-                refreshedHighEdge := na(refreshedHighEdge) ? trackedSwing.zoneBottom : math.min(refreshedHighEdge, trackedSwing.zoneBottom)
-            else
-                refreshedLowEdge := na(refreshedLowEdge) ? trackedSwing.zoneTop : math.max(refreshedLowEdge, trackedSwing.zoneTop)
-    [refreshedHighEdge, refreshedLowEdge]
+// Higher highs AND higher lows is an uptrend, lower highs AND lower lows a
+// downtrend, anything else a range — "a sideways market is characterized by flat
+// highs and lows".
+f_trendState() =>
+    lastHighType == "HH" and lastLowType == "HL" ? 1 : lastHighType == "LH" and lastLowType == "LL" ? -1 : 0
 
-f_registerStructuralSwing(bool isHighSwing, string swingType, float swingBodyEdge, float wickEdge, float swingProminence, float yardstick) =>
-    // Zone = real body to extreme wick, widened at the inner (approach) edge
-    // when the raw rectangle is thinner than the floor.
-    float minHeight = yardstick * minZoneHeightPercent / 100.0
-    float innerEdge = isHighSwing ? math.min(swingBodyEdge, wickEdge - minHeight) : math.max(swingBodyEdge, wickEdge + minHeight)
-    Swing newSwing = Swing.new(outerEdge = wickEdge, bodyEdge = swingBodyEdge, zoneTop = isHighSwing ? wickEdge : innerEdge, zoneBottom = isHighSwing ? innerEdge : wickEdge, barIndex = bar_index - swingRightBars, isHigh = isHighSwing, structureType = swingType, isBroken = false, isPierced = false, touchCount = 0, prominence = swingProminence, volume = swingBarVolume, volumeBaseline = swingBarVolumeBaseline)
+f_register(bool isHigh, string structureType, float pivotPrice, float wickEdge, float bodyEdge) =>
+    // Zone spans real body to extreme wick, widened at the inner (approach) edge
+    // when the raw span is thinner than the floor.
+    float minHeight = yardstick * ZONE_TOLERANCE_PERCENT / 100.0
+    float innerEdge = isHigh ? math.min(bodyEdge, wickEdge - minHeight) : math.max(bodyEdge, wickEdge + minHeight)
+    Swing newSwing = Swing.new(levelPrice = pivotPrice, zoneTop = isHigh ? wickEdge : innerEdge, zoneBottom = isHigh ? innerEdge : wickEdge, barIndex = pivotBarIndex, isHigh = isHigh, degree = DEGREE_MEDIUM, structureType = structureType, isBroken = false, isPierced = false, touchCount = 0, prominence = 0.0, isStrong = false, brokenBarIndex = int(na), isInsideZone = false)
     array.unshift(id = structuralSwings, value = newSwing)
     while array.size(id = structuralSwings) > MAX_SWINGS_STORED
         array.pop(id = structuralSwings)
     newSwing
 
-if hasSwingHigh
-    // Prominence is measured from the wick, against the lowest low of the same
-    // window: a swing high that only clears its neighbourhood by a few cents is
-    // a shelf, not something "everybody and their gerbil" can see.
-    float swingHighProminence = swingYardstick > 0 ? (swingWickHigh - windowLowest) / swingYardstick : 0.0
-    if swingHighProminence * 100.0 >= minProminencePercent
-        string shType = na(structLastSH) ? "SH" : swingWickHigh > structLastSH ? "HH" : "LH"
-        structLastSH := swingWickHigh
-        Swing registeredHighSwing = f_registerStructuralSwing(isHighSwing = true, swingType = shType, swingBodyEdge = swingBodyHigh, wickEdge = swingWickHigh, swingProminence = swingHighProminence, yardstick = swingYardstick)
-        nearestLiveHighEdge := na(nearestLiveHighEdge) ? registeredHighSwing.zoneBottom : math.min(nearestLiveHighEdge, registeredHighSwing.zoneBottom)
+f_pushMedium(array<Swing> buffer, Swing newSwing) =>
+    array.unshift(id = buffer, value = newSwing)
+    while array.size(id = buffer) > MEDIUM_BUFFER
+        array.pop(id = buffer)
+    // Explicit terminal expression: a Pine function ending on a `while` has no
+    // determinable return type.
+    array.size(id = buffer)
 
-if hasSwingLow
-    float swingLowProminence = swingYardstick > 0 ? (windowHighest - swingWickLow) / swingYardstick : 0.0
-    if swingLowProminence * 100.0 >= minProminencePercent
-        string slType = na(structLastSL) ? "SL" : swingWickLow < structLastSL ? "LL" : "HL"
-        structLastSL := swingWickLow
-        Swing registeredLowSwing = f_registerStructuralSwing(isHighSwing = false, swingType = slType, swingBodyEdge = swingBodyLow, wickEdge = swingWickLow, swingProminence = swingLowProminence, yardstick = swingYardstick)
-        nearestLiveLowEdge := na(nearestLiveLowEdge) ? registeredLowSwing.zoneTop : math.max(nearestLiveLowEdge, registeredLowSwing.zoneTop)
-
-int structuralSwingCount = array.size(id = structuralSwings)
-
-// PIERCE vs BREAKOUT, per Barry's explicit rule: "notice none of these does the
-// whole bar, meaning the high, low, and the close, get above that high… these
-// are not breakouts, these are pierces, and we do not trade pierces of
-// resistance." So a zone is only BROKEN when the entire bar clears it — low
-// above the zone top for resistance, high below the zone bottom for support.
-// Part of a bar through the zone is a PIERCE and the zone stays live, which is
-// the fade setup, not an invalidation.
+// PASS TWO — degree-2 nesting. Each new medium shifts the buffer, so index 1 is
+// tested as the middle peak exactly once and can never be upgraded twice.
 //
-// This also requires the close, so the scan must run at bar close and only at
-// bar close. The nearest-edge pre-tests live inside the gate too, so unconfirmed
-// ticks pay nothing below this line.
-if confirmedBar and structuralSwingCount > 0
-    bool canTestHighSwings = not na(nearestLiveHighEdge) and high >= nearestLiveHighEdge
-    bool canTestLowSwings = not na(nearestLiveLowEdge) and low <= nearestLiveLowEdge
-    if canTestHighSwings or canTestLowSwings
-        bool refreshNearestLive = false
-        for trackedSwing in structuralSwings
-            bool shouldCheckSwing = trackedSwing.isHigh ? canTestHighSwings : canTestLowSwings
-            if shouldCheckSwing and not trackedSwing.isBroken
-                if trackedSwing.isHigh
-                    if low > trackedSwing.zoneTop
-                        trackedSwing.isBroken := true
-                        refreshNearestLive := true
-                    else if high >= trackedSwing.zoneBottom
-                        trackedSwing.touchCount := trackedSwing.touchCount + 1
-                        trackedSwing.isPierced := trackedSwing.isPierced or high > trackedSwing.zoneTop
+// The lag is real: a major is confirmed only when the NEXT medium confirms. In
+// exchange the definition self-guards — if price had exceeded the middle peak, a
+// higher medium would exist on the right and `middle > right` would fail, so a
+// confirmed major has not been taken out by any medium since. This costs nothing
+// in visibility now that the medium tier draws too: the level is already on the
+// chart as a medium and simply thickens when the nesting completes.
+f_tryUpgrade(array<Swing> buffer, bool isHigh) =>
+    bool upgraded = false
+    if array.size(id = buffer) >= NESTING_DEPTH
+        Swing rightSwing = array.get(id = buffer, index = 0)
+        Swing middleSwing = array.get(id = buffer, index = 1)
+        Swing leftSwing = array.get(id = buffer, index = 2)
+        // Strict comparison: flat highs are a range, not a major swing.
+        bool nests = isHigh ? middleSwing.levelPrice > rightSwing.levelPrice and middleSwing.levelPrice > leftSwing.levelPrice : middleSwing.levelPrice < rightSwing.levelPrice and middleSwing.levelPrice < leftSwing.levelPrice
+        if nests
+            float flank = isHigh ? math.max(rightSwing.levelPrice, leftSwing.levelPrice) : math.min(rightSwing.levelPrice, leftSwing.levelPrice)
+            float prominence = yardstick > 0 ? math.abs(number = middleSwing.levelPrice - flank) / yardstick : 0.0
+            if prominence * 100.0 >= minProminencePercent
+                middleSwing.degree := DEGREE_MAJOR
+                middleSwing.prominence := prominence
+                upgraded := true
+    upgraded
+
+if confirmedBar and not na(pivotHigh)
+    string structureType = na(lastHighPrice) ? "SH" : pivotHigh > lastHighPrice ? "HH" : "LH"
+    lastHighPrice := pivotHigh
+    lastHighType := structureType
+    trendState := f_trendState()
+    Swing registeredHigh = f_register(isHigh = true, structureType = structureType, pivotPrice = pivotHigh, wickEdge = pivotWickHigh, bodyEdge = pivotBodyHigh)
+    f_pushMedium(buffer = mediumHighs, newSwing = registeredHigh)
+    f_tryUpgrade(buffer = mediumHighs, isHigh = true)
+    structureStamp := structureStamp + 1
+
+if confirmedBar and not na(pivotLow)
+    string structureType = na(lastLowPrice) ? "SL" : pivotLow < lastLowPrice ? "LL" : "HL"
+    lastLowPrice := pivotLow
+    lastLowType := structureType
+    trendState := f_trendState()
+    Swing registeredLow = f_register(isHigh = false, structureType = structureType, pivotPrice = pivotLow, wickEdge = pivotWickLow, bodyEdge = pivotBodyLow)
+    f_pushMedium(buffer = mediumLows, newSwing = registeredLow)
+    f_tryUpgrade(buffer = mediumLows, isHigh = false)
+    structureStamp := structureStamp + 1
+
+int swingCount = array.size(id = structuralSwings)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🔨 BREAK, PIERCE, PROMOTION
+// Advances every stored swing's state on confirmed bars, and promotes the origin
+// of a breaking leg to strong structure.
+// ═════════════════════════════════════════════════════════════════════════════
+// The origin of a breaking leg is the newest unbroken swing on the OPPOSITE side:
+// price broke a high, so the rally that broke it started from the last low. That
+// low is now strong structure.
+f_promoteLegOrigin(bool brokenWasHigh) =>
+    bool promoted = false
+    for candidate in structuralSwings
+        if not promoted and candidate.isHigh != brokenWasHigh and not candidate.isBroken
+            candidate.isStrong := true
+            promoted := true
+    promoted
+
+// Requiring the whole bar to clear means this runs at bar close and only at bar
+// close.
+//
+// A break deliberately does NOT bump `structureStamp`. The level keeps its slot
+// and simply repaints in the broken style, which is how the state change becomes
+// something you can watch happen instead of the line vanishing.
+bool brokeHigh = false
+bool brokeLow = false
+bool mssThisBar = false
+
+if confirmedBar and swingCount > 0
+    for swing in structuralSwings
+        if not swing.isBroken
+            bool cleared = swing.isHigh ? low > swing.zoneTop : high < swing.zoneBottom
+            // Side-agnostic: zoneTop/zoneBottom already carry the orientation.
+            bool inside = high >= swing.zoneBottom and low <= swing.zoneTop
+            if cleared
+                swing.isBroken := true
+                swing.brokenBarIndex := bar_index
+                swing.isInsideZone := false
+                // Breaking STRONG structure is the market structure shift —
+                // "price violates a market extreme that shouldn't be violated in
+                // theory". `isStrong` is left set so the level can be labelled as
+                // the shift; every PRIVILEGE that flows from strong structure is
+                // keyed off `isStrong and not isBroken` instead of `isStrong`.
+                mssThisBar := mssThisBar or swing.isStrong
+                if swing.isHigh
+                    brokeHigh := true
                 else
-                    if high < trackedSwing.zoneBottom
-                        trackedSwing.isBroken := true
-                        refreshNearestLive := true
-                    else if low <= trackedSwing.zoneTop
-                        trackedSwing.touchCount := trackedSwing.touchCount + 1
-                        trackedSwing.isPierced := trackedSwing.isPierced or low < trackedSwing.zoneBottom
-        if refreshNearestLive
-            [refreshedHighEdge, refreshedLowEdge] = f_getNearestLiveEdges()
-            nearestLiveHighEdge := refreshedHighEdge
-            nearestLiveLowEdge := refreshedLowEdge
+                    brokeLow := true
+            else if inside
+                // Count a visit on ENTRY only; the latch clears on the first bar
+                // that does not intersect the zone at all.
+                if not swing.isInsideZone
+                    swing.touchCount := swing.touchCount + 1
+                    swing.isInsideZone := true
+                swing.isPierced := swing.isPierced or (swing.isHigh ? high > swing.zoneTop : low < swing.zoneBottom)
+            else
+                swing.isInsideZone := false
+
+    // After the scan, so the store is never iterated from two places at once.
+    if brokeHigh
+        f_promoteLegOrigin(brokenWasHigh = true)
+    if brokeLow
+        f_promoteLegOrigin(brokenWasHigh = false)
+
+alertcondition(condition = mssThisBar, title = "Market Structure Shift", message = "Major Swings: strong structure broken on {{ticker}} {{interval}}")
+
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 RENDER ENGINE
-// Keeps the newest levels per side, unbroken first, then paints them into a
-// fixed pool of lines plus optional structure labels.
+// 🎨 RENDER
+// Selects one bucket of levels per tier and side, holds that selection until the
+// structure itself changes, and repaints the held levels every bar.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_RENDER = "🏷️ Render"
-const string GROUP_LEVELS = "🎨 Level Lines"
+const int LABEL_SIZE = 12
+const int LABEL_DISTANCE_TICKS = 2
 
-bool showSwingLabels = input.bool(defval = false, title = "Show Labels", tooltip = "Shows the text labels for each visible swing level.", group = GROUP_RENDER)
-int labelSizeInput = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all swing labels.", group = GROUP_RENDER)
-int labelHorizontalAdjustBars = input.int(defval = 0, title = "Label Horizontal Adjust (Bars)", minval = -50, maxval = 50, tooltip = "Fine-tunes label position left or right in bars.", group = GROUP_RENDER)
-int labelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Moves all labels away from their line by the chosen number of minimum ticks.", group = GROUP_RENDER)
-LevelExtendMode renderExtendMode = input.enum(defval = LevelExtendMode.FOREVER, title = "Extend Mode", tooltip = "Right Forever uses a Pine ray, so the level reaches the right edge on its own and CANNOT fall behind price if the refresh ever stalls. Fixed Bars recomputes the right end every bar, which looks tidier but goes stale the moment a refresh is missed.", group = GROUP_RENDER)
-int renderExtendBars = input.int(defval = 20, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right levels extend beyond the current bar in Fixed Bars mode. Pine caps xloc.bar_index drawings at roughly 500 bars into the future, hence the 400 ceiling.", group = GROUP_RENDER)
-int renderLabelRightBars = input.int(defval = 1, title = "Label Right Bars", minval = 1, maxval = 1000, tooltip = "How far left from the current bar labels should sit.", group = GROUP_RENDER)
-color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by swing labels.", group = GROUP_RENDER)
+int majorLevelsPerSide = input.int(defval = 2, title = "Major Levels Per Side", minval = 0, maxval = 10, tooltip = "Degree-2 levels drawn above and below, thick. These are the chart's skeleton, so keep the count low. 0 hides the tier.", group = GROUP_LEVELS)
+int mediumLevelsPerSide = input.int(defval = 3, title = "Medium Levels Per Side", minval = 0, maxval = 10, tooltip = "Degree-1 levels drawn above and below, thin. This is the tier that keeps structure visible NEAR price in between the majors. 0 hides the tier.", group = GROUP_LEVELS)
+bool reserveNearest = input.bool(defval = true, title = "Always Show Nearest", tooltip = "Reserves one slot per side, per tier, for the level closest to price — the nearest resistance above and the nearest support below always draw, even when stronger levels further away would otherwise take every slot. Same behaviour as structure-and-levels.pine's intraday S/R. Turn off for a pure strength ranking.", group = GROUP_LEVELS)
+float minSeparationPercent = input.float(defval = 10.0, title = "Min Separation (%)", minval = 0.0, maxval = 100.0, step = 5.0, tooltip = "Levels in the same tier and on the same side closer together than this much of the reference range collapse to the stronger one, so three readings of the same shelf cannot eat every slot. Live strong structure and the reserved nearest level are exempt.", group = GROUP_LEVELS)
 
-LevelAnchorMode levelAnchorMode = input.enum(defval = LevelAnchorMode.BODY, title = "Line Anchor", tooltip = "Which edge of the swing zone the line sits on. Body Edge is Barry's drawing rule ('I would draw it from the real body, not from the high') and is the edge price meets first on the approach. The full body-to-wick zone is still what the pierce and breakout tests use — only the drawing collapses to one line.", group = GROUP_LEVELS)
-color liveLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Live Color", tooltip = "Line color for levels price has not broken. Includes levels price has tested and respected.", group = GROUP_LEVELS, inline = "live")
-LineStyleMode liveLevelStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", tooltip = "Line style for live levels.", group = GROUP_LEVELS, inline = "live")
-color piercedLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Pierced Color", tooltip = "Line color for levels part of a bar has poked through without the whole bar clearing. Barry's fade setup — the level is still live.", group = GROUP_LEVELS, inline = "pierced")
-LineStyleMode piercedLevelStyle = input.enum(defval = LineStyleMode.SOLID, title = "", tooltip = "Line style for pierced levels.", group = GROUP_LEVELS, inline = "pierced")
-color brokenLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Broken Color", tooltip = "Line color for levels a whole bar — high, low and close — has cleared. Same weight as the others by default; the dashed style is what marks it as history.", group = GROUP_LEVELS, inline = "broken")
-LineStyleMode brokenLevelStyle = input.enum(defval = LineStyleMode.DASHED, title = "", tooltip = "Line style for broken levels.", group = GROUP_LEVELS, inline = "broken")
-bool useWeightBasedWidth = input.bool(defval = true, title = "Strength-Based Line Width", tooltip = "When on, levels draw at 2px and only the strongest thicken to 3px. When off, all levels use the fixed width below.", group = GROUP_LEVELS)
-int fixedLineWidth = input.int(defval = 2, title = "Fixed Line Width", minval = 1, maxval = 5, tooltip = "Line width used for all swing levels when Strength-Based Line Width is off.", group = GROUP_LEVELS)
+bool showSwingLabels = input.bool(defval = false, title = "Show Labels", tooltip = "Tier and state: ★ marks a major (degree 2), ◆ marks live strong structure, then the HH/LH/HL/LL type, the visit count, and the state — PRC pierced, BRK broken, FLIP broken and retesting with the trend, MSS a broken strong level.", group = GROUP_STYLE)
+// Monochrome-ish ramp on purpose — two Snow Storm/Polar Night neutrals for the
+// ordinary states and two Frost blues for the states that mean something. No
+// Aurora: a level is structure, not a signal, and a red or yellow line reads as a
+// call to act. Opacity carries the hierarchy, brightest and most opaque on top:
+//   strong  NORD9  /20  brightest — the stop-loss level
+//   pierced NORD10 /40  deeper blue — the fade setup, still live
+//   broken  NORD3  /30  dark, recedes into the chart — history
+//   live    NORD4  /60  neutral gray, deliberately quiet — the default state
+color liveColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Live", tooltip = "A level price has neither pierced nor broken.", group = GROUP_STYLE, inline = "live")
+LineStyleMode liveStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", group = GROUP_STYLE, inline = "live")
+color piercedColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Pierced", tooltip = "Part of a bar poked through without the whole bar clearing. Barry's fade setup — the level is still live and we do not trade pierces of resistance.", group = GROUP_STYLE, inline = "pierced")
+LineStyleMode piercedStyle = input.enum(defval = LineStyleMode.SOLID, title = "", group = GROUP_STYLE, inline = "pierced")
+color brokenColor = input.color(defval = color.new(color = NORD3, transp = 30), title = "Broken", tooltip = "A whole bar — high, low and close — has cleared the zone. The level is held in place rather than dropped, so the style change is visible and the retest is tradeable.", group = GROUP_STYLE, inline = "broken")
+LineStyleMode brokenStyle = input.enum(defval = LineStyleMode.DASHED, title = "", group = GROUP_STYLE, inline = "broken")
+color strongColor = input.color(defval = color.new(color = NORD9, transp = 20), title = "Strong", tooltip = "Strong structure — an extreme promoted by a break of structure on the opposite side. These are the stop-loss levels.", group = GROUP_STYLE, inline = "strong")
+LineStyleMode strongStyle = input.enum(defval = LineStyleMode.SOLID, title = "", group = GROUP_STYLE, inline = "strong")
 
-// DRAWING LIFECYCLE — a fixed pool, allocated on confirmed bars, mutated
-// forever, never deleted. This is AI.md pitfall #10, and it is half the
-// disappearing-levels bug.
+// A fixed pool, allocated on confirmed bars, mutated forever, never deleted.
+// AI.md pitfall #10: intrabar ticks may only MODIFY a live drawing. At the
+// max_*_count cap an intrabar creation garbage-collects the oldest COMMITTED
+// drawing, and that collection does not roll back. Setting properties on an
+// already-minted object is safe on any tick.
 //
-// Half one, DELETION. Three earlier attempts tuned WHEN to delete and redraw
-// (islastconfirmedhistory, then a bar_index stamp, then a commit vs provisional
-// split on 2026-07-27). All three kept minting drawings on unconfirmed ticks,
-// which is the part that bites: an intrabar creation that pushes the object
-// count to the max_*_count cap garbage-collects the OLDEST COMMITTED drawing,
-// and that collection does NOT roll back. The pool ends that — objects are
-// minted once on a confirmed bar and only ever have properties set afterwards,
-// so the count never moves and the GC has nothing to take.
-//
-// Half two, STALENESS, which is what survives a pool and still reads to the eye
-// as "the indicator disappeared". A level whose right end is recomputed as
-// bar_index + N only reaches N bars past the last refresh. If the refresh
-// stalls for any reason — islast never true on the running bar, a runtime error
-// parking the script, a feed re-sync — the lines do not vanish, they stop
-// following. Price walks past them, they slide off the left of the viewport,
-// and toggling visibility (a full recalculation) snaps them back. Indistinguish-
-// able from deletion unless you scroll left and find them sitting there.
-// The cure is geometric, not procedural: extend.right makes each level a RAY.
-// It reaches the right edge of the chart on its own, with no per-bar update, so
-// a stalled refresh can no longer hide it.
-const int RENDER_POOL_PER_SIDE = 2
-color renderHiddenColor = color.new(color = NORD4, transp = 100)
-int drawingPoolSize = swingLevelsPerSide * RENDER_POOL_PER_SIDE
-var array<line> levelLines = array.new<line>()
-var array<label> levelLabels = array.new<label>()
+// Levels are rays. A line whose right end is recomputed as bar_index + N only
+// reaches N bars past the last refresh, so a stalled refresh leaves it behind
+// price — which reads to the eye as "the indicator disappeared" even though the
+// line is still sitting there off-screen. extend.right needs no per-bar update.
+color hiddenColor = color.new(color = NORD4, transp = 100)
+int poolSize = (majorLevelsPerSide + mediumLevelsPerSide) * 2
+var array<LevelSlot> levelSlots = array.new<LevelSlot>()
+
+if confirmedBar and array.size(id = levelSlots) < poolSize
+    while array.size(id = levelSlots) < poolSize
+        array.push(id = levelSlots, value = LevelSlot.new(levelLine = line.new(x1 = bar_index, y1 = close, x2 = bar_index, y2 = close, xloc = xloc.bar_index, extend = extend.right, color = hiddenColor, width = 1), levelLabel = label.new(x = bar_index, y = close, text = "", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = hiddenColor, size = LABEL_SIZE, textalign = text.align_left)))
 
 f_lineStyle(LineStyleMode styleMode) =>
     styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
 
-f_levelLineWidth(int levelWeight) =>
-    // 2px is the floor — a hairline disappears against the candles. Only a
-    // top-weight level (high prominence plus a volume or repeat-touch bonus)
-    // earns the third pixel.
-    not useWeightBasedWidth ? fixedLineWidth : levelWeight >= 3 ? 3 : 2
+// A broken level is only a role-flip candidate while the flip agrees with the
+// trend: a high broken in an uptrend is former resistance that just became
+// support, which is the retest actually worth trading.
+f_isFreshFlip(Swing swing) =>
+    bool inWindow = swing.isBroken and not na(swing.brokenBarIndex) and (bar_index - swing.brokenBarIndex) <= referenceBars
+    inWindow and (swing.isHigh ? trendState == 1 : trendState == -1)
 
-f_labelY(float levelPrice) =>
-    // Push labels away from price: above resistance levels, below support levels.
-    levelPrice + syminfo.mintick * labelDistanceTicks * (levelPrice >= close ? 1.0 : -1.0)
-
-f_levelPrice(Swing swing) =>
-    // The zone stays intact for the pierce and breakout tests; this only picks
-    // which of its edges carries the drawn line.
-    levelAnchorMode == LevelAnchorMode.WICK ? swing.outerEdge : levelAnchorMode == LevelAnchorMode.MID ? (swing.outerEdge + swing.bodyEdge) / 2.0 : swing.bodyEdge
-
-// Strength is prominence first — how far the swing stands out of its own
-// neighbourhood — then confirmation from participation and from the market
-// having respected the level more than once. Hoisted out of the paint loop
-// because it now decides WHICH levels are drawn, not just how thick they are.
-f_swingWeight(Swing swing) =>
-    int baseWeight = swing.prominence >= 1.0 ? 3 : swing.prominence >= 0.5 ? 2 : 1
-    int volumeBonus = not na(swing.volumeBaseline) and swing.volume > swing.volumeBaseline * volumeSurgeMultiple ? 1 : 0
-    int touchBonus = swing.touchCount >= 2 ? 1 : 0
-    int(math.min(baseWeight + volumeBonus + touchBonus, 3))
-
-// Allocated on the first confirmed bar — historical bars are all confirmed, so
-// this fires on bar one and never again. The size test doubles as the top-up
-// path if a rolled-back execution ever leaves the pool short.
-if confirmedBar and array.size(id = levelLines) < drawingPoolSize
-    while array.size(id = levelLines) < drawingPoolSize
-        array.push(id = levelLines, value = line.new(x1 = bar_index, y1 = close, x2 = bar_index, y2 = close, xloc = xloc.bar_index, extend = renderExtendMode == LevelExtendMode.FOREVER ? extend.right : extend.none, color = renderHiddenColor, width = 1, style = line.style_solid))
-        array.push(id = levelLabels, value = label.new(x = bar_index, y = close, text = "", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderHiddenColor, color = NORD0, size = labelSizeInput, textalign = text.align_left))
-
-f_paintLevel(int slotIndex, Swing swing, string labelText, color levelColor, LineStyleMode styleMode, int levelWeight) =>
-    float levelPrice = f_levelPrice(swing = swing)
-    line levelLine = array.get(id = levelLines, index = slotIndex)
-    line.set_xy1(id = levelLine, x = swing.barIndex, y = levelPrice)
-    line.set_xy2(id = levelLine, x = bar_index + renderExtendBars, y = levelPrice)
-    line.set_color(id = levelLine, color = levelColor)
-    line.set_width(id = levelLine, width = f_levelLineWidth(levelWeight = levelWeight))
-    line.set_style(id = levelLine, style = f_lineStyle(styleMode = styleMode))
-
-    label levelLabel = array.get(id = levelLabels, index = slotIndex)
-    if showSwingLabels
-        // Clamp so labels never float left of the swing origin when the swing
-        // is younger than the label offset.
-        int labelX = int(math.max(swing.barIndex, bar_index - renderLabelRightBars + labelHorizontalAdjustBars))
-        label.set_xy(id = levelLabel, x = labelX, y = f_labelY(levelPrice = levelPrice))
-        label.set_text(id = levelLabel, text = labelText)
-        label.set_textcolor(id = levelLabel, textcolor = labelTextColor)
-    else
-        label.set_text(id = levelLabel, text = "")
-        label.set_textcolor(id = levelLabel, textcolor = renderHiddenColor)
-
+// Takes the array as a parameter so the caller can pick a side with a ternary at
+// the CALL site. A ternary that returns an array reference is not reliable inside
+// a `for ... in` header.
 f_isTooClose(array<float> renderedEdges, float candidateEdge, float minSeparation) =>
     bool tooClose = false
-    for renderedEdge in renderedEdges
-        if math.abs(number = renderedEdge - candidateEdge) < minSeparation
+    for rendered in renderedEdges
+        if math.abs(number = rendered - candidateEdge) < minSeparation
             tooClose := true
     tooClose
 
 f_parkSlot(int slotIndex) =>
-    line levelLine = array.get(id = levelLines, index = slotIndex)
-    line.set_xy1(id = levelLine, x = bar_index, y = close)
-    line.set_xy2(id = levelLine, x = bar_index, y = close)
-    line.set_color(id = levelLine, color = renderHiddenColor)
-    label levelLabel = array.get(id = levelLabels, index = slotIndex)
-    label.set_xy(id = levelLabel, x = bar_index, y = close)
-    label.set_text(id = levelLabel, text = "")
-    label.set_textcolor(id = levelLabel, textcolor = renderHiddenColor)
+    LevelSlot parkedSlot = array.get(id = levelSlots, index = slotIndex)
+    line.set_xy1(id = parkedSlot.levelLine, x = bar_index, y = close)
+    line.set_xy2(id = parkedSlot.levelLine, x = bar_index, y = close)
+    line.set_color(id = parkedSlot.levelLine, color = hiddenColor)
+    label.set_xy(id = parkedSlot.levelLabel, x = bar_index, y = close)
+    label.set_text(id = parkedSlot.levelLabel, text = "")
+    label.set_textcolor(id = parkedSlot.levelLabel, textcolor = hiddenColor)
 
-// Refresh once per BAR, not once per tick. `confirmedBar` sits in the OR, so
-// every closed bar at the chart edge repaints regardless of the stamp — the
-// stamp only saves work on the ticks in between. islastconfirmedhistory is a
-// second, independent trigger for the load path.
-var int lastRenderedBar = na
-bool atChartEdge = barstate.islast or barstate.islastconfirmedhistory
-bool shouldRefreshRender = atChartEdge and (confirmedBar or na(lastRenderedBar) or bar_index != lastRenderedBar)
+// STICKY SELECTION. `heldLevels` is rebuilt only when `structureStamp` moves, i.e.
+// when a new swing registers or a medium is upgraded. Between those events the
+// SAME levels repaint every bar with fresh state.
+//
+// Rebuilding the ranking every bar was the disappearing-lines bug, and it had
+// nothing to do with garbage collection: the pool is six to twenty objects against
+// a 500-line cap, so nothing was ever collected. Scores drift continuously as touch
+// counts rise, flip windows expire and the trend flips, so a level would fall out
+// of the top-N, get parked, and come back a few bars later. Under replay, where you
+// watch every bar land, that reads as lines flickering in and out.
+//
+// Declared ahead of f_fillBucket because the function writes into it, and a Pine
+// function cannot reference a global declared below it.
+var array<Swing> heldLevels = array.new<Swing>()
+var array<float> scores = array.new<float>()
+var int lastSelectionStamp = -1
 
-var array<float> renderedHighEdges = array.new<float>()
-var array<float> renderedLowEdges = array.new<float>()
-var array<float> candidateScores = array.new<float>()
-var array<int> candidateIndices = array.new<int>()
+// Fills one tier/side bucket into `heldLevels`: the reserved nearest level first,
+// then by descending score. `ranked` holds STORE indices directly — see the
+// scoring loop for why there is no lookup table between the two.
+f_fillBucket(int wantDegree, bool wantHigh, int limit, float minSeparation, array<int> ranked) =>
+    array<float> taken = array.new<float>()
+    int filled = 0
 
-if shouldRefreshRender
-    if confirmedBar
-        lastRenderedBar := bar_index + 1
-    array.clear(id = renderedHighEdges)
-    array.clear(id = renderedLowEdges)
+    // RESERVED NEAREST. Strength-first ranking alone will happily fill every slot
+    // with dominant peaks far from price, leaving nothing to trade against at the
+    // hard right edge. One slot per side per tier is reserved for the closest level
+    // so there is always structure adjacent to price action.
+    if reserveNearest and limit > 0
+        Swing nearest = na
+        float bestDistance = na
+        for candidate in structuralSwings
+            if candidate.degree == wantDegree and candidate.isHigh == wantHigh
+                // Nearest resistance ABOVE price, nearest support BELOW it.
+                float distance = wantHigh ? candidate.levelPrice - close : close - candidate.levelPrice
+                if distance > 0 and (na(bestDistance) or distance < bestDistance)
+                    bestDistance := distance
+                    nearest := candidate
+        if not na(nearest)
+            array.push(id = heldLevels, value = nearest)
+            array.push(id = taken, value = nearest.levelPrice)
+            filled += 1
 
-    float minSeparation = volatilityYardstick * minSeparationPercent / 100.0
+    if array.size(id = ranked) > 0
+        for rank = 0 to array.size(id = ranked) - 1
+            if filled < limit
+                Swing candidate = array.get(id = structuralSwings, index = array.get(id = ranked, index = rank))
+                if candidate.degree == wantDegree and candidate.isHigh == wantHigh
+                    // A one-tick separation test doubles as the "is this the level
+                    // the reserved pass already took" check.
+                    bool alreadyHeld = f_isTooClose(renderedEdges = taken, candidateEdge = candidate.levelPrice, minSeparation = syminfo.mintick)
+                    // Collapse duplicate readings of the same shelf. Live strong
+                    // structure is EXEMPT: collapsing a strong low into a fresher
+                    // shelf that happens to sit inside the band throws away the one
+                    // level the stop is supposed to hang from.
+                    bool tooClose = candidate.isStrong and not candidate.isBroken ? false : f_isTooClose(renderedEdges = taken, candidateEdge = candidate.levelPrice, minSeparation = minSeparation)
+                    if not alreadyHeld and not tooClose
+                        array.push(id = heldLevels, value = candidate)
+                        array.push(id = taken, value = candidate.levelPrice)
+                        filled += 1
+    filled
+
+if barstate.islast or barstate.islastconfirmedhistory
+    float minSeparation = yardstick * minSeparationPercent / 100.0
+    // The ACTUAL pool size, not the configured one: if a rolled-back execution
+    // ever left the pool short, indexing to the configured size is out of bounds.
+    int livePool = array.size(id = levelSlots)
+
+    if structureStamp != lastSelectionStamp
+        lastSelectionStamp := structureStamp
+        array.clear(id = heldLevels)
+        array.clear(id = scores)
+
+        // Bands, largest term first:
+        //   4000  live strong structure. The stop-loss level; nothing outranks it.
+        //   3000  fresh role-flip. Above a generic unbroken level on purpose — a
+        //         flat penalty on broken levels buried them the moment enough
+        //         unbroken candidates existed, i.e. exactly when the retest became
+        //         tradeable.
+        //   2000  unbroken.
+        //   x100  respected visits, then prominence. Visits weigh first: a level the
+        //         market turned at three times beats a taller untested peak. Both
+        //         are CLAMPED, and the clamps are what keep the bands bands: the two
+        //         sum to at most 700, inside the 1000-wide gap to the tier above. An
+        //         unclamped term bleeds across and inverts the ordering it sits under.
+        //   +eps  recency, so the ordering is deterministic.
+        //
+        // Every stored swing is scored — there is no filter — so `scores` is indexed
+        // by store index and a sorted index IS a store index, with no lookup table in
+        // between. Reintroducing a filter here means reintroducing that table. The
+        // tier and side filtering happens in f_fillBucket, while WALKING the ranked
+        // order, precisely so this property survives.
+        if swingCount > 0
+            for swingIndex = 0 to swingCount - 1
+                Swing swing = array.get(id = structuralSwings, index = swingIndex)
+                float strongBonus = swing.isStrong and not swing.isBroken ? 4000.0 : 0.0
+                float flipBonus = f_isFreshFlip(swing = swing) ? 3000.0 : 0.0
+                float unbrokenBonus = swing.isBroken ? 0.0 : 2000.0
+                float recency = (swingCount - swingIndex) / (swingCount * 100.0)
+                array.push(id = scores, value = strongBonus + flipBonus + unbrokenBonus + math.min(swing.touchCount, 5) * 100.0 + math.min(swing.prominence, 2.0) * 100.0 + recency)
+
+        if array.size(id = scores) > 0
+            array<int> ranked = array.sort_indices(id = scores, order = order.descending)
+            // Majors first so they take the low slot indices, then mediums.
+            f_fillBucket(wantDegree = DEGREE_MAJOR, wantHigh = true, limit = majorLevelsPerSide, minSeparation = minSeparation, ranked = ranked)
+            f_fillBucket(wantDegree = DEGREE_MAJOR, wantHigh = false, limit = majorLevelsPerSide, minSeparation = minSeparation, ranked = ranked)
+            f_fillBucket(wantDegree = DEGREE_MEDIUM, wantHigh = true, limit = mediumLevelsPerSide, minSeparation = minSeparation, ranked = ranked)
+            f_fillBucket(wantDegree = DEGREE_MEDIUM, wantHigh = false, limit = mediumLevelsPerSide, minSeparation = minSeparation, ranked = ranked)
+
+    // REPAINT every pass, so a break, a pierce or a strong-structure promotion
+    // shows up on a level that is already drawn.
+    int heldCount = array.size(id = heldLevels)
     int slotIndex = 0
-    int poolSize = array.size(id = levelLines)
-    int renderedHighCount = 0
-    int renderedLowCount = 0
+    int highsDrawn = 0
+    int lowsDrawn = 0
+    if heldCount > 0
+        for heldIndex = 0 to heldCount - 1
+            if slotIndex < livePool
+                Swing swing = array.get(id = heldLevels, index = heldIndex)
+                bool isMajor = swing.degree == DEGREE_MAJOR
+                // A level that WAS strong and has since broken is history, not
+                // structure. It keeps `isStrong` only so it can be labelled MSS,
+                // so every privilege — the score bonus, the separation exemption,
+                // the color, the style — reads this instead.
+                bool isLiveStrong = swing.isStrong and not swing.isBroken
+                color stateColor = isLiveStrong ? strongColor : swing.isBroken ? brokenColor : swing.isPierced ? piercedColor : liveColor
+                LineStyleMode stateStyle = isLiveStrong ? strongStyle : swing.isBroken ? brokenStyle : swing.isPierced ? piercedStyle : liveStyle
 
-    // STRENGTH-FIRST SELECTION. The store is newest-first, and walking it in
-    // that order was the whole clutter problem: three recent middling shelves
-    // took every slot ahead of the one swing that actually holds the chart, and
-    // whichever of them arrived first also won the separation test. Score every
-    // surviving swing, sort descending, then fill greedily — so a slot is only
-    // ever lost to something STRONGER, and the level that survives a collapsed
-    // cluster is the strongest reading of that shelf rather than the newest.
-    //
-    // Score bands, largest term first: unbroken (when prioritized) outranks
-    // broken outright, then strength 1-3, then raw prominence as a continuous
-    // tiebreak inside a band, then recency as the last resort so the ordering is
-    // deterministic. Prominence is clamped below 10 to keep it from bleeding
-    // into the strength band above it.
-    array.clear(id = candidateScores)
-    array.clear(id = candidateIndices)
-    // Guarded because a Pine `for` with start > end counts DOWN instead of
-    // skipping, and index -1 on an empty store is a runtime error.
-    if structuralSwingCount > 0
-        for structuralIndex = 0 to structuralSwingCount - 1
-            Swing candidateSwing = array.get(id = structuralSwings, index = structuralIndex)
-            int candidateWeight = f_swingWeight(swing = candidateSwing)
-            if candidateWeight >= minStrengthToPlot
-                float unbrokenBonus = swingPrioritizeUnbroken and not candidateSwing.isBroken ? 1000.0 : 0.0
-                float recencyTiebreak = (structuralSwingCount - structuralIndex) / (structuralSwingCount * 100.0)
-                array.push(id = candidateScores, value = unbrokenBonus + candidateWeight * 10.0 + math.min(candidateSwing.prominence, 9.9) + recencyTiebreak)
-                array.push(id = candidateIndices, value = structuralIndex)
+                LevelSlot paintedSlot = array.get(id = levelSlots, index = slotIndex)
+                line.set_xy1(id = paintedSlot.levelLine, x = swing.barIndex, y = swing.levelPrice)
+                line.set_xy2(id = paintedSlot.levelLine, x = bar_index, y = swing.levelPrice)
+                line.set_color(id = paintedSlot.levelLine, color = stateColor)
+                // Width is the TIER, not the state — that is the whole point of
+                // drawing two degrees: the skeleton reads at a glance.
+                line.set_width(id = paintedSlot.levelLine, width = isMajor ? 3 : 2)
+                line.set_style(id = paintedSlot.levelLine, style = f_lineStyle(styleMode = stateStyle))
 
-    int candidateCount = array.size(id = candidateScores)
-    if candidateCount > 0
-        array<int> rankedOrder = array.sort_indices(id = candidateScores, order = order.descending)
-        for rankIndex = 0 to candidateCount - 1
-            int structuralIndex = array.get(id = candidateIndices, index = array.get(id = rankedOrder, index = rankIndex))
-            Swing structuralSwing = array.get(id = structuralSwings, index = structuralIndex)
-            bool isHighSwing = structuralSwing.isHigh
-            int sideRenderedCount = isHighSwing ? renderedHighCount : renderedLowCount
-            if sideRenderedCount < swingLevelsPerSide and slotIndex < poolSize
-                // Collapse duplicate readings of the same shelf, measured on the
-                // price the line is actually DRAWN at, not on the wick. Under
-                // the default Body Edge anchor those are different numbers: two
-                // swings whose wicks sit a comfortable 12% apart can have bodies
-                // 2% apart, clear this test on their wicks, and then draw almost
-                // on top of each other. Comparing drawn prices is what makes the
-                // separation input mean what the chart shows.
-                float candidatePrice = f_levelPrice(swing = structuralSwing)
-                bool tooClose = isHighSwing ? f_isTooClose(renderedEdges = renderedHighEdges, candidateEdge = candidatePrice, minSeparation = minSeparation) : f_isTooClose(renderedEdges = renderedLowEdges, candidateEdge = candidatePrice, minSeparation = minSeparation)
-                if not tooClose
-                    string swingTypeVal = structuralSwing.structureType
-                    string swingStructureLabel = swingTypeVal == "HH" or swingTypeVal == "LH" or swingTypeVal == "HL" or swingTypeVal == "LL" ? " " + swingTypeVal : ""
-                    // Sequence now reads strongest-first per side: H1 is the
-                    // level holding that side, not merely the most recent one.
-                    int swingSequence = sideRenderedCount + 1
-                    int swingWeight = f_swingWeight(swing = structuralSwing)
-                    string swingPrefix = isHighSwing ? "H" : "L"
-                    string swingTouchLabel = structuralSwing.touchCount > 0 ? " ×" + str.tostring(value = structuralSwing.touchCount) : ""
-                    string swingStateLabel = structuralSwing.isBroken ? " BRK" : structuralSwing.isPierced ? " PRC" : ""
-                    LineStyleMode swingLineStyle = structuralSwing.isBroken ? brokenLevelStyle : structuralSwing.isPierced ? piercedLevelStyle : liveLevelStyle
-                    color swingLineColor = structuralSwing.isBroken ? brokenLevelColor : structuralSwing.isPierced ? piercedLevelColor : liveLevelColor
-                    string swingLabel = swingPrefix + str.tostring(value = swingSequence) + swingStructureLabel + swingTouchLabel + swingStateLabel
-                    f_paintLevel(slotIndex = slotIndex, swing = structuralSwing, labelText = swingLabel, levelColor = swingLineColor, styleMode = swingLineStyle, levelWeight = swingWeight)
-                    slotIndex += 1
-                    if isHighSwing
-                        array.push(id = renderedHighEdges, value = candidatePrice)
-                        renderedHighCount += 1
-                    else
-                        array.push(id = renderedLowEdges, value = candidatePrice)
-                        renderedLowCount += 1
+                if showSwingLabels
+                    // Sequence is per side across both tiers, and majors fill first,
+                    // so H1 is the strongest major above price. The ★ is what tells
+                    // you which tier a given line belongs to.
+                    int sequence = swing.isHigh ? highsDrawn + 1 : lowsDrawn + 1
+                    // MSS outranks BRK: a broken level that was strong is a market
+                    // structure shift, not routine history.
+                    string state = swing.isBroken ? (swing.isStrong ? " MSS" : f_isFreshFlip(swing = swing) ? " FLIP" : " BRK") : swing.isPierced ? " PRC" : ""
+                    // Not named `text` — that shadows Pine's `text.*` namespace.
+                    string labelText = (swing.isHigh ? "H" : "L") + str.tostring(value = sequence) + (isMajor ? " ★" : "") + (isLiveStrong ? " ◆" : "") + " " + swing.structureType + (swing.touchCount > 0 ? " ×" + str.tostring(value = swing.touchCount) : "") + state
+                    label.set_text(id = paintedSlot.levelLabel, text = labelText)
+                    label.set_textcolor(id = paintedSlot.levelLabel, textcolor = stateColor)
+                    // Push labels away from price: above resistance, below support.
+                    label.set_xy(id = paintedSlot.levelLabel, x = bar_index, y = swing.levelPrice + syminfo.mintick * LABEL_DISTANCE_TICKS * (swing.levelPrice >= close ? 1.0 : -1.0))
+                else
+                    label.set_text(id = paintedSlot.levelLabel, text = "")
+                    label.set_textcolor(id = paintedSlot.levelLabel, textcolor = hiddenColor)
 
-    // Park whatever the swing store did not fill. Guarded because a Pine `for`
-    // with start > end counts DOWN instead of skipping.
-    if slotIndex < poolSize
-        for parkIndex = slotIndex to poolSize - 1
+                if swing.isHigh
+                    highsDrawn += 1
+                else
+                    lowsDrawn += 1
+                slotIndex += 1
+
+    // Park whatever the selection did not fill. Guarded because a Pine `for` with
+    // start > end counts DOWN instead of skipping.
+    if slotIndex < livePool
+        for parkIndex = slotIndex to livePool - 1
             f_parkSlot(slotIndex = parkIndex)
