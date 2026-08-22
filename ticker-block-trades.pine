@@ -1,18 +1,19 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Ticker Tape Block Trades - sub-pane block-trade histogram, companion to Ticker Tape
-
-//@version=6
-indicator(title = "Ticker Tape — Block Trades", shorttitle = "🐋 Tape Blocks", overlay = false, max_bars_back = 0, precision = 0)
-
 // 🐋 BLOCK TRADES PANEL — companion to 📰 Ticker Tape
-// ONE plot, and only one. Height = how many individual prints ≥ the size threshold
-// hit that bar (Barry's "block trades" — single large orders, NOT cumulative bar
-// volume). Colour = what those prints were: cyan buy-side / red sell-side, two tiers
-// per side for aggressive vs passive, NORD4 for a mid-dominant (dark pool) bar and
-// for a dead-even one. The type breakdown IS the colour — there are no per-type
-// series and no second reading to cross-check against, by design. The bar carries
-// its whole state: how much, which way, how urgent.
+// ONE plot DRAWS, and only one. Height = how many individual prints ≥ the size
+// threshold hit that bar (Barry's "block trades" — single large orders, NOT
+// cumulative bar volume). Colour = what those prints were: cyan buy-side / red
+// sell-side, two tiers per side for aggressive vs passive, NORD4 for a mid-dominant
+// (dark pool) bar and for a dead-even one. The bar carries its whole state: how
+// much, which way, how urgent.
+//
+// The pane stays one column per bar. What CHANGED on 2026-08-21 (this note used to
+// say there were no per-type series at all) is that the five buckets behind the
+// colour are now published as READOUTS — status line and Data Window, never
+// `display.pane`, so they add no marks and no autoscale. A five-block column is 5
+// at-ask or 5 hit-the-bid or 5 midpoint crosses, and the hue alone cannot separate
+// those on a 2-pixel column; the readouts can. Nothing about the drawing changed.
 //
 // WHY A SEPARATE INDICATOR: Pine's `overlay` is fixed at compile time — a single
 // script can't toggle between the price chart and a pane at runtime. So the
@@ -46,10 +47,14 @@ indicator(title = "Ticker Tape — Block Trades", shorttitle = "🐋 Tape Blocks
 // shows an empty tape AND an empty panel rather than two different approximations.
 // Do not reintroduce it on either side.
 
+//@version=6
+indicator(title = "Ticker Tape — Block Trades", shorttitle = "🐋 Tape Blocks", overlay = false, max_bars_back = 0, precision = 0)
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
-// Nord Theme Color
+// Shared immutable values used by the indicator, including the Nord palette.
 // ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
 // Polar Night
 const color NORD0  = #2E3440
 const color NORD1  = #3B4252
@@ -139,13 +144,26 @@ blockSizeThreshold = input.int(defval = 1000, title = "Block Size Threshold", mi
 // ULTIMATE (confirmed 2026-08-14) — this default is served in full on his charts, so
 // there is nothing left to raise. The only reason to lower it is load time.
 //
-// KNOWN, UNDOCUMENTED, MEASURED: TradingView also appears to cap a single bar's 1T
-// array at ~1,002 entries. Not in the limitations page, the timeframes page or the
-// FAQ — but observed here on 2026-07-29 while debugging ticker-tape.pine, where
-// minutes carrying >1,000 trades lost 15-20% of their volume against the raw feed and
-// the block count destabilised on exactly those bars. Treat it as a per-bar ceiling
-// that exists but has no citation; the fix if it bites is a lower chart timeframe, not
-// a bigger budget.
+// ⚠️ THE "~1,002 PER-BAR CAP" IS RETRACTED (2026-08-21). It was recorded here and in
+// ticker-tape.pine after a 2026-07-29 session where minutes carrying >1,000 trades
+// lost 15-20% of their volume against the raw feed. A replay of today's open
+// DISPROVES it: the 09:30 bar served 2,765 entries and 09:31 served 1,451, both read
+// straight off the Ticks Served probe below. There is no ~1,002 ceiling, and no
+// per-bar ceiling has been demonstrated at any number — only a per-bar array whose
+// size tracks the minute's traffic.
+//
+// The 2026-07-29 volume shortfall was real but MISATTRIBUTED. The likeliest cause is
+// that TradingView's 1T feed is itself lossy on heavy minutes (consolidation at the
+// source), which produces exactly that volume gap with no array limit involved. That
+// would make it a DATA-COMPLETENESS limit, which no Pine-side engine change can fix —
+// as opposed to a ceiling, which a time-keyed watermark could have worked around.
+// Unresolved, and worth keeping in mind before trusting a busy bar's count to the
+// share: the panel counts every print it is SERVED, exactly, and cannot know what it
+// was not served.
+//
+// The real, documented constraint is the budget above: 200,000 intrabars TOTAL, spent
+// newest-first. At today's rates (~900-1,500 prints/min, 2,765 at the open) that is
+// roughly 2-3 hours of 1-min bars before older bars have no array at all.
 tickBudget = input.int(defval = 200000, title = "Tick Budget", minval = 1000, maxval = 200000, step = 1000, tooltip = "calc_bars_count for the 1T request — the number of TICKS this indicator asks TradingView for, shared across the whole request rather than allocated per bar. The budget is spent from the newest bar backwards, so it decides how far back the panel has any data at all.\n\nCeilings are per plan: 100,000 on Basic/Essential/Plus/Premium, 125,000 on Expert, 200,000 on Ultimate. Your plan's ceiling applies to anything above it, so the 200,000 default is safe everywhere.\n\nKEEP THIS EQUAL TO Ticker Tape's own Tick Budget, or the two will see different amounts of tape and disagree on exactly the bars only one of them can reach.\n\nLower it if the chart is slow to load — that is the only reason to.", group = GROUP_DATA)
 
 // A block count is a COUNT — never negative, floor always zero. Pine has no
@@ -298,7 +316,44 @@ varip int blockShownMid = 0
 // the current cut, which is exactly what the block count cannot show you.
 varip float blockShownMaxSize = na
 
+// 🧪 SERVING PROBE — TEMPORARY (2026-08-21, Henry). Rebuilt the same day it was
+// written: the first version hunted for an assumed ~1,002-print ceiling, and the
+// first replay of the open DISPROVED that ceiling — the 09:30 bar served 2,765
+// entries and 09:31 served 1,451. So there is no magic number here any more; this
+// version measures what is actually happening with no threshold baked in.
+//
+//   • Ticks Served (peak) — the largest array this bar ever handed us. If a real
+//     per-bar ceiling exists, this is what plateaus at it across many busy bars.
+//     If it keeps taking whatever value the minute's traffic implies, there is no
+//     ceiling and nothing to work around.
+//   • Rescans — how many times the count engine actually rebuilt on this bar. On a
+//     LIVE forming bar this must keep climbing while prints arrive; if it stalls
+//     while the minute is still running, the count has stopped tracking the tape,
+//     which is the failure worth catching.
+//   • Tail Changes (no growth) — the array's last element moved while its SIZE did
+//     not. That is the signature of a ROLLING window: prints still arriving, the
+//     size already at whatever limit exists, so the size-based watermark below goes
+//     blind to them. Any non-zero reading means the fix is to key the watermark on
+//     print TIME instead of array length. No floor is applied, so this is valid at
+//     any ceiling, including none.
+//
+// Replay caveat: a replayed bar runs ONE execution, so Rescans reads 1 and Tail
+// Changes cannot read anything but 0. Both need a live forming bar to mean
+// anything. Ticks Served (peak) is valid in replay.
+varip int blockPeakTicksServed = 0
+varip int blockLastSeenSize = 0
+varip int blockRescanCount = 0
+varip int blockTailChanges = 0
+varip float blockLastTailPrice = na
+varip float blockLastTailVolume = na
+
 if barstate.isnew
+    blockPeakTicksServed := 0
+    blockLastSeenSize := 0
+    blockRescanCount := 0
+    blockTailChanges := 0
+    blockLastTailPrice := na
+    blockLastTailVolume := na
     blockProcessedTickCount := 0
     blockShownCount := 0
     blockShownAggBuy := 0
@@ -307,6 +362,24 @@ if barstate.isnew
     blockShownAggSell := 0
     blockShownMid := 0
     blockShownMaxSize := na
+
+// Runs on EVERY execution, deliberately outside the watermark gate below — in the
+// rolling case that gate is precisely what stops firing, so a probe inside it
+// would see nothing and "prove" the array frozen.
+if availableTickCount > 0
+    if availableTickCount > blockPeakTicksServed
+        blockPeakTicksServed := availableTickCount
+    float probeTailPrice = tickPrices.get(index = availableTickCount - 1)
+    float probeTailVolume = tickVolumes.get(index = availableTickCount - 1)
+    // Evidence only when the SIZE held steady and the tail moved anyway. While the
+    // array is still growing the tail changes on every execution, which proves
+    // nothing. No size floor — a rolling window is a rolling window at any length.
+    if availableTickCount == blockLastSeenSize and not na(blockLastTailPrice) and
+         (probeTailPrice != blockLastTailPrice or probeTailVolume != blockLastTailVolume)
+        blockTailChanges += 1
+    blockLastTailPrice := probeTailPrice
+    blockLastTailVolume := probeTailVolume
+    blockLastSeenSize := availableTickCount
 
 if availableTickCount != blockProcessedTickCount and availableTickCount > 0
     int rebuiltCount = 0
@@ -351,6 +424,7 @@ if availableTickCount != blockProcessedTickCount and availableTickCount > 0
     blockShownMid := rebuiltMid
     blockShownMaxSize := rebuiltMaxSize
     blockProcessedTickCount := availableTickCount
+    blockRescanCount += 1  // 🧪 probe
 
 // Net block delta — the bar's order-flow lean in one number: buy-side (at ask +
 // above ask) − sell-side (at bid + below bid), mid prints neutral. Identical
@@ -395,6 +469,44 @@ bool blockMidDominant = blockShownMid > blockBuySide and blockShownMid > blockSe
 // already in the net delta's magnitude.
 color blockBarColor = blockMidDominant ? blockMidColor : blockNetDelta > 0 ? (blockShownAggBuy >= blockShownAtAsk ? blockAggBuyColor : blockAtAskColor) : blockNetDelta < 0 ? (blockShownAggSell >= blockShownAtBid ? blockAggSellColor : blockAtBidColor) : blockNeutralColor
 
+// ── PER-TYPE COUNTS, Data Window only (Henry 2026-08-21) ──
+// The five buckets the colour is derived from, exposed as their own series so the
+// crosshair reads the breakdown instead of inferring it from one hue: a 5-block bar
+// is 5 at-ask, or 5 hit-the-bid, or 5 midpoint crosses, and those are three
+// different pieces of information wearing one column. Buy side, sell side and net
+// delta are all sums of these five, so nothing further needs its own line.
+//
+// These are NOT gated to zero-block bars the way the column is — a bar that served
+// prints and qualified none is a real, readable 0 across all five. What they ARE
+// gated on is whether the bar had TICK DATA AT ALL, and blockShownMaxSize is
+// already exactly that latch: it stays na unless at least one print with a real
+// volume was served. Without the gate every bar the 1T budget never reached would
+// report "0 dark pool blocks, 0 at ask…" — a confident zero standing in for a bar
+// the indicator knows nothing about, which is the one thing a readout must never
+// do (AI.md: na fallbacks must not impersonate data). na shows as n/a instead.
+bool blockTicksServedThisBar = not na(blockShownMaxSize)
+float blockTypeAggBuy  = blockTicksServedThisBar ? blockShownAggBuy  : na
+float blockTypeAtAsk   = blockTicksServedThisBar ? blockShownAtAsk   : na
+float blockTypeAtBid   = blockTicksServedThisBar ? blockShownAtBid   : na
+float blockTypeAggSell = blockTicksServedThisBar ? blockShownAggSell : na
+float blockTypeMid     = blockTicksServedThisBar ? blockShownMid     : na
+
+// Readout COLOUR, prepared here with the series it belongs to (AI.md plotting rule:
+// only the final plot() statement lives in the render section).
+//
+// COLOUR IS THE SIDE, THE LABEL IS THE TIER — and that split is forced by the colour
+// system, not a preference. The four directional inputs encode side as HUE and
+// aggression as ALPHA (NORD8 t40/t80 buy, NORD11 t80/t40 sell). Text at transp 80 is
+// illegible on the dark background, but forcing all four to transp 0 collapses the
+// alpha channel and renders AggBuy identical to AtAsk and AtBid identical to AggSell
+// — four labels, two colours, the tier silently gone. (Shipped that way on
+// 2026-08-21; corrected 2026-08-22.) Nord has no second red to break the tie with
+// either. So the readout takes the SIDE hue at full opacity and lets the label carry
+// the tier, which it already does unambiguously: "Aggressive Buy" against "At Ask".
+color blockSideBuyText  = color.new(color = blockAggBuyColor,  transp = 0)
+color blockSideSellText = color.new(color = blockAggSellColor, transp = 0)
+color blockSideMidText  = color.new(color = blockMidColor,     transp = 0)
+
 // 🚫 THE ZERO LINE: a bar with no blocks is a ZERO, and a bar-style plot fed 0
 // still draws — a zero-HEIGHT bar, which TradingView renders as a stub sitting on
 // the baseline. Across the long stretches with no block prints (and all the history
@@ -408,6 +520,8 @@ float blockShownBlocks = blockShownCount > 0 ? blockShownCount : na
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER
+// Final plot statements only — every series, colour and visibility flag they read is
+// computed in the section above.
 // ═════════════════════════════════════════════════════════════════════════════
 
 // THE plot — the only one that draws, the only one in the Data Window and the status
@@ -434,6 +548,30 @@ plot(series = blockShownBlocks, title = "Blocks", style = plot.style_histogram, 
 // switch to Line; the CEILING anchor is what stops a 1-block bar filling the pane.
 plot(series = 0,            title = "Scale Floor",   color = color.new(color = NORD3, transp = 100), display = display.pane, editable = false)
 plot(series = scaleMaximum, title = "Scale Ceiling", color = color.new(color = NORD3, transp = 100), display = display.pane, editable = false)
+
+// 📊 PER-TYPE BREAKDOWN — status line + Data Window (Henry 2026-08-21: readable on
+// hover, not only under the crosshair). NOT on `display.pane`, so none of these
+// draws a column and none joins the autoscale — the histogram is untouched.
+//
+// Ordered as a ladder, most-buy at the top down to most-sell, with the mid bucket
+// last: Aggressive Buy → At Ask → At Bid → Aggressive Sell → Dark Pool / Mid. Read
+// top to bottom that is the bar's flow. Titles are spelled out in full — an
+// abbreviated set was tried on 2026-08-21 and reverted the next day; the status line
+// truncates gracefully on its own and the Data Window has the room.
+//
+// Colours (`blockType*Text`) are prepared in the owning section above.
+plot(series = blockTypeAggBuy,  title = "Aggressive Buy (blocks)",  color = blockSideBuyText,  display = display.status_line + display.data_window, editable = false)
+plot(series = blockTypeAtAsk,   title = "At Ask (blocks)",           color = blockSideBuyText,  display = display.status_line + display.data_window, editable = false)
+plot(series = blockTypeAtBid,   title = "At Bid (blocks)",           color = blockSideSellText, display = display.status_line + display.data_window, editable = false)
+plot(series = blockTypeAggSell, title = "Aggressive Sell (blocks)",  color = blockSideSellText, display = display.status_line + display.data_window, editable = false)
+plot(series = blockTypeMid,     title = "Dark Pool / Mid (blocks)",  color = blockSideMidText,  display = display.status_line + display.data_window, editable = false)
+
+// 🧪 CAP PROBE READOUT — Data Window ONLY, temporary. See the probe block above:
+// crosshair a busy minute, and if "Array Pegged" reads 1 then "Tail Changes"
+// decides whether the lost prints are recoverable in Pine at all.
+plot(series = blockPeakTicksServed, title = "Ticks Served (peak)",        display = display.data_window, editable = false)
+plot(series = blockRescanCount,     title = "Rescans",                   display = display.data_window, editable = false)
+plot(series = blockTailChanges,     title = "Tail Changes (no growth)",  display = display.data_window, editable = false)
 
 // 🔬 CALIBRATION READOUT — Data Window ONLY. Not on the pane, not in the status line,
 // not in the autoscale, so it cannot disturb the columns. See the varip declaration

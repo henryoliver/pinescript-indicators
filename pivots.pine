@@ -1,0 +1,629 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Floor Pivots, Camarilla & Previous Day — three independent level engines that
+// run alone or together, each with its own resolution, history depth, styling
+// and label placement.
+
+//@version=6
+indicator(title = "Pivots", shorttitle = "📍 Pivots", overlay = true, max_lines_count = 500, max_labels_count = 100, max_boxes_count = 100, calc_bars_count = 5000)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+// Snow Storm
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+// Frost
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧩 TYPE DEFINITIONS
+// Custom Pine types and enums used by the indicator.
+// ═════════════════════════════════════════════════════════════════════════════
+// Line style and label side are chosen from ENUMS rather than name strings: the
+// option list and the resolver are the same declaration, so they cannot drift.
+enum LineStyleMode
+    SOLID  = "Solid"
+    DASHED = "Dashed"
+    DOTTED = "Dotted"
+
+enum LabelSideMode
+    LEFT  = "Left"
+    RIGHT = "Right"
+
+enum PivotResolution
+    HOURS_4   = "4 Hours"
+    HOURS_3   = "3 Hours"
+    HOURS_2   = "2 Hours"
+    HOUR_1    = "1 Hour"
+    DAY_1     = "1 Day"
+    DAYS_3    = "3 Days"
+    DAYS_9    = "9 Days"
+    WEEK_1    = "1 Week"
+    MONTH_1   = "1 Month"
+    MONTHS_3  = "3 Months"
+    MONTHS_6  = "6 Months"
+    MONTHS_12 = "12 Months"
+
+// One completed source period: the high/low/close the levels are derived from,
+// the identity of the period they came from, and the chart time the levels
+// started being IN FORCE. Every engine stores its sources as an array of these,
+// so history segments and the active set read the same record.
+//
+// sourceId (the source period's own open time) is the roll key — it is stable
+// for as long as one source period governs, regardless of how many chart days
+// pass. startTime is only the DISPLAY anchor and never keys anything.
+type PeriodSource
+    int   sourceId
+    int   startTime
+    float high
+    float low
+    float close
+
+// Where a section's labels go. Each engine owns one of these so its labels can
+// sit on a different side, or at a different offset, from another engine's —
+// which is how two levels that land close together stay readable.
+type LabelPlacement
+    bool          visible
+    LabelSideMode side
+    int           nudgeBars
+
+// Classic floor pivot set. A mid-pivot sits between every adjacent pair of
+// rungs, PP outward — eight of them across a full four-rung ladder. cprTop and
+// cprBottom are the Central Pivot Range boundaries, normalized so cprTop is
+// always the higher of the two.
+type FloorLevels
+    float pivot
+    float resistance1
+    float resistance2
+    float resistance3
+    float resistance4
+    float support1
+    float support2
+    float support3
+    float support4
+    float midPivotResistance1
+    float midResistance1Resistance2
+    float midResistance2Resistance3
+    float midResistance3Resistance4
+    float midPivotSupport1
+    float midSupport1Support2
+    float midSupport2Support3
+    float midSupport3Support4
+    float cprTop
+    float cprBottom
+
+// Camarilla equation set. Rungs are grouped by ROLE, not just by number:
+// 1/2 are scale-out targets, 3 is the reversion rung, 4 is the breakout rung,
+// 5/6 are trend-day extensions.
+type CamarillaLevels
+    float high1
+    float high2
+    float high3
+    float high4
+    float high5
+    float high6
+    float low1
+    float low2
+    float low3
+    float low4
+    float low5
+    float low6
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧮 SHARED CALCULATIONS
+// Values and helpers genuinely consumed by more than one section: the
+// confirmed-bar flag, the session-normalized ticker every engine requests data
+// with, the resolution resolver, and the period-source tracker that
+// turns a higher-timeframe request into the snapshot array engines render from.
+// ═════════════════════════════════════════════════════════════════════════════
+bool confirmedBar = barstate.isconfirmed
+string sharedRegularSymbol = ticker.modify(tickerid = syminfo.tickerid, session = session.regular)
+
+f_resolutionCode(PivotResolution resolutionInput) =>
+    switch resolutionInput
+        PivotResolution.HOURS_4   => "240"
+        PivotResolution.HOURS_3   => "180"
+        PivotResolution.HOURS_2   => "120"
+        PivotResolution.HOUR_1    => "60"
+        PivotResolution.DAY_1     => "D"
+        PivotResolution.DAYS_3    => "3D"
+        PivotResolution.DAYS_9    => "9D"
+        PivotResolution.WEEK_1    => "W"
+        PivotResolution.MONTH_1   => "M"
+        PivotResolution.MONTHS_3  => "3M"
+        PivotResolution.MONTHS_6  => "6M"
+        PivotResolution.MONTHS_12 => "12M"
+        => "D"
+
+// Adds transparency to a color without clipping past fully transparent. Used by
+// the outward pivot fade and by every set that is not the one in force.
+f_dim(color baseColor, int extraTransparency) =>
+    color.new(color = baseColor, transp = math.min(100, color.t(baseColor) + extraTransparency))
+
+// The chart's CURRENT trading day start — the timestamp of the first bar of the
+// day as the chart itself sees it. It follows the chart's session, so it lands
+// on 18:00 the previous evening for Globex futures, 04:00 for an equity chart
+// with extended hours, and 09:30 for a regular-hours-only chart. This is the
+// display anchor for a level set, which is why a new day's levels appear from
+// its very first bar instead of waiting for the regular session to open.
+var int sharedTradingDayStart = na
+if na(sharedTradingDayStart) or ta.change(source = time(timeframe = "D")) != 0
+    sharedTradingDayStart := time
+
+// Fetches the source period for a level engine and maintains its snapshot
+// array. ONE request.security per engine per bar — the current and prior period
+// with lookahead_on (stable-snapshot usage: a completed period's values are
+// already final, so lookahead only removes the 1-bar lag, no repaint).
+//
+// Which period is COMPLETED: offset 0 counts as completed once its close time
+// has passed, so during premarket the still-forming period is skipped and the
+// prior one is used; the postmarket guard keeps today's levels from flipping to
+// tomorrow's set at 16:00 (the switch happens at the next premarket open).
+//
+// The roll key is the completed period's OWN open time, never the display
+// anchor: a weekly set governs five chart days, so keying on the anchor would
+// mint a fresh set every morning. The anchor is stamped once, when the set is
+// minted, from the trading-day start passed in.
+//
+// Returns the STILL-FORMING period's high/low/close, which feeds the developing
+// next-period preview (all na while no period is forming, i.e. premarket).
+f_refreshPeriodSnapshots(array<PeriodSource> store, string periodTimeframe, int keepCount, int anchorTime) =>
+    [currentHigh, currentLow, currentClose, currentOpenTime, currentCloseTime, priorHigh, priorLow, priorClose, priorOpenTime] = request.security(symbol = sharedRegularSymbol, timeframe = periodTimeframe, expression = [high, low, close, time, time_close, high[1], low[1], close[1], time[1]], lookahead = barmerge.lookahead_on, gaps = barmerge.gaps_off, ignore_invalid_symbol = true)
+    bool zeroCompleted = not na(currentCloseTime) and time >= currentCloseTime and not session.ispostmarket
+    float sourceHigh = zeroCompleted ? currentHigh : priorHigh
+    float sourceLow = zeroCompleted ? currentLow : priorLow
+    float sourceClose = zeroCompleted ? currentClose : priorClose
+    int sourceId = zeroCompleted ? currentOpenTime : priorOpenTime
+    if not na(sourceHigh) and not na(sourceLow) and not na(sourceClose) and not na(sourceId) and not na(anchorTime)
+        bool needsNewRecord = true
+        if array.size(id = store) > 0
+            PeriodSource newestSource = array.get(id = store, index = array.size(id = store) - 1)
+            if newestSource.sourceId == sourceId
+                // Same source period still governs — refresh the values in
+                // place so a late settlement revision is picked up, and leave
+                // the display anchor where it was first stamped.
+                needsNewRecord := false
+                newestSource.high := sourceHigh
+                newestSource.low := sourceLow
+                newestSource.close := sourceClose
+        if needsNewRecord
+            array.push(id = store, value = PeriodSource.new(sourceId = sourceId, startTime = anchorTime, high = sourceHigh, low = sourceLow, close = sourceClose))
+            while array.size(id = store) > keepCount
+                array.shift(id = store)
+    [zeroCompleted ? float(na) : currentHigh, zeroCompleted ? float(na) : currentLow, zeroCompleted ? float(na) : currentClose]
+
+// The set currently in force. Returns an all-na record when the store is still
+// empty, so every downstream formula na-propagates instead of erroring.
+f_newestSource(array<PeriodSource> store) =>
+    array.size(id = store) > 0 ? array.get(id = store, index = array.size(id = store) - 1) : PeriodSource.new(sourceId = na, startTime = na, high = na, low = na, close = na)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📍 FLOOR PIVOTS
+// Classic floor-trader pivots from the completed higher-timeframe regular
+// session: PP with four resistance and four support rungs, the optional
+// midpoint rungs, and the Central Pivot Range (the TC/BC band around PP).
+// Fully independent of the other engines — its own resolution, history,
+// styling, label placement and visibility.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_FLOOR = "📍 Floor Pivots"
+
+bool showFloorPivots = input.bool(defval = true, title = "Show Floor Pivots", tooltip = "Master switch for the classic floor-pivot engine. It runs completely independently of the Camarilla section — either can be shown alone or both together, each on its own resolution.", group = GROUP_FLOOR)
+PivotResolution floorPivotResolutionInput = input.enum(defval = PivotResolution.DAY_1, title = "Resolution", tooltip = "Higher timeframe the floor pivot set is calculated from. Daily is the day-trading standard; Weekly and Monthly give the swing context levels.", group = GROUP_FLOOR)
+int floorPivotLadderDepth = input.int(defval = 4, title = "Ladder Depth", minval = 1, maxval = 4, tooltip = "How many resistance and support rungs to draw (R1–R4 / S1–S4). R1/S1 and R2/S2 carry the vast majority of intraday reactions — drop to 2 for a clean chart.", group = GROUP_FLOOR)
+bool showFloorPivotMidLevels = input.bool(defval = true, title = "Show Mid-Pivots", tooltip = "Adds the midpoint rungs between PP/R1, R1/R2, PP/S1 and S1/S2. These catch the reactions that stall halfway between the main rungs.", group = GROUP_FLOOR)
+bool showFloorPivotCpr = input.bool(defval = false, title = "Show Central Pivot Range (TC/BC)", tooltip = "Adds the Central Pivot Range — the band between the top and bottom central pivots around PP. Price accepting above the whole band is bullish, below it bearish, and inside it is value.", group = GROUP_FLOOR)
+bool showFloorPivotLabels = input.bool(defval = true, title = "Labels", inline = "floor_labels", tooltip = "Whether this engine's labels are shown, which end of the line they sit at, and a nudge in bars from that end.\n\nGiving each engine its own side and nudge is how you keep labels readable when two engines put levels close together — send one Left and the other Right, or offset them by a few bars.", group = GROUP_FLOOR)
+LabelSideMode floorPivotLabelSide = input.enum(defval = LabelSideMode.LEFT, title = "", inline = "floor_labels", group = GROUP_FLOOR)
+int floorPivotLabelNudge = input.int(defval = 0, title = "", minval = -100, maxval = 100, inline = "floor_labels", group = GROUP_FLOOR)
+int floorPivotHistoryPeriods = input.int(defval = 0, title = "History (periods)", minval = 0, maxval = 10, tooltip = "Draws the level sets of this many previous periods as segments spanning the period they were in force for. 0 = only the current set. Costs one line per level per period.", group = GROUP_FLOOR)
+bool showFloorPivotDeveloping = input.bool(defval = false, title = "Show Developing Next-Period Set", tooltip = "Projects the NEXT period's pivots from the still-forming period's running high/low/close, drawn dimmed to the right of the current bar. Useful late in the session to see where tomorrow's levels are landing — the values keep moving until the period closes.", group = GROUP_FLOOR)
+// Support & resistance ladders: one color each, fading outward (R1/S1 boldest,
+// R4/S4 faintest). Line style is POSITIONAL — inner rungs (1,2) solid, outer
+// rungs (3,4) dashed — so those groups take a color + width only. PP, the
+// mid-pivots and the CPR each get their own color / line style / width.
+color floorPivotResistanceColor = input.color(defval = color.new(color = NORD8, transp = 80), title = "Resistance", inline = "floor_res", group = GROUP_FLOOR, tooltip = "Color and width for R1–R4. The color fades outward by the Outward Fade step (R1 boldest, R4 faintest); R1/R2 draw solid, R3/R4 dashed.")
+int floorPivotResistanceWidth = input.int(defval = 3, title = "", minval = 1, maxval = 10, inline = "floor_res", group = GROUP_FLOOR)
+color floorPivotSupportColor = input.color(defval = color.new(color = NORD11, transp = 80), title = "Support", inline = "floor_sup", group = GROUP_FLOOR, tooltip = "Color and width for S1–S4. The color fades outward by the Outward Fade step (S1 boldest, S4 faintest); S1/S2 draw solid, S3/S4 dashed.")
+int floorPivotSupportWidth = input.int(defval = 3, title = "", minval = 1, maxval = 10, inline = "floor_sup", group = GROUP_FLOOR)
+int floorPivotOutwardFade = input.int(defval = 2, title = "Outward Fade", minval = 0, maxval = 40, tooltip = "Transparency added per step away from the pivot point: R1/S1 use the base color, R2/S2 add this once, R3/S3 twice, R4/S4 three times (capped at fully transparent). 0 = no fade.", group = GROUP_FLOOR)
+color floorPivotPointColor = input.color(defval = NORD3, title = "Pivot Point", inline = "floor_pp", group = GROUP_FLOOR, tooltip = "Color / line style / width for the central pivot point (PP).")
+LineStyleMode floorPivotPointStyle = input.enum(defval = LineStyleMode.SOLID, title = "", inline = "floor_pp", group = GROUP_FLOOR)
+int floorPivotPointWidth = input.int(defval = 3, title = "", minval = 1, maxval = 10, inline = "floor_pp", group = GROUP_FLOOR)
+color floorPivotMidColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Mid-Pivots", inline = "floor_mid", group = GROUP_FLOOR, tooltip = "Color / line style / width for the mid-pivots (the M-* midpoints). Requires Show Mid-Pivots.")
+LineStyleMode floorPivotMidStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", inline = "floor_mid", group = GROUP_FLOOR)
+int floorPivotMidWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "floor_mid", group = GROUP_FLOOR)
+color floorPivotCprColor = input.color(defval = color.new(color = NORD10, transp = 40), title = "Central Pivot Range", inline = "floor_cpr", group = GROUP_FLOOR, tooltip = "Color / line style / width for the TC and BC lines. Requires Show Central Pivot Range.")
+LineStyleMode floorPivotCprStyle = input.enum(defval = LineStyleMode.SOLID, title = "", inline = "floor_cpr", group = GROUP_FLOOR)
+int floorPivotCprWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "floor_cpr", group = GROUP_FLOOR)
+
+string floorPivotResolution = f_resolutionCode(resolutionInput = floorPivotResolutionInput)
+var array<PeriodSource> floorPivotSnapshots = array.new<PeriodSource>()
+
+// Classic floor pivots plus the Central Pivot Range. Pure function of the
+// completed period's high/low/close, so the active set and every history
+// segment come from the same formula. TC/BC are normalized to top/bottom: the
+// raw top-central pivot sits BELOW the bottom-central one whenever the close
+// printed under the period's midpoint, and the band is what matters, not which
+// side of the arithmetic produced it.
+f_floorLevels(float periodHigh, float periodLow, float periodClose) =>
+    float pivot = (periodHigh + periodLow + periodClose) / 3.0
+    float periodRange = periodHigh - periodLow
+    float bottomCentral = (periodHigh + periodLow) / 2.0
+    float topCentral = pivot * 2.0 - bottomCentral
+    float resistance1 = pivot * 2.0 - periodLow
+    float support1 = pivot * 2.0 - periodHigh
+    float resistance2 = pivot + periodRange
+    float support2 = pivot - periodRange
+    float resistance3 = pivot + periodRange * 2.0
+    float support3 = pivot - periodRange * 2.0
+    float resistance4 = pivot + periodRange * 3.0
+    float support4 = pivot - periodRange * 3.0
+    FloorLevels.new(pivot = pivot, resistance1 = resistance1, resistance2 = resistance2, resistance3 = resistance3, resistance4 = resistance4, support1 = support1, support2 = support2, support3 = support3, support4 = support4, midPivotResistance1 = (pivot + resistance1) / 2.0, midResistance1Resistance2 = (resistance1 + resistance2) / 2.0, midResistance2Resistance3 = (resistance2 + resistance3) / 2.0, midResistance3Resistance4 = (resistance3 + resistance4) / 2.0, midPivotSupport1 = (pivot + support1) / 2.0, midSupport1Support2 = (support1 + support2) / 2.0, midSupport2Support3 = (support2 + support3) / 2.0, midSupport3Support4 = (support3 + support4) / 2.0, cprTop = math.max(topCentral, bottomCentral), cprBottom = math.min(topCentral, bottomCentral))
+
+// Fades a support/resistance color outward from the pivot point: rank 1 (R1/S1)
+// keeps the base transparency, each rung out adds the Outward Fade step.
+f_floorPivotFade(color baseColor, int rank) =>
+    f_dim(baseColor = baseColor, extraTransparency = (rank - 1) * floorPivotOutwardFade)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎯 CAMARILLA PIVOTS
+// The Camarilla equation from the completed higher-timeframe regular session.
+// The rungs are grouped by the ROLE the method assigns them rather than by
+// number: 1/2 are scale-out targets, 3 is the reversion rung price is faded
+// against, 4 is the breakout rung whose loss invalidates mean reversion, and
+// 5/6 are the trend-day extension targets. Each group carries its own colors,
+// style and width. Fully independent of the other engines.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_CAMARILLA = "🎯 Camarilla"
+
+bool showCamarilla = input.bool(defval = true, title = "Show Camarilla Pivots", tooltip = "Master switch for the Camarilla engine. Independent of the Floor Pivots section — its own resolution, history, styling and label placement. When both engines run on the same resolution they share a single higher-timeframe request.", group = GROUP_CAMARILLA)
+PivotResolution camarillaResolutionInput = input.enum(defval = PivotResolution.DAY_1, title = "Resolution", tooltip = "Higher timeframe the Camarilla set is calculated from. The method is built around the DAILY set for intraday trading; Weekly gives the swing map.", group = GROUP_CAMARILLA)
+bool showCamarillaReversal = input.bool(defval = true, title = "Reversal Rungs — H3 / L3", inline = "cam_rev", tooltip = "The reversion rungs. On a rotational day price runs to H3 or L3 and turns: short H3 / long L3 with the stop just beyond H4 / L4, targeting the opposite rung. Colors are [resistance side][support side], then line style and width.", group = GROUP_CAMARILLA)
+color camarillaReversalHighColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "", inline = "cam_rev", group = GROUP_CAMARILLA)
+color camarillaReversalLowColor = input.color(defval = color.new(color = NORD11, transp = 20), title = "", inline = "cam_rev", group = GROUP_CAMARILLA)
+LineStyleMode camarillaReversalStyle = input.enum(defval = LineStyleMode.SOLID, title = "", inline = "cam_rev2", group = GROUP_CAMARILLA, tooltip = "Line style and width for the H3 / L3 reversal rungs.")
+int camarillaReversalWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "cam_rev2", group = GROUP_CAMARILLA)
+bool showCamarillaBreakout = input.bool(defval = true, title = "Breakout Rungs — H4 / L4", inline = "cam_brk", tooltip = "The breakout rungs. A convincing push through H4 or L4 kills the mean-reversion thesis and marks a potential trend day — trade with the break, targets at the 5/6 extensions. Colors are [resistance side][support side], then line style and width.", group = GROUP_CAMARILLA)
+color camarillaBreakoutHighColor = input.color(defval = color.new(color = NORD8, transp = 40), title = "", inline = "cam_brk", group = GROUP_CAMARILLA)
+color camarillaBreakoutLowColor = input.color(defval = color.new(color = NORD11, transp = 40), title = "", inline = "cam_brk", group = GROUP_CAMARILLA)
+LineStyleMode camarillaBreakoutStyle = input.enum(defval = LineStyleMode.DASHED, title = "", inline = "cam_brk2", group = GROUP_CAMARILLA, tooltip = "Line style and width for the H4 / L4 breakout rungs.")
+int camarillaBreakoutWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "cam_brk2", group = GROUP_CAMARILLA)
+bool showCamarillaInner = input.bool(defval = false, title = "Target Rungs — H1 / H2 / L1 / L2", inline = "cam_inn", tooltip = "The inner rungs. They are scale-out targets for a fade taken at H3 / L3, not entry levels. Colors are [resistance side][support side], then line style and width.", group = GROUP_CAMARILLA)
+color camarillaInnerHighColor = input.color(defval = color.new(color = NORD8, transp = 40), title = "", inline = "cam_inn", group = GROUP_CAMARILLA)
+color camarillaInnerLowColor = input.color(defval = color.new(color = NORD11, transp = 40), title = "", inline = "cam_inn", group = GROUP_CAMARILLA)
+LineStyleMode camarillaInnerStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", inline = "cam_inn2", group = GROUP_CAMARILLA, tooltip = "Line style and width for the H1 / H2 / L1 / L2 target rungs.")
+int camarillaInnerWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "cam_inn2", group = GROUP_CAMARILLA)
+bool showCamarillaExtension = input.bool(defval = true, title = "Extension Rungs — H5 / H6 / L5 / L6", inline = "cam_ext", tooltip = "The trend-day extension targets, reached only once a breakout through H4 / L4 runs. H5 is a ratio projection (high ÷ low × close) so it sits far away on low-priced symbols; H6 extends H5 by 1.168 of the H4→H5 leg, and the low side mirrors both around the close. Colors are [resistance side][support side], then line style and width.", group = GROUP_CAMARILLA)
+color camarillaExtensionHighColor = input.color(defval = color.new(color = NORD8, transp = 40), title = "", inline = "cam_ext", group = GROUP_CAMARILLA)
+color camarillaExtensionLowColor = input.color(defval = color.new(color = NORD11, transp = 40), title = "", inline = "cam_ext", group = GROUP_CAMARILLA)
+LineStyleMode camarillaExtensionStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", inline = "cam_ext2", group = GROUP_CAMARILLA, tooltip = "Line style and width for the H5 / H6 / L5 / L6 extension rungs.")
+int camarillaExtensionWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "cam_ext2", group = GROUP_CAMARILLA)
+bool showCamarillaFadeZone = input.bool(defval = false, title = "Fade Band — H3→H4 / L3→L4", inline = "cam_zfade", tooltip = "Shades the band between the reversal and breakout rungs on each side. That band is where a fade taken at H3 / L3 lives and dies: price inside it is still a reversion trade, price out of it is a breakout.", group = GROUP_CAMARILLA)
+color camarillaFadeZoneColor = input.color(defval = color.new(color = NORD15, transp = 88), title = "", inline = "cam_zfade", group = GROUP_CAMARILLA)
+bool showCamarillaBreakoutZone = input.bool(defval = false, title = "Runway — H4→H6 / L4→L6", inline = "cam_zrun", tooltip = "Shades the breakout runway between the breakout rung and the far extension on each side. Once price is in this band the day is trending and the extensions are the targets.", group = GROUP_CAMARILLA)
+color camarillaBreakoutZoneColor = input.color(defval = color.new(color = NORD12, transp = 90), title = "", inline = "cam_zrun", group = GROUP_CAMARILLA)
+bool showCamarillaLabels = input.bool(defval = true, title = "Labels", inline = "cam_labels", tooltip = "Whether this engine's labels are shown, which end of the line they sit at, and a nudge in bars from that end.\n\nGiving each engine its own side and nudge is how you keep labels readable when two engines put levels close together — send one Left and the other Right, or offset them by a few bars.", group = GROUP_CAMARILLA)
+LabelSideMode camarillaLabelSide = input.enum(defval = LabelSideMode.RIGHT, title = "", inline = "cam_labels", group = GROUP_CAMARILLA)
+int camarillaLabelNudge = input.int(defval = 0, title = "", minval = -100, maxval = 100, inline = "cam_labels", group = GROUP_CAMARILLA)
+int camarillaHistoryPeriods = input.int(defval = 0, title = "History (periods)", minval = 0, maxval = 10, tooltip = "Draws the rung sets of this many previous periods as segments spanning the period they were in force for. 0 = only the current set.", group = GROUP_CAMARILLA)
+bool showCamarillaDeveloping = input.bool(defval = false, title = "Show Developing Next-Period Set", tooltip = "Projects the NEXT period's rungs from the still-forming period's running high/low/close, drawn dimmed to the right of the current bar. The values keep moving until the period closes.", group = GROUP_CAMARILLA)
+
+string camarillaResolution = f_resolutionCode(resolutionInput = camarillaResolutionInput)
+var array<PeriodSource> camarillaOwnSnapshots = array.new<PeriodSource>()
+
+// The Camarilla equation. Pure function of the completed period's high/low/
+// close, so the active set, every history segment and the developing preview
+// all come from one formula. H5 is the ratio projection and is guarded against
+// a non-positive low; H6 extends the H4→H5 leg by 1.168, and both low-side
+// extensions mirror their high-side twin around the close.
+f_camarillaLevels(float periodHigh, float periodLow, float periodClose) =>
+    float periodRange = periodHigh - periodLow
+    float high4 = periodClose + periodRange * 1.1 / 2.0
+    float high5 = periodLow > 0 ? periodHigh / periodLow * periodClose : na
+    float high6 = high5 + 1.168 * (high5 - high4)
+    CamarillaLevels.new(high1 = periodClose + periodRange * 1.1 / 12.0, high2 = periodClose + periodRange * 1.1 / 6.0, high3 = periodClose + periodRange * 1.1 / 4.0, high4 = high4, high5 = high5, high6 = high6, low1 = periodClose - periodRange * 1.1 / 12.0, low2 = periodClose - periodRange * 1.1 / 6.0, low3 = periodClose - periodRange * 1.1 / 4.0, low4 = periodClose - periodRange * 1.1 / 2.0, low5 = periodClose - (high5 - periodClose), low6 = periodClose - (high6 - periodClose))
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📅 PREVIOUS DAY
+// Yesterday's high, low and close as widely watched session references. The
+// close comes from the daily series so it updates when the exchange's official
+// daily bar is finalized — on many futures symbols that means settlement.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_PREVIOUS_DAY = "📅 Previous Day"
+
+bool showPreviousDay = input.bool(defval = true, title = "Show Previous Day", tooltip = "Shows the previous day high, low and close. These session reference levels are often respected during the next trading day. When either level engine is already running on a Daily resolution this section reuses that data instead of firing its own request.", group = GROUP_PREVIOUS_DAY)
+bool showPreviousDayHighLevel = input.bool(defval = true, title = "Show High", tooltip = "Plots the previous day's high for each trading day.", group = GROUP_PREVIOUS_DAY)
+bool showPreviousDayLowLevel = input.bool(defval = true, title = "Show Low", tooltip = "Plots the previous day's low for each trading day.", group = GROUP_PREVIOUS_DAY)
+bool showPreviousDayCloseLevel = input.bool(defval = true, title = "Show Close", tooltip = "Plots the previous day's official daily close. For many futures symbols on TradingView daily data, this is the exchange settlement once the day is finalized.", group = GROUP_PREVIOUS_DAY)
+bool showPreviousDayLabels = input.bool(defval = true, title = "Labels", inline = "pd_labels", tooltip = "Whether this engine's labels are shown, which end of the line they sit at, and a nudge in bars from that end.\n\nGiving each engine its own side and nudge is how you keep labels readable when two engines put levels close together — send one Left and the other Right, or offset them by a few bars.", group = GROUP_PREVIOUS_DAY)
+LabelSideMode previousDayLabelSide = input.enum(defval = LabelSideMode.RIGHT, title = "", inline = "pd_labels", group = GROUP_PREVIOUS_DAY)
+int previousDayLabelNudge = input.int(defval = 8, title = "", minval = -100, maxval = 100, inline = "pd_labels", group = GROUP_PREVIOUS_DAY)
+color previousDayHighColor = input.color(defval = color.new(color = NORD8, transp = 60), title = "PDH", inline = "pdh", tooltip = "Color / line style / width for the Previous Day High.", group = GROUP_PREVIOUS_DAY)
+LineStyleMode previousDayHighStyle = input.enum(defval = LineStyleMode.SOLID, title = "", inline = "pdh", group = GROUP_PREVIOUS_DAY)
+int previousDayHighWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "pdh", group = GROUP_PREVIOUS_DAY)
+color previousDayLowColor = input.color(defval = color.new(color = NORD11, transp = 60), title = "PDL", inline = "pdl", tooltip = "Color / line style / width for the Previous Day Low.", group = GROUP_PREVIOUS_DAY)
+LineStyleMode previousDayLowStyle = input.enum(defval = LineStyleMode.SOLID, title = "", inline = "pdl", group = GROUP_PREVIOUS_DAY)
+int previousDayLowWidth = input.int(defval = 2, title = "", minval = 1, maxval = 10, inline = "pdl", group = GROUP_PREVIOUS_DAY)
+color previousDayCloseColor = input.color(defval = NORD3, title = "PDC", inline = "pdc", tooltip = "Color / line style / width for the Previous Day Close.", group = GROUP_PREVIOUS_DAY)
+LineStyleMode previousDayCloseStyle = input.enum(defval = LineStyleMode.DOTTED, title = "", inline = "pdc", group = GROUP_PREVIOUS_DAY)
+int previousDayCloseWidth = input.int(defval = 3, title = "", minval = 1, maxval = 10, inline = "pdc", group = GROUP_PREVIOUS_DAY)
+
+var array<PeriodSource> previousDayOwnSnapshots = array.new<PeriodSource>()
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🔗 PERIOD SOURCE ENGINE
+// Shared orchestration: refreshes every enabled engine's snapshot store. This
+// block is genuinely cross-section — the request de-duplication can only be
+// decided once ALL sections have declared their resolution and history inputs,
+// and Pine has no hoisting, so the refresh cannot live inside the sections that
+// own the inputs. Each section still owns its inputs, its store, its formula
+// and its rendering.
+//
+// Sharing rules, in order:
+//   • Camarilla reuses the floor store when both engines are on and resolved to
+//     the same timeframe — one request instead of two.
+//   • Previous Day reuses whichever engine is already running on Daily.
+//   • Only an engine with no host of its own fires a request.
+//
+// Refreshes run on confirmed bars only. The completed period's values are
+// already final, so a per-tick refresh would re-fetch identical data, and the
+// render engine repaints once per bar anyway.
+// ═════════════════════════════════════════════════════════════════════════════
+bool camarillaSharesFloorSource = showFloorPivots and showCamarilla and camarillaResolution == floorPivotResolution
+
+// Retention: the active set plus the requested history, never fewer than one.
+int floorPivotKeepCount = floorPivotHistoryPeriods + 1
+if camarillaSharesFloorSource and camarillaHistoryPeriods + 1 > floorPivotKeepCount
+    floorPivotKeepCount := camarillaHistoryPeriods + 1
+int camarillaKeepCount = camarillaHistoryPeriods + 1
+
+var float floorPivotFormingHigh = na
+var float floorPivotFormingLow = na
+var float floorPivotFormingClose = na
+if showFloorPivots and confirmedBar
+    [floorFormingHigh, floorFormingLow, floorFormingClose] = f_refreshPeriodSnapshots(store = floorPivotSnapshots, periodTimeframe = floorPivotResolution, keepCount = floorPivotKeepCount, anchorTime = sharedTradingDayStart)
+    floorPivotFormingHigh := floorFormingHigh
+    floorPivotFormingLow := floorFormingLow
+    floorPivotFormingClose := floorFormingClose
+
+array<PeriodSource> camarillaSnapshots = camarillaSharesFloorSource ? floorPivotSnapshots : camarillaOwnSnapshots
+var float camarillaFormingHigh = na
+var float camarillaFormingLow = na
+var float camarillaFormingClose = na
+if showCamarilla and confirmedBar
+    if camarillaSharesFloorSource
+        camarillaFormingHigh := floorPivotFormingHigh
+        camarillaFormingLow := floorPivotFormingLow
+        camarillaFormingClose := floorPivotFormingClose
+    else
+        [camarillaFormHigh, camarillaFormLow, camarillaFormClose] = f_refreshPeriodSnapshots(store = camarillaOwnSnapshots, periodTimeframe = camarillaResolution, keepCount = camarillaKeepCount, anchorTime = sharedTradingDayStart)
+        camarillaFormingHigh := camarillaFormHigh
+        camarillaFormingLow := camarillaFormLow
+        camarillaFormingClose := camarillaFormClose
+
+bool previousDayUsesFloorSource = showFloorPivots and floorPivotResolution == "D"
+bool previousDayUsesCamarillaSource = not previousDayUsesFloorSource and showCamarilla and camarillaResolution == "D"
+array<PeriodSource> previousDaySnapshots = previousDayUsesFloorSource ? floorPivotSnapshots : previousDayUsesCamarillaSource ? camarillaSnapshots : previousDayOwnSnapshots
+if showPreviousDay and confirmedBar and not previousDayUsesFloorSource and not previousDayUsesCamarillaSource
+    [previousDayFormingHigh, previousDayFormingLow, previousDayFormingClose] = f_refreshPeriodSnapshots(store = previousDayOwnSnapshots, periodTimeframe = "D", keepCount = 1, anchorTime = sharedTradingDayStart)
+
+PeriodSource previousDayActiveSource = f_newestSource(store = previousDaySnapshots)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 RENDER ENGINE
+// Shared drawing infrastructure only: the refresh gate, the style resolver, the
+// line/label/box pools, and the primitives every section draws through. Each
+// engine's own draw routine sits below the primitives and consumes only that
+// section's exported inputs and level sets.
+//
+// Every level is drawn with TIME coordinates (xloc.bar_time), so a set spans
+// exactly the period it was in force for and future projections are not capped
+// at 500 bars the way bar_index drawings are.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_RENDER = "⚙️ Render"
+
+int labelSizeInput = input.int(defval = 10, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Text size used by all level labels. Which SIDE each engine's labels sit on is set per engine, in that engine's own section.", group = GROUP_RENDER)
+int labelDistanceTicks = input.int(defval = 0, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts every label above its line by the chosen number of minimum ticks.", group = GROUP_RENDER)
+color labelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by level labels.", group = GROUP_RENDER)
+int renderExtendBars = input.int(defval = 20, title = "Extend Bars", minval = 0, maxval = 400, tooltip = "How far right the active level set extends beyond the current bar.", group = GROUP_RENDER)
+int renderDevelopingBars = input.int(defval = 30, title = "Developing Preview Width (Bars)", minval = 5, maxval = 200, tooltip = "Width of the developing next-period preview segments, drawn beyond the active set's right end. Applies to both engines when their preview is enabled.", group = GROUP_RENDER)
+int renderInactiveFade = input.int(defval = 25, title = "History / Preview Fade", minval = 0, maxval = 90, tooltip = "Extra transparency applied to every set that is not the one in force — history segments and the developing preview — so only today's levels read at full strength.", group = GROUP_RENDER)
+
+// Rendering refreshes once per BAR plus a self-heal path — not once per tick.
+// The projections only move when bar_index advances and the anchors only change
+// on confirmed bars, so per-tick refreshes were pure waste (profiler: ~60% of
+// runtime in this block). The stamp is set to the NEXT bar's index on the
+// confirming tick: committed state then equals bar_index for every tick of the
+// following bar (skip — one int compare per tick), while any bar_index JUMP
+// (feed re-sync backfill) breaks the equality and the first tick after the gap
+// redraws immediately. Intrabar stamp assignments roll back, so only the
+// confirm-tick value commits — and because the redraw path therefore runs on a
+// confirmed tick, its deletes and creations commit together (an intrabar
+// delete commits while the matching .new rolls back, which is what makes
+// per-tick redraw engines flicker).
+var int lastRenderedBar = na
+bool shouldRefreshRender = barstate.islast and (na(lastRenderedBar) or bar_index != lastRenderedBar or confirmedBar)
+
+// The chart timeframe cannot change mid-run, so the bar duration is resolved
+// once rather than per tick.
+var int renderBarMilliseconds = timeframe.in_seconds() * 1000
+int renderRightTime = time + renderExtendBars * renderBarMilliseconds
+int renderDevelopingEndTime = renderRightTime + renderDevelopingBars * renderBarMilliseconds
+
+var array<line> renderedLines = array.new<line>()
+var array<label> renderedLabels = array.new<label>()
+var array<box> renderedBoxes = array.new<box>()
+
+// Resolves the style enum every section's inputs are declared in. Lives here
+// because f_drawLevel is its only caller.
+f_lineStyle(LineStyleMode styleMode) =>
+    styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
+
+// The single drawing primitive. Skips na prices so unavailable levels (early
+// history, missing higher-timeframe data) do not create invisible objects that
+// still count against the max_lines/labels budgets.
+//
+// A label anchors at the end of the segment its engine chose, offset by that
+// engine's nudge, and the matching lower-corner style keeps the text above the
+// line reading inward from its anchor.
+f_drawLevel(float levelPrice, string levelName, color levelColor, int levelWidth, LineStyleMode styleMode, LabelPlacement labelPlacement, int segmentStart, int segmentEnd) =>
+    if not na(levelPrice) and not na(segmentStart) and not na(segmentEnd)
+        array.push(id = renderedLines, value = line.new(x1 = segmentStart, y1 = levelPrice, x2 = segmentEnd, y2 = levelPrice, xloc = xloc.bar_time, extend = extend.none, color = levelColor, width = levelWidth, style = f_lineStyle(styleMode = styleMode)))
+        if labelPlacement.visible
+            bool anchorRight = labelPlacement.side == LabelSideMode.RIGHT
+            int labelTime = (anchorRight ? segmentEnd : segmentStart) + labelPlacement.nudgeBars * renderBarMilliseconds
+            array.push(id = renderedLabels, value = label.new(x = labelTime, y = levelPrice + syminfo.mintick * labelDistanceTicks, text = levelName, xloc = xloc.bar_time, yloc = yloc.price, style = anchorRight ? label.style_label_lower_right : label.style_label_lower_left, textcolor = labelTextColor, color = color.new(color = NORD0, transp = 100), size = labelSizeInput, textalign = text.align_left))
+
+f_drawZone(float zoneTop, float zoneBottom, color zoneColor, int segmentStart, int segmentEnd) =>
+    if not na(zoneTop) and not na(zoneBottom) and not na(segmentStart) and not na(segmentEnd)
+        array.push(id = renderedBoxes, value = box.new(left = segmentStart, top = math.max(zoneTop, zoneBottom), right = segmentEnd, bottom = math.min(zoneTop, zoneBottom), xloc = xloc.bar_time, border_color = color.new(color = zoneColor, transp = 100), border_width = 0, bgcolor = zoneColor))
+
+// One floor-pivot set. Rungs fade outward from PP and switch to dashed beyond
+// rung 2; PP, the mid-pivots and the CPR carry their own style. Labels are
+// requested by the caller — history segments and the developing preview pass
+// false so only the set in force is annotated.
+f_drawFloorSet(FloorLevels levels, int segmentStart, int segmentEnd, bool withLabels, int extraDim) =>
+    LabelPlacement placement = LabelPlacement.new(visible = withLabels and showFloorPivotLabels, side = floorPivotLabelSide, nudgeBars = floorPivotLabelNudge)
+    if floorPivotLadderDepth >= 4
+        f_drawLevel(levelPrice = levels.support4, levelName = "S4", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotSupportColor, rank = 4), extraTransparency = extraDim), levelWidth = floorPivotSupportWidth, styleMode = LineStyleMode.DASHED, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midSupport3Support4, levelName = "M-S3S4", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if floorPivotLadderDepth >= 3
+        f_drawLevel(levelPrice = levels.support3, levelName = "S3", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotSupportColor, rank = 3), extraTransparency = extraDim), levelWidth = floorPivotSupportWidth, styleMode = LineStyleMode.DASHED, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midSupport2Support3, levelName = "M-S2S3", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if floorPivotLadderDepth >= 2
+        f_drawLevel(levelPrice = levels.support2, levelName = "S2", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotSupportColor, rank = 2), extraTransparency = extraDim), levelWidth = floorPivotSupportWidth, styleMode = LineStyleMode.SOLID, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midSupport1Support2, levelName = "M-S1S2", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    f_drawLevel(levelPrice = levels.support1, levelName = "S1", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotSupportColor, rank = 1), extraTransparency = extraDim), levelWidth = floorPivotSupportWidth, styleMode = LineStyleMode.SOLID, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showFloorPivotMidLevels
+        f_drawLevel(levelPrice = levels.midPivotSupport1, levelName = "M-PPS1", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showFloorPivotCpr
+        f_drawLevel(levelPrice = levels.cprBottom, levelName = "BC", levelColor = f_dim(baseColor = floorPivotCprColor, extraTransparency = extraDim), levelWidth = floorPivotCprWidth, styleMode = floorPivotCprStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    f_drawLevel(levelPrice = levels.pivot, levelName = "PP", levelColor = f_dim(baseColor = floorPivotPointColor, extraTransparency = extraDim), levelWidth = floorPivotPointWidth, styleMode = floorPivotPointStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showFloorPivotCpr
+        f_drawLevel(levelPrice = levels.cprTop, levelName = "TC", levelColor = f_dim(baseColor = floorPivotCprColor, extraTransparency = extraDim), levelWidth = floorPivotCprWidth, styleMode = floorPivotCprStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showFloorPivotMidLevels
+        f_drawLevel(levelPrice = levels.midPivotResistance1, levelName = "M-PPR1", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    f_drawLevel(levelPrice = levels.resistance1, levelName = "R1", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotResistanceColor, rank = 1), extraTransparency = extraDim), levelWidth = floorPivotResistanceWidth, styleMode = LineStyleMode.SOLID, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if floorPivotLadderDepth >= 2
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midResistance1Resistance2, levelName = "M-R1R2", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.resistance2, levelName = "R2", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotResistanceColor, rank = 2), extraTransparency = extraDim), levelWidth = floorPivotResistanceWidth, styleMode = LineStyleMode.SOLID, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if floorPivotLadderDepth >= 3
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midResistance2Resistance3, levelName = "M-R2R3", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.resistance3, levelName = "R3", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotResistanceColor, rank = 3), extraTransparency = extraDim), levelWidth = floorPivotResistanceWidth, styleMode = LineStyleMode.DASHED, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if floorPivotLadderDepth >= 4
+        if showFloorPivotMidLevels
+            f_drawLevel(levelPrice = levels.midResistance3Resistance4, levelName = "M-R3R4", levelColor = f_dim(baseColor = floorPivotMidColor, extraTransparency = extraDim), levelWidth = floorPivotMidWidth, styleMode = floorPivotMidStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.resistance4, levelName = "R4", levelColor = f_dim(baseColor = f_floorPivotFade(baseColor = floorPivotResistanceColor, rank = 4), extraTransparency = extraDim), levelWidth = floorPivotResistanceWidth, styleMode = LineStyleMode.DASHED, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+
+// One Camarilla set. Zones draw first so the rungs sit on top of their bands.
+f_drawCamarillaSet(CamarillaLevels levels, int segmentStart, int segmentEnd, bool withLabels, int extraDim) =>
+    LabelPlacement placement = LabelPlacement.new(visible = withLabels and showCamarillaLabels, side = camarillaLabelSide, nudgeBars = camarillaLabelNudge)
+    if showCamarillaFadeZone
+        f_drawZone(zoneTop = levels.high4, zoneBottom = levels.high3, zoneColor = f_dim(baseColor = camarillaFadeZoneColor, extraTransparency = extraDim), segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawZone(zoneTop = levels.low3, zoneBottom = levels.low4, zoneColor = f_dim(baseColor = camarillaFadeZoneColor, extraTransparency = extraDim), segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaBreakoutZone
+        f_drawZone(zoneTop = levels.high6, zoneBottom = levels.high4, zoneColor = f_dim(baseColor = camarillaBreakoutZoneColor, extraTransparency = extraDim), segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawZone(zoneTop = levels.low4, zoneBottom = levels.low6, zoneColor = f_dim(baseColor = camarillaBreakoutZoneColor, extraTransparency = extraDim), segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaExtension
+        f_drawLevel(levelPrice = levels.low6, levelName = "L6", levelColor = f_dim(baseColor = camarillaExtensionLowColor, extraTransparency = extraDim), levelWidth = camarillaExtensionWidth, styleMode = camarillaExtensionStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.low5, levelName = "L5", levelColor = f_dim(baseColor = camarillaExtensionLowColor, extraTransparency = extraDim), levelWidth = camarillaExtensionWidth, styleMode = camarillaExtensionStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaBreakout
+        f_drawLevel(levelPrice = levels.low4, levelName = "L4", levelColor = f_dim(baseColor = camarillaBreakoutLowColor, extraTransparency = extraDim), levelWidth = camarillaBreakoutWidth, styleMode = camarillaBreakoutStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaReversal
+        f_drawLevel(levelPrice = levels.low3, levelName = "L3", levelColor = f_dim(baseColor = camarillaReversalLowColor, extraTransparency = extraDim), levelWidth = camarillaReversalWidth, styleMode = camarillaReversalStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaInner
+        f_drawLevel(levelPrice = levels.low2, levelName = "L2", levelColor = f_dim(baseColor = camarillaInnerLowColor, extraTransparency = extraDim), levelWidth = camarillaInnerWidth, styleMode = camarillaInnerStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.low1, levelName = "L1", levelColor = f_dim(baseColor = camarillaInnerLowColor, extraTransparency = extraDim), levelWidth = camarillaInnerWidth, styleMode = camarillaInnerStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.high1, levelName = "H1", levelColor = f_dim(baseColor = camarillaInnerHighColor, extraTransparency = extraDim), levelWidth = camarillaInnerWidth, styleMode = camarillaInnerStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.high2, levelName = "H2", levelColor = f_dim(baseColor = camarillaInnerHighColor, extraTransparency = extraDim), levelWidth = camarillaInnerWidth, styleMode = camarillaInnerStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaReversal
+        f_drawLevel(levelPrice = levels.high3, levelName = "H3", levelColor = f_dim(baseColor = camarillaReversalHighColor, extraTransparency = extraDim), levelWidth = camarillaReversalWidth, styleMode = camarillaReversalStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaBreakout
+        f_drawLevel(levelPrice = levels.high4, levelName = "H4", levelColor = f_dim(baseColor = camarillaBreakoutHighColor, extraTransparency = extraDim), levelWidth = camarillaBreakoutWidth, styleMode = camarillaBreakoutStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showCamarillaExtension
+        f_drawLevel(levelPrice = levels.high5, levelName = "H5", levelColor = f_dim(baseColor = camarillaExtensionHighColor, extraTransparency = extraDim), levelWidth = camarillaExtensionWidth, styleMode = camarillaExtensionStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+        f_drawLevel(levelPrice = levels.high6, levelName = "H6", levelColor = f_dim(baseColor = camarillaExtensionHighColor, extraTransparency = extraDim), levelWidth = camarillaExtensionWidth, styleMode = camarillaExtensionStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+
+// The previous day's three references. No history or developing variants — the
+// section only ever renders the set in force — but it owns a draw routine like
+// the other two engines so the render block holds no per-section branches.
+f_drawPreviousDaySet(PeriodSource daySource, int segmentStart, int segmentEnd) =>
+    LabelPlacement placement = LabelPlacement.new(visible = showPreviousDayLabels, side = previousDayLabelSide, nudgeBars = previousDayLabelNudge)
+    if showPreviousDayLowLevel
+        f_drawLevel(levelPrice = daySource.low, levelName = "PDL", levelColor = previousDayLowColor, levelWidth = previousDayLowWidth, styleMode = previousDayLowStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showPreviousDayCloseLevel
+        f_drawLevel(levelPrice = daySource.close, levelName = "PDC", levelColor = previousDayCloseColor, levelWidth = previousDayCloseWidth, styleMode = previousDayCloseStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+    if showPreviousDayHighLevel
+        f_drawLevel(levelPrice = daySource.high, levelName = "PDH", levelColor = previousDayHighColor, levelWidth = previousDayHighWidth, styleMode = previousDayHighStyle, labelPlacement = placement, segmentStart = segmentStart, segmentEnd = segmentEnd)
+
+// The index of the oldest set to draw, given how many history periods the
+// section asked for and how many are actually retained.
+f_firstDrawnIndex(int storeSize, int historyPeriods) =>
+    int firstIndex = storeSize - 1 - historyPeriods
+    firstIndex < 0 ? 0 : firstIndex
+
+if shouldRefreshRender
+    lastRenderedBar := bar_index + (confirmedBar ? 1 : 0)
+    for lineObject in renderedLines
+        line.delete(id = lineObject)
+    array.clear(id = renderedLines)
+    for labelObject in renderedLabels
+        label.delete(id = labelObject)
+    array.clear(id = renderedLabels)
+    for boxObject in renderedBoxes
+        box.delete(id = boxObject)
+    array.clear(id = renderedBoxes)
+
+    if showFloorPivots
+        int floorSetCount = array.size(id = floorPivotSnapshots)
+        if floorSetCount > 0
+            for floorSetIndex = f_firstDrawnIndex(storeSize = floorSetCount, historyPeriods = floorPivotHistoryPeriods) to floorSetCount - 1
+                PeriodSource floorSetSource = array.get(id = floorPivotSnapshots, index = floorSetIndex)
+                bool floorIsActiveSet = floorSetIndex == floorSetCount - 1
+                int floorSegmentEnd = renderRightTime
+                if not floorIsActiveSet
+                    PeriodSource floorNextSource = array.get(id = floorPivotSnapshots, index = floorSetIndex + 1)
+                    floorSegmentEnd := floorNextSource.startTime
+                f_drawFloorSet(levels = f_floorLevels(periodHigh = floorSetSource.high, periodLow = floorSetSource.low, periodClose = floorSetSource.close), segmentStart = floorSetSource.startTime, segmentEnd = floorSegmentEnd, withLabels = floorIsActiveSet, extraDim = floorIsActiveSet ? 0 : renderInactiveFade)
+        if showFloorPivotDeveloping and not na(floorPivotFormingHigh)
+            f_drawFloorSet(levels = f_floorLevels(periodHigh = floorPivotFormingHigh, periodLow = floorPivotFormingLow, periodClose = floorPivotFormingClose), segmentStart = renderRightTime, segmentEnd = renderDevelopingEndTime, withLabels = false, extraDim = renderInactiveFade)
+
+    if showCamarilla
+        int camarillaSetCount = array.size(id = camarillaSnapshots)
+        if camarillaSetCount > 0
+            for camarillaSetIndex = f_firstDrawnIndex(storeSize = camarillaSetCount, historyPeriods = camarillaHistoryPeriods) to camarillaSetCount - 1
+                PeriodSource camarillaSetSource = array.get(id = camarillaSnapshots, index = camarillaSetIndex)
+                bool camarillaIsActiveSet = camarillaSetIndex == camarillaSetCount - 1
+                int camarillaSegmentEnd = renderRightTime
+                if not camarillaIsActiveSet
+                    PeriodSource camarillaNextSource = array.get(id = camarillaSnapshots, index = camarillaSetIndex + 1)
+                    camarillaSegmentEnd := camarillaNextSource.startTime
+                f_drawCamarillaSet(levels = f_camarillaLevels(periodHigh = camarillaSetSource.high, periodLow = camarillaSetSource.low, periodClose = camarillaSetSource.close), segmentStart = camarillaSetSource.startTime, segmentEnd = camarillaSegmentEnd, withLabels = camarillaIsActiveSet, extraDim = camarillaIsActiveSet ? 0 : renderInactiveFade)
+        if showCamarillaDeveloping and not na(camarillaFormingHigh)
+            f_drawCamarillaSet(levels = f_camarillaLevels(periodHigh = camarillaFormingHigh, periodLow = camarillaFormingLow, periodClose = camarillaFormingClose), segmentStart = renderRightTime, segmentEnd = renderDevelopingEndTime, withLabels = false, extraDim = renderInactiveFade)
+
+    if showPreviousDay and not na(previousDayActiveSource.startTime)
+        f_drawPreviousDaySet(daySource = previousDayActiveSource, segmentStart = previousDayActiveSource.startTime, segmentEnd = renderRightTime)

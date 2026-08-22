@@ -1137,11 +1137,25 @@ enum TrendDir
    - Stochastic %D 45/55 half-cycle windows partition the count (plot-in-zone
      engine); labels anchor on a display-only extreme layer with pin migration
      and an ordering guard
-   - Live labels first show on a close-gated triple confirmation — bar close
-     with BOTH the MACD line and %K angling against the open half-cycle — plus
-     an ATR-margin accuracy gate; post-show tracking is per-tick with
-     close-gated renumbering (the 🧪 debug/Pine Logs layer was stripped
-     2026-07-25 after tuning — restore from git history before re-tuning)
+   - Trend shifts two ways, both committing at a bar close: a TAKE against the
+     trend (plots the new trend's 1), or an ARMED trend's FAILED IMPULSE — a
+     high that cannot take the up trend's last high, or the mirror — which
+     plots as the new trend's 2 and relabels the retrace behind it to 1. A
+     trend is armed by any take; a trend born from a failure starts unarmed and
+     cannot be shifted by another failure, which is what stops a contraction
+     from thrashing 1,2,1,2
+   - `qualifies` gates BOTH the plot and the structural-extreme update — one
+     question, "did this wave move the structure?". Letting an unqualified wave
+     update the extreme was the 2026-08-21 ratchet defect: a failed impulse
+     demoted the level the next impulse had to clear, so a decaying staircase
+     of lower highs each read as a fresh HH and the count ran to 9 through a
+     dead trend
+   - Live labels first show TICK-TIME — the first tick with both the MACD line
+     and %K angling against the open half-cycle while the wave qualifies —
+     then MACD direction alone rules visibility tick by tick; renumbering,
+     pins and relabels stay close-committed (the 🧪 debug/Pine Logs layer was
+     stripped 2026-07-25 after tuning — restore from git history before
+     re-tuning)
 
 6. **`stochastic.pine`**
    - Barry Burns cycle stochastic (5/2/3, 80/20 + 45 mid) — bare cycle
@@ -1157,9 +1171,15 @@ enum TrendDir
 8. **`structure-and-levels.pine`**
    - Price structure and key levels engine
 
-9. **`fibonacci.pine`** / **`floor-pivots.pine`** / **`major-swings.pine`**
-   - Standalone level engines (fib retracements, floor pivots, strength-scored
+9. **`fibonacci.pine`** / **`pivots.pine`** / **`swings.pine`**
+   - Standalone level engines (fib retracements, pivots, strength-scored
      major swings)
+   - `swings.pine` (was `major-swings.pine`) draws the two-degree
+     medium/major swing structure, with a Left/Middle/Right label anchor
+   - `pivots.pine` (was `floor-pivots.pine`) holds three independent engines —
+     classic floor pivots + CPR, the Camarilla equation, and previous day —
+     each with its own resolution, history depth, styling and label placement,
+     sharing one higher-timeframe request when their resolutions match
 
 10. **`options-gex-levels.pine`**
     - Options gamma exposure (GEX) levels indicator
@@ -1249,7 +1269,17 @@ Before submitting any code changes, verify:
 - [ ] Conditional coloring uses ternary operators
 - [ ] Number formatting appropriate for data type; every formatted field
       na-guarded, fallbacks are "N/A"/"-" (never "$0" or a printable NaN)
-- [ ] `ignore_invalid_symbol = true` on `request.security`/`request.financial` calls
+- [ ] `ignore_invalid_symbol = true` wherever the REQUEST can fail, which is
+      not the same question as whether the symbol exists. Required on foreign
+      feeds and constructed tickers (`composite-breadth`, `hoi`,
+      `support-resistance`, `fundamental-view-indicator`). Also required on
+      `request.security_lower_tf` even for `syminfo.tickerid`, because there
+      the failure is "no tick stream on this symbol/plan/session", not a bad
+      symbol (`ticker-tape`, `ticker-block-trades` — pair it with
+      `ignore_invalid_timeframe`). NOT needed on a plain `request.security`
+      against `syminfo.tickerid`: the chart's own symbol always resolves, so
+      the flag is a no-op and the repo omits it deliberately (`ma-waves`,
+      `macd-waves`, `technical-view-indicator`)
 - [ ] Function signatures verified against Pine Script v6 Reference
 - [ ] No deprecated v4/v5 functions used
 - [ ] Repainting considerations addressed (lookahead, barmerge, varip reload caveat)
@@ -1262,7 +1292,12 @@ Before submitting any code changes, verify:
 ## 📝 Additional Notes
 
 ### Performance Considerations
-- Use `ignore_invalid_symbol = true` for `request.*()` functions
+- Use `ignore_invalid_symbol = true` on any `request.*()` that can FAIL, so it
+  degrades to `na` instead of erroring the script out: foreign or constructed
+  tickers, and every `request.security_lower_tf` (a symbol/plan/session with no
+  tick stream fails even on the chart's own symbol — pair it with
+  `ignore_invalid_timeframe`). A plain `request.security` on `syminfo.tickerid`
+  does not need it
 - Use `lookahead = barmerge.lookahead_on` only for stable snapshot requests;
   confirmed-event streams (HTF pivots) need `lookahead_off` — see Pitfall 5
 - Render tables/labels only in `barstate.islast` or `barstate.islastconfirmedhistory`

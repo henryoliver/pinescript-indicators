@@ -106,19 +106,23 @@ bool showBackground = input.bool(defval = true, title = "Show Background",
 color backgroundColor = input.color(defval = color.new(color = NORD11, transp = 90), title = "Background Color",
      tooltip = "Background highlight color shown while the signal window is active.", group = GROUP_DISPLAY)
 
-// Breadth and index data (daily)
+// Breadth and index data (daily). Every symbol here is a constructed INDEX:*
+// breadth feed, never the chart's own, so each request carries
+// ignore_invalid_symbol: a market whose feed a user cannot access degrades
+// to na — which every condition below already guards — instead of erroring
+// the whole script out.
 float advIssues = request.security(symbol = advSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 float decIssues = request.security(symbol = decSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 float uncIssues = request.security(symbol = uncSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 float newHighs = request.security(symbol = newHighSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 float newLows = request.security(symbol = newLowSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 float marketIndexValue = request.security(symbol = indexSymbol, timeframe = "D", expression = close,
-     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+     gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
 // Calculations
 // Total number of issues (like the reference codes)
@@ -149,7 +153,7 @@ bool isHighLowRatioValid = not na(newHighs) and not na(newLows) and newLows > 0 
      (newHighs / newLows) < 2
 
 // Confirmed daily bar flag (daily time)
-bool dailyConfirmed = request.security(symbol = indexSymbol, timeframe = "D", expression = barstate.isconfirmed, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+bool dailyConfirmed = request.security(symbol = indexSymbol, timeframe = "D", expression = barstate.isconfirmed, gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
 // Hindenburg Omen Signal (confirmed daily bars only)
 bool homenSignalRaw = dailyConfirmed and isNewHighLowThresholdMet and isPositiveTrend and isMcclellanNegative and isHighLowRatioValid

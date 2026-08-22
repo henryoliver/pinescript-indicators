@@ -18,10 +18,14 @@ indicator(title = "Ticker Tape", shorttitle = "📰 Tape", overlay = true, max_b
 //   · A budget, not the whole tape. Pine caps requested ticks at 100,000 (Basic →
 //     Premium) / 125,000 (Expert) / 200,000 (Ultimate) for the entire request. Past
 //     it the array stops growing and the tape stops advancing. Trade down a timeframe
-//     if that bites on your symbol. There also appears to be a PER-BAR ceiling of
-//     ~1,002 entries — undocumented, but measured here on 2026-07-29 (minutes carrying
-//     >1,000 trades lost 15-20% of their volume against the raw feed). Crosshair the
-//     "Ticks Served" readout below to see what a given bar was actually handed.
+//     if that bites on your symbol. The "~1,002 PER-BAR ceiling" this note used to
+//     claim is RETRACTED (2026-08-21): a replay of that day's open served 2,765
+//     entries on the 09:30 bar and 1,451 on 09:31, so no such ceiling exists. The
+//     2026-07-29 measurement behind it — heavy minutes losing 15-20% of their volume
+//     against the raw feed — was real but misattributed; the likely cause is that the
+//     1T feed is itself lossy when busy, which is a data-completeness limit no script
+//     can work around. Crosshair the "Ticks Served" readout below to see what a given
+//     bar was actually handed.
 //   · Symbols/plans/sessions with no live 1T stream show an empty tape rather than a
 //     rolling approximation.
 //
@@ -65,8 +69,8 @@ const string PAD_NBSP = " "
 // Budget input) and then stops. Once a bar's array stops growing, later trades of that
 // bar never arrive and the tape stops advancing until the next bar opens. That is
 // ACCEPTED: see the ⚡ note at the top. Nothing in this script fabricates prints to
-// cover the gap. The PER-BAR ceiling (~1,002 entries) is measured, not documented —
-// re-measure with this file's "Ticks Served" readout before trusting the number. The
+// cover the gap. The "~1,002 PER-BAR ceiling" is RETRACTED — see the ⚡ note
+// at the top; no per-bar ceiling has been demonstrated at any number. The
 // 🐋 Block Trades panel no longer publishes one: it was stripped to a single plot on
 // 2026-08-14, so this file is the only place left to take that measurement.
 
@@ -441,6 +445,22 @@ varip int blockShownAtAsk = 0
 varip int blockShownAtBid = 0
 varip int blockShownAggSell = 0
 varip int blockShownMid = 0
+// 📰 Per-bar ALL-TRADES counts — the same five buckets, but over EVERY served print
+// instead of only those clearing the block threshold (Henry 2026-08-22). Same
+// classifier, same buckets, same rescan; the only difference is the absence of a
+// size filter, so `tapeTradeCount` is the whole tape and `blockShownCount` is the
+// subset of it that was big enough to matter. Reading them side by side is how you
+// see whether a bar's lean came from size or from sheer print count.
+//
+// varip SCALARS for exactly the reason the block ones are: the LTF array can be
+// EMPTY at the bar's confirmed tick, which is the tick the plots commit at, so the
+// rescan cannot recompute there and these must HOLD their last good value.
+varip int tapeTradeCount = 0
+varip int tapeTradeAggBuy = 0
+varip int tapeTradeAtAsk = 0
+varip int tapeTradeAtBid = 0
+varip int tapeTradeAggSell = 0
+varip int tapeTradeMid = 0
 // 🐋 The COND_* code of each block print in the current bar, in print order —
 // one entry per square in the column. varip for the same reason as the scalars
 // above (array mutations persist across realtime ticks), and filled by the same
@@ -798,6 +818,15 @@ if barstate.isnew
     blockShownAtBid := 0
     blockShownAggSell := 0
     blockShownMid := 0
+    // Same reason, same necessity: without this a bar that serves no ticks keeps
+    // the PREVIOUS bar's counts and the plots commit them onto it as if they were
+    // its own.
+    tapeTradeCount := 0
+    tapeTradeAggBuy := 0
+    tapeTradeAtAsk := 0
+    tapeTradeAtBid := 0
+    tapeTradeAggSell := 0
+    tapeTradeMid := 0
 
 // 📰 LOWER-TF TICKS
 bool lowerTfTicksChangedThisExec = false
@@ -900,6 +929,44 @@ if tapeEnabled or blockTradesActive
                     // affects the tape display, never the block-trade count.
                     if isCompleteRecord
                         f_processAndStoreTick(tickPrice = currentTickPrice, tickVolume = currentTickVolume, tickTime = currentTickTime, tickBid = currentTickBid, tickAsk = currentTickAsk)
+
+        // 📰 ALL-TRADES BUCKETS — INCREMENTAL, on this same watermark.
+        // Counters over an append-only array need no rescan: only the indices this
+        // execution has never seen can change them. The block counts next door DO
+        // rescan from scratch, and must, because a forming 1T sub-bar can revise its
+        // VOLUME up past the block threshold without appending an index — that
+        // changes a block count, so it needs a from-scratch rebuild to stay
+        // idempotent. It cannot change an ALL-trades count: every print is counted
+        // whatever its size. Only a revised price or quote could move a print
+        // between buckets, and that is the same tail caveat the tape rows already
+        // carry (they are stored on this watermark too, and self-correct on the next
+        // append ~1s later). Display-only, no alerts hang off these.
+        //
+        // The alternative — folding these into the block rescan — was measured and
+        // rejected on 2026-08-22: it made the whole rescan run in Tape Only mode and
+        // turned one .get() per print into five, ~13,800 array reads per execution on
+        // a 2,765-print bar against ~2,800 before, on every execution that saw a new
+        // tick. This form is O(new prints), typically 1-5.
+        if tapeProcessedTickCount <= availableTickCount - 1
+            for tradeIndex = tapeProcessedTickCount to availableTickCount - 1
+                float tradeVolume = tickVolumes.get(index = tradeIndex)
+                if not na(tradeVolume)
+                    // Same classifier as the rows and the block counts, so no
+                    // readout in this script can disagree with another.
+                    int tradeCondition = f_classifyTick(tickPrice = tickPrices.get(index = tradeIndex),
+                         tickBid = tickBids.get(index = tradeIndex), tickAsk = tickAsks.get(index = tradeIndex),
+                         previousPrice = tradeIndex > 0 ? tickPrices.get(index = tradeIndex - 1) : na)
+                    tapeTradeCount += 1
+                    if tradeCondition == COND_ABOVE_ASK or tradeCondition == COND_ABOVE_PRICE
+                        tapeTradeAggBuy += 1
+                    else if tradeCondition == COND_AT_ASK
+                        tapeTradeAtAsk += 1
+                    else if tradeCondition == COND_AT_BID
+                        tapeTradeAtBid += 1
+                    else if tradeCondition == COND_BELOW_BID or tradeCondition == COND_BELOW_PRICE
+                        tapeTradeAggSell += 1
+                    else
+                        tapeTradeMid += 1
 
         // Update the last processed tick count to prevent reprocessing
         tapeProcessedTickCount := availableTickCount
@@ -1054,20 +1121,42 @@ if blockTradesActive and blockHistoryBars > 0 and barstate.isconfirmed
         blockTrailBars.shift()
         for typeIndex = 0 to BLOCK_TYPE_COUNT - 1
             label.delete(id = blockTrailLabels.shift())
-// Expose the per-bar counts as numbers, one plot PER TYPE (never merged) plus the
-// total, so every bucket is independently auditable in the Data Window / status
-// line / crosshair popup — the actual counts, not the squares' 0/1 presence.
-plot(series = blockTradesActive ? blockShownAggBuy  : 0, title = "Block Buy (aggressive)",  precision = 0, display = display.data_window + display.status_line)
-plot(series = blockTradesActive ? blockShownAtAsk   : 0, title = "Block At Ask",             precision = 0, display = display.data_window + display.status_line)
-plot(series = blockTradesActive ? blockShownAtBid   : 0, title = "Block At Bid",             precision = 0, display = display.data_window + display.status_line)
-plot(series = blockTradesActive ? blockShownAggSell : 0, title = "Block Sell (aggressive)", precision = 0, display = display.data_window + display.status_line)
-plot(series = blockTradesActive ? blockShownMid     : 0, title = "Block Mid / Neutral",      precision = 0, display = display.data_window + display.status_line)
-plot(series = blockTradesActive ? blockShownCount   : 0, title = "Block Total (this bar)",   precision = 0, display = display.data_window + display.status_line)
-// Net block delta — the bar's order-flow lean in one number: buy-side (at ask +
-// above ask) − sell-side (at bid + below bid), mid prints neutral. The squares
-// now show every print's own type, so this is the summary read, not a color source.
-int blockNetDelta = (blockShownAtAsk + blockShownAggBuy) - (blockShownAtBid + blockShownAggSell)
-plot(series = blockTradesActive ? blockNetDelta     : 0, title = "Block Net Delta",          precision = 0, display = display.data_window + display.status_line)
+// The per-bar BLOCK counts are no longer published here (removed 2026-08-22). The
+// 🐋 Block Trades panel is where block numbers live — it publishes the same five
+// buckets plus the total off the same synced classifier — and duplicating them on the
+// tape put two identical rows in the status line of anyone running both. The counts
+// themselves are untouched: the squares, the block alert and the whale-cluster
+// window all still read `blockShown*`. What the tape publishes is the ALL-TRADES
+// breakdown below, which is the reading only the tape has.
+
+// 📰 ALL-TRADES BREAKDOWN — the same five buckets over EVERY served print, no size
+// filter (Henry 2026-08-22). Read as a ladder, most-buy down to most-sell, mid last.
+// Titles are spelled out in full: with the block rows gone these are the only counts
+// the tape publishes, so there is no crowded shared row to abbreviate for.
+//
+// COLOUR IS THE SIDE, THE LABEL IS THE TIER. Sourced from the tape's own row colours,
+// which is where a normal print's type already has a colour — but taken as HUE only,
+// at full opacity. Those inputs are row BACKGROUNDS at transp 80-90, illegible as
+// text; and the buy pair share NORD8 while the sell pair share NORD11, so an
+// alpha-free four-colour scheme collapses to two regardless. The label carries the
+// tier unambiguously ("Trade Buy (aggressive)" against "Trade At Ask"), so the hue is
+// free to carry the side.
+color tapeTradeBuyText  = color.new(color = aboveAskBackgroundColor, transp = 0)
+color tapeTradeSellText = color.new(color = belowBidBackgroundColor, transp = 0)
+color tapeTradeMidText  = color.new(color = defaultTextColor,        transp = 0)
+plot(series = tapeTradeAggBuy,  title = "Trade Buy (aggressive)",  color = tapeTradeBuyText,  precision = 0, display = display.data_window + display.status_line)
+plot(series = tapeTradeAtAsk,   title = "Trade At Ask",            color = tapeTradeBuyText,  precision = 0, display = display.data_window + display.status_line)
+plot(series = tapeTradeAtBid,   title = "Trade At Bid",            color = tapeTradeSellText, precision = 0, display = display.data_window + display.status_line)
+plot(series = tapeTradeAggSell, title = "Trade Sell (aggressive)", color = tapeTradeSellText, precision = 0, display = display.data_window + display.status_line)
+plot(series = tapeTradeMid,     title = "Trade Mid / Neutral",     color = tapeTradeMidText,  precision = 0, display = display.data_window + display.status_line)
+plot(series = tapeTradeCount,   title = "Trade Total (this bar)",  color = tapeTradeMidText,  precision = 0, display = display.data_window + display.status_line)
+// The bar's order-flow lean in one number: buy-side (at ask + above ask) − sell-side
+// (at bid + below bid), mid prints neutral. Same formula the 🐋 panel applies to the
+// size-filtered subset, so the two are directly comparable: both leaning the same way
+// is size AND count agreeing; opposite ways is a few large prints leaning against the
+// crowd, which is the more interesting bar.
+int tapeTradeNetDelta = (tapeTradeAtAsk + tapeTradeAggBuy) - (tapeTradeAtBid + tapeTradeAggSell)
+plot(series = tapeTradeNetDelta, title = "Trade Net Delta", color = tapeTradeMidText, precision = 0, display = display.data_window + display.status_line)
 
 // THE HONESTY READOUT — raw 1T prints served for this bar, before minimumSize, before
 // the block threshold, before any filter. Read it whenever a bar looks quiet: a thin
