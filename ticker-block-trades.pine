@@ -208,10 +208,11 @@ blockNeutralColor = input.color(defval = color.new(color = NORD4,  transp = 90),
 // are authoritative; tick-to-tick direction is only a no-quote fallback. Because
 // this is the same code the tape runs, the panel's counts and net-delta can never
 // drift from the squares. Edit in ticker-tape.pine, then run the sync script.
-// NOTE: f_tickDirection is carried but not called here — the panel buckets every
-// block by TYPE and derives its net lean from those buckets, the same way the tape
-// does. It stays because the region is mirrored verbatim, and because any future
-// caller must get the tape's definition, not a local reinvention. ──
+// NOTE: f_tickDirection is carried but not called by the panel's own engine — the
+// panel buckets every block by TYPE and derives its net lean from those buckets,
+// the same way the tape does. It stays because the region is mirrored verbatim,
+// and because any future caller must get the tape's definition, not a local
+// reinvention. ──
 // <<SYNC block-classify BEGIN>> — generated from ticker-tape.pine; run scripts/sync-block-engine.sh
 f_classifyTick(float tickPrice, float tickBid, float tickAsk, float previousPrice) =>
     bool hasValidQuotes = not na(tickBid) and not na(tickAsk) and tickBid > 0 and tickAsk > 0
@@ -382,19 +383,25 @@ if availableTickCount > 0
     blockLastSeenSize := availableTickCount
 
 if availableTickCount != blockProcessedTickCount and availableTickCount > 0
+    // ⚡ NATIVE PREPASS (2026-09-02, profiler showed this block at 40%+ of runtime).
+    // array.max() ignores na elements and returns na only on an empty or all-na
+    // array (documented) — exactly what the loop's own per-element accumulation
+    // used to compute, so the 🔬 calibration max comes from built-in code instead
+    // of a Pine-side op per print. The max then doubles as an EARLY OUT: when the
+    // bar's largest print is below the threshold, no print can qualify, every
+    // bucket keeps the zero it was declared with, and the O(n) classification loop
+    // is skipped entirely — which is MOST executions, since most bars carry no
+    // block-size print. Outputs are identical in every case; only the work moved.
+    float rebuiltMaxSize = tickVolumes.max()
     int rebuiltCount = 0
     int rebuiltAggBuy = 0
     int rebuiltAtAsk = 0
     int rebuiltAtBid = 0
     int rebuiltAggSell = 0
     int rebuiltMid = 0
-    float rebuiltMaxSize = na
-    if availableTickCount > 0
+    if not na(rebuiltMaxSize) and rebuiltMaxSize >= blockSizeThreshold
         for tickIndex = 0 to availableTickCount - 1
             float tickVolume = tickVolumes.get(index = tickIndex)
-            // 🔬 Calibration aid — every served print, qualifying or not.
-            if not na(tickVolume)
-                rebuiltMaxSize := na(rebuiltMaxSize) ? tickVolume : math.max(rebuiltMaxSize, tickVolume)
             if not na(tickVolume) and tickVolume >= blockSizeThreshold
                 // Same classifier as the tape's own rows — a block counted here can
                 // never disagree with the square the tape stacks for that print.

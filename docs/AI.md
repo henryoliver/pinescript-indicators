@@ -708,9 +708,16 @@ array.push(id = levels, value = Level.new(price = 100.0, weight = 3, levelColor 
 - Function signatures shrink dramatically
 - Fields are self-documenting and cannot drift out of sync
 
-**Limitation:** `array.sort()` does not work on UDT arrays — there is no
-built-in comparator. A manual sort loop is still needed, but each swap is one
-`array.get`/`array.set` pair instead of N.
+**UDT sorting/searching (since 2026):** `array.sort()`, `array.sort_indices()`,
+and `matrix.sort()` accept UDT collections (April 2026), and
+`array.binary_search()` / `_leftmost()` / `_rightmost()` search them
+(August 2026). All take a `sort_field` parameter — a "const int" field index
+(default 0 = first field in the type declaration) or a "const string" field
+name; binary search requires the array pre-sorted ASCENDING by that same
+field. A manual sort loop is now only justified for custom ordering the
+built-in can't express (e.g. quote-window's na-sinks-to-bottom insertion
+sort); comments in files written before April 2026 may still claim UDT
+sorting is impossible — that claim is obsolete.
 
 ### 7. Emoji Shorttitle Pattern
 
@@ -1316,8 +1323,11 @@ Before submitting any code changes, verify:
 - Avoid heavy per-level lookback loops — prefer computing touch/acceptance
   scores per cluster zone rather than per individual level
 - Prefer UDT arrays over parallel arrays to reduce sort and access overhead
-- `array.sort()` does not support UDT arrays — manual sort is still needed but
-  operates on single elements instead of N parallel arrays
+- `array.sort()` / `array.sort_indices()` / `matrix.sort()` support UDT
+  collections via `sort_field` (since April 2026), and `array.binary_search*()`
+  searches them (August 2026, pre-sorted ascending by the same field) — prefer
+  these over manual sort loops unless the ordering needs custom logic (na
+  handling, multi-key)
 
 ### String Formatting
 - Use `str.format()` for complex formatting with placeholders
@@ -1345,5 +1355,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-07-25
+**Last Updated**: 2026-08-28
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`
