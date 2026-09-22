@@ -1,0 +1,307 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+
+//@version=6
+indicator(title = "Cumulative Volume Delta", shorttitle = "⚖️ CVD", format = format.volume, max_lines_count = 500)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0 = #2E3440
+const color NORD1 = #3B4252
+const color NORD2 = #434C5E
+const color NORD3 = #4C566A
+// Snow Storm
+const color NORD4 = #D8DEE9
+const color NORD5 = #E5E9F0
+const color NORD6 = #ECEFF4
+// Frost
+const color NORD7 = #8FBCBB
+const color NORD8 = #88C0D0
+const color NORD9 = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧩 TYPE DEFINITIONS
+// Custom Pine types used by the indicator.
+// ═════════════════════════════════════════════════════════════════════════════
+// Line style is chosen from an ENUM rather than a name string: the option list
+// and the resolver are the same declaration, so they cannot drift.
+enum LineStyleMode
+    SOLID  = "Solid"
+    DASHED = "Dashed"
+    DOTTED = "Dotted"
+
+// One confirmed CVD swing: the bar it sits on, the CVD level there, and the
+// price extreme printed on that same bar. The divergence engine keeps the last
+// one of each kind so the next pivot has something to be measured against.
+type DivergencePivot
+    int bar
+    float cvd
+    float price
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📊 CUMULATIVE VOLUME DELTA
+// Signed volume accumulated inside the anchor period: every intrabar's volume
+// counts positive when that intrabar closes up and negative when it closes
+// down, and the running total is the line. The pane deliberately carries ONE
+// line — no delta candles, no moving average, no histogram — because the only
+// read that matters here is the SHAPE of accumulation next to price:
+// agreement (price and flow both make the new extreme) or disagreement
+// (price makes it alone). Everything else is clutter in front of that read.
+// The absolute value is meaningless; the slope and the swing structure are
+// the signal.
+//
+// Repainting: the forming bar's value updates tick by tick and settles at its
+// close — nothing already closed is ever re-priced. The one moving part is the
+// LEFT edge: the intrabar budget is spent newest-first, so the oldest bars run
+// out of intrabar data as new ones arrive and the line's start walks forward.
+//
+// Exports `cvdValue` and `cvdAnchorStartBar` for the divergence engine below.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_CVD = "📊 Cumulative Volume Delta"
+
+// Line slope colors — the same blue pair as the stochastic %D and the
+// macd-waves signal line, so up and down read as one color with a lean.
+const color CVD_UP_COLOR = color.new(color = NORD8, transp = 20)
+const color CVD_DOWN_COLOR = color.new(color = NORD9, transp = 60)
+
+const string TT_CVD_ANCHOR = "Period the running total resets to zero. Session is the intraday read: the reset lands on the chart's own trading-day start (so it follows the chart's session setting, extended hours included) and each day starts flat, so the zero line is the day's buy/sell balance and the line's distance from it is the day's net accumulation. Continuous never resets — the line becomes a pure trend shape and the zero line stops meaning anything. On a chart timeframe at or above the anchor every bar is its own anchor, which collapses the line into a bar-by-bar delta: this is an intraday tool."
+const string TT_CVD_RESOLUTION = "Intrabar resolution the up/down volume split is measured at. Finer data classifies more of the bar's volume correctly but costs history: the plan's intrabar allotment is spent newest-first, so 1 tick buys the most precise delta and the least chart. 1 second is the 5-minute sweet spot. Auto picks by chart timeframe (≤15m → 1 second, intraday → 1 minute, daily → 5 minutes, above → 1 hour). An empty pane means this symbol/plan serves no data at this resolution — step down one level."
+const string TT_CVD_BUDGET = "Maximum intrabars pulled for the whole request — the ceiling is the plan's (100K Basic/Essential/Plus/Premium, 125K Expert, 200K Ultimate) and the budget is spent newest-first. It buys chart history, not accuracy: at 1 second a 5-minute chart costs up to 300 intrabars per bar, so the full 200K covers roughly eight sessions."
+const string TT_CVD_ZERO = "Show the zero line — the anchor period's flat point, where buying and selling volume inside the period cancel out. Only meaningful with an anchor other than Continuous."
+
+cvdAnchorMode = input.string(defval = "Session", title = "Anchor", options = ["Session", "Week", "Month", "Continuous"],
+     tooltip = TT_CVD_ANCHOR, group = GROUP_CVD)
+cvdResolutionMode = input.string(defval = "1 second", title = "Intrabar Resolution", options = ["Auto", "1 tick", "1 second", "1 minute"],
+     tooltip = TT_CVD_RESOLUTION, group = GROUP_CVD)
+cvdIntrabarBudget = input.int(defval = 200000, title = "Intrabar Budget", minval = 1000, maxval = 200000, step = 1000,
+     tooltip = TT_CVD_BUDGET, group = GROUP_CVD, display = display.none)
+cvdShowZeroLine = input.bool(defval = true, title = "Show Zero Line",
+     tooltip = TT_CVD_ZERO, group = GROUP_CVD, display = display.none)
+
+// Auto falls back one step at a time: the finer the resolution, the fewer
+// chart bars the same intrabar budget covers.
+string cvdAutoTimeframe = timeframe.isseconds ? "1S" : timeframe.isintraday ? (timeframe.in_seconds(timeframe = timeframe.period) <= 900 ? "1S" : "1") : timeframe.isdaily ? "5" : "60"
+
+string cvdLowerTimeframe = switch cvdResolutionMode
+    "1 tick"   => "1T"
+    "1 second" => "1S"
+    "1 minute" => "1"
+    => cvdAutoTimeframe
+
+string cvdAnchorTimeframe = switch cvdAnchorMode
+    "Week"  => "1W"
+    "Month" => "1M"
+    => "1D"
+
+// Helper function returning one intrabar's signed volume. The intrabar's own
+// close vs open is the classifier; a flat intrabar falls back to close vs the
+// previous close, and an unchanged print inherits the last known direction —
+// the standard up/down volume approximation, which is the best a chart feed
+// without trade-by-trade aggressor flags can do.
+f_cvdIntrabarSignedVolume() =>
+    var bool intrabarIsBuy = true
+    if close > open
+        intrabarIsBuy := true
+    else if close < open
+        intrabarIsBuy := false
+    else if close > close[1]
+        intrabarIsBuy := true
+    else if close < close[1]
+        intrabarIsBuy := false
+    (intrabarIsBuy ? 1.0 : -1.0) * nz(source = volume)
+
+// One request, one series — the whole engine. ignore_invalid_* degrade a
+// symbol/plan/session with no intrabar stream to an empty array instead of
+// erroring the script out.
+array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = syminfo.tickerid, timeframe = cvdLowerTimeframe,
+     expression = f_cvdIntrabarSignedVolume(), ignore_invalid_symbol = true, ignore_invalid_timeframe = true,
+     calc_bars_count = cvdIntrabarBudget)
+
+// No intrabar data for this bar is na, never 0 — a zero would draw a flat
+// line that claims the bar traded in perfect balance.
+float cvdBarDelta = array.size(id = cvdIntrabarDeltas) > 0 ? array.sum(id = cvdIntrabarDeltas) : na
+
+bool cvdAnchorReset = cvdAnchorMode != "Continuous" and timeframe.change(timeframe = cvdAnchorTimeframe)
+
+var int cvdAnchorStartBar = 0
+if cvdAnchorReset
+    cvdAnchorStartBar := bar_index
+
+// Running total. The `var` holds the last committed level, so a realtime tick
+// re-adds only the forming bar's delta, and a bar the feed left empty carries
+// the level forward untouched rather than breaking the line.
+var float cvdValue = na
+if not na(cvdBarDelta)
+    cvdValue := (cvdAnchorReset ? 0.0 : nz(source = cvdValue)) + cvdBarDelta
+
+// Slope drives the color; flat bars hold the last direction so it doesn't
+// flicker (same treatment as the stochastic %D and the obv signal MA).
+var bool cvdRising = true
+cvdRising := cvdValue > cvdValue[1] ? true : cvdValue < cvdValue[1] ? false : cvdRising
+color cvdLineColor = cvdRising ? CVD_UP_COLOR : CVD_DOWN_COLOR
+
+// Vendor volume guard — delta is meaningless without a volume feed.
+var float cvdCumulativeVolume = 0.0
+cvdCumulativeVolume += nz(source = volume)
+if barstate.islast and cvdCumulativeVolume == 0
+    runtime.error(message = "No volume is provided by the data vendor.")
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🔀 DIVERGENCE
+// Swing-to-swing comparison at the CVD's OWN pivots: each confirmed CVD pivot
+// is measured against the previous one, and price is read on those same two
+// bars. Four states, the classic reading:
+//   · Regular bearish — price higher high, CVD lower high. The new price high
+//     was made on less net buying than the last one: buyers paid up into
+//     supply that absorbed them.
+//   · Regular bullish — price lower low, CVD higher low. The new low was made
+//     on less net selling: sellers are exhausting into demand.
+//   · Hidden bearish — price lower high, CVD higher high. Flow keeps buying a
+//     market that can no longer make highs; continuation of the down leg.
+//   · Hidden bullish — price higher low, CVD lower low. Continuation of the up
+//     leg.
+// Regular divergences draw DOTTED between the two CVD pivots by default, hidden
+// ones DASHED, so the two families never get confused at a glance. Both styles
+// and both widths are inputs; keeping them different is the point.
+//
+// Why the pivots are taken on the CVD and not on price: price and flow do not
+// turn on the same bar, and pairing each series' own pivots invents matches.
+// One pivot set, read on both series, is the standard construction (it is what
+// TradingView's own divergence indicator does) and the only one that answers
+// "at the moment flow turned, what had price done?".
+//
+// The right-hand side of a pivot window includes the forming bar, so a pivot
+// can appear and then un-appear intrabar. Lines are therefore minted only on a
+// confirmed close — which is also the repo rule (drawing deletes commit while
+// creations roll back). Cost: a divergence shows `Pivot Right Bars` + 1 bars
+// after the CVD pivot itself. That lag is the price of a pivot that is real.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_DIVERGENCE = "🔀 Divergence"
+
+const string TT_DIV_MODE = "Which divergence families to draw. Regular is the reversal read (price extends, flow does not) and is the reason this pane exists. Hidden is the continuation read — useful in a trend, noisy everywhere else, which is why it is off by default. Regular draws dotted and hidden dashed by default, each with its own style and width."
+const string TT_DIV_PIVOT = "Bars required either side of a CVD swing for it to count as a pivot. Left sets how much structure a swing must clear to qualify; right sets how long it must hold — and is also the lag, since a pivot is only confirmed that many bars later. 5/5 on a 5-minute chart is a 25-minute swing confirmed 25 minutes after the fact; drop the right side for earlier and noisier."
+const string TT_DIV_RANGE = "Bar distance between the two pivots a divergence may span. Below the minimum the two swings are the same move; above the maximum they are unrelated structure and the line means nothing. 5 to 60 bars on a 5-minute chart is 25 minutes to one session."
+const string TT_DIV_ANCHOR = "Reject divergences whose two pivots sit in different anchor periods. The running total resets at every anchor, so a CVD level from before the reset is not comparable to one after it — and the reset itself prints an artificial swing. Leave on for any anchored CVD; it does nothing when the anchor is Continuous."
+const string TT_DIV_REGULAR_LINE = "Line style and width for REGULAR divergences — the reversal read. Style carries the family and color carries the direction, so leave regular and hidden on different styles if you draw Both; matching them makes a reversal line and a continuation line identical apart from hue."
+const string TT_DIV_HIDDEN_LINE = "Line style and width for HIDDEN divergences — the continuation read. Style carries the family and color carries the direction, so leave regular and hidden on different styles if you draw Both; matching them makes a reversal line and a continuation line identical apart from hue."
+const string TT_DIV_BULL = "Color of bullish divergence lines — the up-wave color from macd-waves. Bullish lines are drawn at CVD swing LOWS."
+const string TT_DIV_BEAR = "Color of bearish divergence lines — the down-wave color from macd-waves. Bearish lines are drawn at CVD swing HIGHS."
+
+divergenceMode = input.string(defval = "Regular", title = "Show", options = ["Off", "Regular", "Hidden", "Both"],
+     tooltip = TT_DIV_MODE, group = GROUP_DIVERGENCE)
+divergencePivotLeft = input.int(defval = 5, title = "Pivot Bars (Left / Right)", minval = 1, maxval = 50,
+     inline = "divergence_pivot", tooltip = TT_DIV_PIVOT, group = GROUP_DIVERGENCE)
+divergencePivotRight = input.int(defval = 5, title = "", minval = 1, maxval = 50,
+     inline = "divergence_pivot", group = GROUP_DIVERGENCE)
+divergenceRangeMin = input.int(defval = 5, title = "Bars Between Pivots (Min / Max)", minval = 1, maxval = 100,
+     inline = "divergence_range", tooltip = TT_DIV_RANGE, group = GROUP_DIVERGENCE)
+divergenceRangeMax = input.int(defval = 60, title = "", minval = 2, maxval = 500,
+     inline = "divergence_range", group = GROUP_DIVERGENCE)
+divergenceSameAnchorOnly = input.bool(defval = true, title = "Same Anchor Period Only",
+     tooltip = TT_DIV_ANCHOR, group = GROUP_DIVERGENCE, display = display.none)
+divergenceBullColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Bullish Color",
+     tooltip = TT_DIV_BULL, group = GROUP_DIVERGENCE)
+divergenceBearColor = input.color(defval = color.new(color = NORD11, transp = 10), title = "Bearish Color",
+     tooltip = TT_DIV_BEAR, group = GROUP_DIVERGENCE)
+LineStyleMode divergenceRegularStyle = input.enum(defval = LineStyleMode.DOTTED, title = "Regular Line",
+     inline = "divergence_regular", group = GROUP_DIVERGENCE)
+int divergenceRegularWidth = input.int(defval = 1, title = "", minval = 1, maxval = 10,
+     inline = "divergence_regular", tooltip = TT_DIV_REGULAR_LINE, group = GROUP_DIVERGENCE)
+LineStyleMode divergenceHiddenStyle = input.enum(defval = LineStyleMode.DASHED, title = "Hidden Line",
+     inline = "divergence_hidden", group = GROUP_DIVERGENCE)
+int divergenceHiddenWidth = input.int(defval = 1, title = "", minval = 1, maxval = 10,
+     inline = "divergence_hidden", tooltip = TT_DIV_HIDDEN_LINE, group = GROUP_DIVERGENCE)
+
+bool divergenceRegularOn = divergenceMode == "Regular" or divergenceMode == "Both"
+bool divergenceHiddenOn = divergenceMode == "Hidden" or divergenceMode == "Both"
+
+// Pivots are taken on the CVD line itself and evaluated every bar so the
+// built-ins keep their history regardless of the Show setting.
+bool divergenceHighFound = not na(ta.pivothigh(source = cvdValue, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
+bool divergenceLowFound = not na(ta.pivotlow(source = cvdValue, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
+
+// Readings on the pivot bar — `divergencePivotRight` bars back. Price is read
+// on that same bar: one pivot set, both series.
+int divergencePivotBar = bar_index - divergencePivotRight
+float divergenceCvdAtPivot = cvdValue[divergencePivotRight]
+float divergencePriceAtHigh = high[divergencePivotRight]
+float divergencePriceAtLow = low[divergencePivotRight]
+
+// The previous pivot of each kind is carried in state, not re-derived from the
+// series: one object per side instead of six ta.valuewhen instances and two
+// ta.barssince instances, each of which would keep its own history buffer, and
+// the three fields can never drift apart.
+var DivergencePivot divergencePrevHigh = DivergencePivot.new(bar = na, cvd = na, price = na)
+var DivergencePivot divergencePrevLow = DivergencePivot.new(bar = na, cvd = na, price = na)
+
+// Helper function reporting whether a pivot pair is comparable at all: a
+// previous pivot exists, it sits the configured distance back, and it belongs
+// to the same anchor period — the running total resets at every anchor, so
+// levels either side of one are different scales and the reset itself prints
+// an artificial swing.
+f_divergencePairValid(DivergencePivot prevPivot) =>
+    bool hasPrevPivot = not na(prevPivot.bar)
+    int pivotGap = hasPrevPivot ? divergencePivotBar - prevPivot.bar : 0
+    bool gapInRange = hasPrevPivot and pivotGap >= divergenceRangeMin and pivotGap <= divergenceRangeMax
+    gapInRange and (not divergenceSameAnchorOnly or prevPivot.bar >= cvdAnchorStartBar)
+
+bool divergenceHighValid = divergenceHighFound and f_divergencePairValid(prevPivot = divergencePrevHigh)
+bool divergenceLowValid = divergenceLowFound and f_divergencePairValid(prevPivot = divergencePrevLow)
+
+bool divergenceRegularBear = divergenceRegularOn and divergenceHighValid and divergencePriceAtHigh > divergencePrevHigh.price and divergenceCvdAtPivot < divergencePrevHigh.cvd
+bool divergenceRegularBull = divergenceRegularOn and divergenceLowValid and divergencePriceAtLow < divergencePrevLow.price and divergenceCvdAtPivot > divergencePrevLow.cvd
+bool divergenceHiddenBear = divergenceHiddenOn and divergenceHighValid and divergencePriceAtHigh < divergencePrevHigh.price and divergenceCvdAtPivot > divergencePrevHigh.cvd
+bool divergenceHiddenBull = divergenceHiddenOn and divergenceLowValid and divergencePriceAtLow > divergencePrevLow.price and divergenceCvdAtPivot < divergencePrevLow.cvd
+
+// Resolves the style enum. f_divergenceDrawLine is its only caller.
+f_divergenceLineStyle(LineStyleMode styleMode) =>
+    styleMode == LineStyleMode.DASHED ? line.style_dashed : styleMode == LineStyleMode.DOTTED ? line.style_dotted : line.style_solid
+
+// Helper function drawing one divergence line between the two CVD pivots.
+// Lines are never touched again — `max_lines_count` retires the oldest.
+f_divergenceDrawLine(DivergencePivot fromPivot, float toValue, color lineColor, bool isRegular) =>
+    line.new(x1 = fromPivot.bar, y1 = fromPivot.cvd, x2 = divergencePivotBar, y2 = toValue, xloc = xloc.bar_index,
+         color = lineColor,
+         style = f_divergenceLineStyle(styleMode = isRegular ? divergenceRegularStyle : divergenceHiddenStyle),
+         width = isRegular ? divergenceRegularWidth : divergenceHiddenWidth)
+
+// Confirmed closes only — the pivot window's right side includes the forming
+// bar, so an intrabar pivot can un-happen while the line it drew cannot, and
+// an intrabar state write would hand the next comparison a pivot that never
+// closed. Drawing and state both commit here, in that order: this bar reads
+// the previous pivot, then becomes it.
+if barstate.isconfirmed
+    if divergenceRegularBear or divergenceHiddenBear
+        f_divergenceDrawLine(fromPivot = divergencePrevHigh, toValue = divergenceCvdAtPivot,
+             lineColor = divergenceBearColor, isRegular = divergenceRegularBear)
+    if divergenceRegularBull or divergenceHiddenBull
+        f_divergenceDrawLine(fromPivot = divergencePrevLow, toValue = divergenceCvdAtPivot,
+             lineColor = divergenceBullColor, isRegular = divergenceRegularBull)
+    if divergenceHighFound
+        divergencePrevHigh.bar := divergencePivotBar
+        divergencePrevHigh.cvd := divergenceCvdAtPivot
+        divergencePrevHigh.price := divergencePriceAtHigh
+    if divergenceLowFound
+        divergencePrevLow.bar := divergencePivotBar
+        divergencePrevLow.cvd := divergenceCvdAtPivot
+        divergencePrevLow.price := divergencePriceAtLow
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 PLOTS
+// Final plot and hline statements only — every series and color is computed in
+// its owning section above.
+// ═════════════════════════════════════════════════════════════════════════════
+hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed,
+     display = cvdShowZeroLine ? display.all : display.none)
+plot(series = cvdValue, title = "CVD", color = cvdLineColor, linewidth = 2)

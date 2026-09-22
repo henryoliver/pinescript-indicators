@@ -4,24 +4,25 @@
 //@version=6
 indicator(title = "Energy Alignment", shorttitle = "⚡ EA", overlay = true, max_labels_count = 500)
 
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
 // Shared immutable values used by the indicator, including the Nord palette.
 // ═════════════════════════════════════════════════════════════════════════════
 // Nord Theme Color
 // Polar Night
-const color NORD0 = #2E3440
-const color NORD1 = #3B4252
-const color NORD2 = #434C5E
-const color NORD3 = #4C566A
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
 // Snow Storm
-const color NORD4 = #D8DEE9
-const color NORD5 = #E5E9F0
-const color NORD6 = #ECEFF4
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
 // Frost
-const color NORD7 = #8FBCBB
-const color NORD8 = #88C0D0
-const color NORD9 = #81A1C1
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
 const color NORD10 = #5E81AC
 // Aurora
 const color NORD11 = #BF616A
@@ -31,755 +32,366 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🧩 TYPE DEFINITIONS
-// Custom Pine types live here when a file needs them.
+// ⚙️ ENGINE
 // ═════════════════════════════════════════════════════════════════════════════
-// One light per energy. SQUEEZE is volatility's deliberate 4th state — energy
-// loading, no side — and never counts toward either side's confluence.
-enum EnergyState
-    LONG = "Long"
-    SHORT = "Short"
-    NEUTRAL = "Neutral"
-    SQUEEZE = "Squeeze"
 
-enum TablePositionMode
-    TOP_LEFT = "Top Left"
-    TOP_CENTER = "Top Center"
-    TOP_RIGHT = "Top Right"
-    MIDDLE_LEFT = "Middle Left"
-    MIDDLE_RIGHT = "Middle Right"
-    BOTTOM_LEFT = "Bottom Left"
-    BOTTOM_CENTER = "Bottom Center"
-    BOTTOM_RIGHT = "Bottom Right"
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔄 CYCLES
+// ─────────────────────────────────────────────────────────────────────────────
+const string GROUP_CYCLE = "🔄 Cycle"
 
-enum TextSizeMode
-    TINY = "Tiny"
-    SMALL = "Small"
-    NORMAL = "Normal"
+int cycleKLength = input.int(defval = 5, title = "%K Length", minval = 1, group = GROUP_CYCLE)
+int cycleKSmoothing = input.int(defval = 2, title = "%K Smoothing", minval = 1, group = GROUP_CYCLE)
+int cycleDSmoothing = input.int(defval = 3, title = "%D Smoothing", minval = 1, group = GROUP_CYCLE)
 
-// One support/resistance level with its calculation family — clusters count
-// FAMILIES, not lines (R1 + R2 near each other is not a cluster).
-type SrLevel
-    float price
-    int family
-    string name
+float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = cycleKLength), length = cycleKSmoothing)
+float cycleD = ta.sma(source = cycleK, length = cycleDSmoothing)
 
-// ═════════════════════════════════════════════════════════════════════════════
-// ⚙️ GENERAL
-// Truly shared values: ATR(14) (trend deadband + S/R zone width), the derived
-// 3:1 confirmation timeframe (Energies 3 and 5), and the slope-vote helper
-// every deadband read goes through.
-// ═════════════════════════════════════════════════════════════════════════════
-// ATR(14) — the shared volatility yardstick for the trend flat threshold and
-// the S/R zone width.
-float sharedAtr = ta.atr(length = 14)
+var bool cycleDRising = true
+cycleDRising := cycleD > cycleD[1] ? true : cycleD < cycleD[1] ? false : cycleDRising
 
-// Confirmation timeframe = strictly 3× the chart timeframe (Barry: never
-// sloppier than 3:1). Tick/range charts cannot be scaled in Pine — Energies 3
-// and 5 read neutral there and say so in their tooltips. Odd-second and
-// monthly charts round through timeframe.from_seconds to the nearest valid
-// timeframe, so the ratio is only approximate off plain minutes/days.
-bool confirmationDerivable = timeframe.isseconds or timeframe.isminutes or timeframe.isdwm
-string confirmationTimeframe = confirmationDerivable ?
-     timeframe.from_seconds(seconds = timeframe.in_seconds(timeframe = timeframe.period) * 3) : timeframe.period
-
-// Barry's cycle stochastic settings — canon, not tunable, and genuinely shared:
-// Energy 2 runs them on the setup chart, Energy 5 on the confirmation chart
-// ("settings never change per timeframe, only the timeframe changes").
-const int CYCLE_K_LENGTH = 5
-const int CYCLE_K_SMOOTHING = 2
-const int CYCLE_D_SMOOTHING = 3
-
-// Helper function turning a slope into a vote through a deadband: 1 rising,
-// -1 falling, 0 flat ("barely moving" counts as flat).
-f_slopeVote(float slopeValue, float deadbandValue) =>
-    slopeValue > deadbandValue ? 1 : slopeValue < -deadbandValue ? -1 : 0
-
-// Helper function rendering a state as the light glyph used by the table and
-// the setup tooltips.
-f_stateGlyph(EnergyState state) =>
-    switch state
-        EnergyState.LONG => "▲"
-        EnergyState.SHORT => "▼"
-        EnergyState.SQUEEZE => "◆"
-        => "—"
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 📈 ENERGY 1 — TREND
-// Barry's rule: the 50 SMA ANGLE is the trend, price position alone is not.
-// Green = close above a rising 50, red = close below a falling 50, dark when
-// the 50 is flat or price fights the MA. Same slope engine as ma-waves: the
-// mechanical stand-in for "judging the angle by eye" is the SMA's net movement
-// over 5 bars against an ATR-fraction deadband.
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_TREND = "1. 📈 Trend"
+// ─────────────────────────────────────────────────────────────────────────────
+// 📈 TREND
+// ─────────────────────────────────────────────────────────────────────────────
+const string GROUP_TREND = "📈 Trend"
 const int TREND_SMA_LENGTH = 50
-const int TREND_SLOPE_BARS = 5
+const int TREND_FLAT_WINDOW = 10
 
-float trendFlatAtrFraction = input.float(defval = 0.1, title = "Flat ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
-     tooltip = "The 50 SMA reads FLAT when its net movement over 5 bars is at most this fraction of ATR(14) — a flat 50 = no trend = no light (and it arms the Rubber Band setup). ATR scaling keeps the threshold meaningful on any symbol at any timeframe. The only input this energy needs; the 50 SMA itself is canon.", group = GROUP_TREND)
+float trendFlatAtrFraction = input.float(defval = 0.0, title = "Flat ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
+     tooltip = "Flat-regime sensitivity: the 50 SMA is flat when its net movement over the flat window (10 bars) is at most this fraction of ATR(14). A flat stretch ends the wave count like a direction change. 0 (default) disables the regime — strictly UP/DOWN.", group = GROUP_TREND)
+float trendBreakAtrFraction = input.float(defval = 0.0, title = "Break ATR Fraction", minval = 0.0, maxval = 5.0, step = 0.05,
+     tooltip = "Direction-break sensitivity for the wave count: its trend reading only flips once the SMA moves against it by at least this fraction of ATR(14) from its running extreme, so a micro-wiggle never resets the count. 0 (default) = pure sign-of-slope.", group = GROUP_TREND)
 
+float trendAtr = ta.atr(length = 14)
 float trendSma = ta.sma(source = close, length = TREND_SMA_LENGTH)
-float trendSlope = trendSma - trendSma[TREND_SLOPE_BARS]
-int trendSlopeVote = f_slopeVote(slopeValue = trendSlope, deadbandValue = trendFlatAtrFraction * sharedAtr)
+float trendSlope = trendSma - trendSma[1]
+float trendNetChange = ta.change(source = trendSma, length = TREND_FLAT_WINDOW)
+bool trendFlatRegime = trendFlatAtrFraction > 0 and not na(trendNetChange) and not na(trendAtr) and
+     math.abs(number = trendNetChange) <= trendFlatAtrFraction * trendAtr
+var int trendDir = 0
+trendDir := trendFlatRegime ? 0 : trendSlope > 0 ? 1 : trendSlope < 0 ? -1 : trendDir
 
-EnergyState trendState = trendSlopeVote == 1 and close > trendSma ? EnergyState.LONG :
-     trendSlopeVote == -1 and close < trendSma ? EnergyState.SHORT : EnergyState.NEUTRAL
+var int waveReadDir = 0
+var float waveReadSmaExtreme = na
+if not na(trendSma)
+    float breakThreshold = trendBreakAtrFraction * nz(source = trendAtr, replacement = 0)
+    if waveReadDir == 0
+        waveReadSmaExtreme := trendSma
+        waveReadDir := trendSlope > 0 ? 1 : trendSlope < 0 ? -1 : 0
+    else if waveReadDir == 1
+        waveReadSmaExtreme := math.max(waveReadSmaExtreme, trendSma)
+        if trendSma < waveReadSmaExtreme and waveReadSmaExtreme - trendSma >= breakThreshold
+            waveReadDir := -1
+            waveReadSmaExtreme := trendSma
+    else
+        waveReadSmaExtreme := math.min(waveReadSmaExtreme, trendSma)
+        if trendSma > waveReadSmaExtreme and trendSma - waveReadSmaExtreme >= breakThreshold
+            waveReadDir := 1
+            waveReadSmaExtreme := trendSma
 
-// Exported for the Rubber Band setup: the flat regime and the mean to revert to.
-bool trendIsFlat = trendSlopeVote == 0
-float trendSmaForSetups = trendSma
-
-string trendDetailText = barstate.islast ? (na(trendSlope) ? "warming up — 50 SMA window not filled yet" :
-     str.format("close {0} the 50 SMA · 50 SMA slope {1, number, #.00}×ATR over {2} bars ({3})",
-         close > trendSma ? "above" : close < trendSma ? "below" : "at",
-         sharedAtr > 0 ? trendSlope / sharedAtr : 0,
-         TREND_SLOPE_BARS,
-         trendSlopeVote == 1 ? "rising" : trendSlopeVote == -1 ? "falling" : "flat")) : ""
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🔄 ENERGY 2 — CYCLES
-// Barry's cycle stochastic (5/2/3) with his exact window definitions: the %D
-// 45/55 half-cycle machine mirrored from macd-waves. The light means "a cycle
-// turn in your favor is forming": window open on your side + a one-bar %K hook
-// + %K touched 20/80 at least once inside the window (his take-the-trade
-// filter). Zero inputs — 45/55/20/80 and 5/2/3 are canon, not tunable.
-// ═════════════════════════════════════════════════════════════════════════════
 const float CYCLE_LOW_BOUNDARY = 45.0
 const float CYCLE_HIGH_BOUNDARY = 55.0
-const float CYCLE_EXTREME_LOW = 20.0
-const float CYCLE_EXTREME_HIGH = 80.0
-// Closed cycle highs/lows kept as S/R levels for Energy 4.
-const int CYCLE_LEVELS_KEPT = 5
+const int CYCLE_SEED_MAX_LOOKBACK = 200
+const string WAVE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
-float cycleK = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = CYCLE_K_LENGTH), length = CYCLE_K_SMOOTHING)
-float cycleD = ta.sma(source = cycleK, length = CYCLE_D_SMOOTHING)
+max_bars_back(high, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(low, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(open, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(close, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(waveReadDir, CYCLE_SEED_MAX_LOOKBACK)
+max_bars_back(trendSma, CYCLE_SEED_MAX_LOOKBACK)
 
 bool cycleCrossedAbove45 = ta.crossover(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
 bool cycleCrossedAbove55 = ta.crossover(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
 bool cycleCrossedBelow55 = ta.crossunder(source1 = cycleD, source2 = CYCLE_HIGH_BOUNDARY)
 bool cycleCrossedBelow45 = ta.crossunder(source1 = cycleD, source2 = CYCLE_LOW_BOUNDARY)
 
-var int cycleZone = 0  // 1 = high half-cycle window, -1 = low half-cycle window, 0 = unseeded
+var int cycleZone = 0
 bool cycleStartedHigh = cycleCrossedAbove45 or (cycleCrossedAbove55 and cycleZone == -1)
 bool cycleStartedLow = cycleCrossedBelow55 or (cycleCrossedBelow45 and cycleZone == 1)
-// Exported alongside the window-close events below: Energy 6 resets its band
-// latches on this boundary (the boundary bar seeds the NEW window there too).
 bool cycleStartedThisBar = cycleStartedHigh or cycleStartedLow
 
-// Open-window tracking: price extreme + whether %K reached the 20/80 extreme.
-var float cycleWindowExtremeHigh = na
-var float cycleWindowExtremeLow = na
-var bool cycleWindowTouched80 = false
-var bool cycleWindowTouched20 = false
+var float cycleExtreme = na
+var int cycleExtremeBar = na
+var float cycleExtremeOpen = na
+var float cycleExtremeClose = na
+var float cycleExtremeSma = na
+var int cycleExtremeDir = 0
+if cycleZone != 0 and not cycleStartedThisBar and
+     (na(cycleExtreme) or (cycleZone == 1 and high >= cycleExtreme) or (cycleZone == -1 and low <= cycleExtreme))
+    cycleExtreme := cycleZone == 1 ? high : low
+    cycleExtremeBar := bar_index
+    cycleExtremeOpen := open
+    cycleExtremeClose := close
+    cycleExtremeSma := trendSma
+    cycleExtremeDir := waveReadDir
 
-// Exported window-close events for Energies 4 and 6 — set only on the bar a
-// window closes, before the zone flips (na/false otherwise).
-float cycleEndedHighExtreme = na
-float cycleEndedLowExtreme = na
-bool cycleHighWindowClosed = false
-bool cycleLowWindowClosed = false
+var int waveTrendDir = 0
+var float waveLastImpulseExtreme = na
+var int waveNextImpulseNumber = 1
+var int waveZoneNextLetterIndex = 0
+var int waveZoneRetraceCount = 0
+var float waveZoneBestExtreme = na
+var int waveZoneBestLetterIndex = -1
+var bool waveZoneOwnerAConfirmed = true
+var bool waveZoneOwnerAPending = false
+var float wavePendingAPrice = na
+var int wavePendingABar = na
+var bool wavePendingAIsHighSide = false
+var int waveCycleLetterIndex = -1
 
-if cycleStartedThisBar
-    if cycleZone == 1
-        cycleHighWindowClosed := true
-        cycleEndedHighExtreme := cycleWindowExtremeHigh
-    else if cycleZone == -1
-        cycleLowWindowClosed := true
-        cycleEndedLowExtreme := cycleWindowExtremeLow
+var bool waveCycleSawFlat = false
+var int waveLastFlatBar = na
+var bool waveCycleSawOpposite = false
+if trendDir == 0
+    waveCycleSawFlat := true
+    waveLastFlatBar := bar_index
+if waveTrendDir != 0 and waveReadDir != 0 and waveReadDir != waveTrendDir
+    waveCycleSawOpposite := true
+
+f_waveLetterAt(int letterIndex) =>
+    int wrappedIndex = letterIndex % 26
+    str.substring(source = WAVE_ALPHABET, begin_pos = wrappedIndex, end_pos = wrappedIndex + 1)
+
+f_waveRetraceText(int retraceNumber, int letterIndex, bool zoneIsComplex, bool isHighSide) =>
+    string numberText = str.tostring(value = retraceNumber)
+    if zoneIsComplex and letterIndex >= 0
+        string letterText = f_waveLetterAt(letterIndex = letterIndex)
+        isHighSide ? numberText + "\n" + letterText : letterText + "\n" + numberText
+    else
+        numberText
+
+f_qualifyImpulse(int qualifyDir, float extremePrice, float extremeOpen, float extremeClose, float extremeSma, float baselineExtreme) =>
+    bool wickBeyond = not na(baselineExtreme) and
+         (qualifyDir == 1 ? extremePrice > baselineExtreme : extremePrice < baselineExtreme)
+    bool bodyCommits = not na(baselineExtreme) and
+         (qualifyDir == 1 ?
+             extremeOpen >= baselineExtreme and extremeClose > baselineExtreme :
+             extremeOpen <= baselineExtreme and extremeClose < baselineExtreme)
+    bool wave1Qualifies = not na(extremeSma) and
+         (qualifyDir == 1 ? extremeClose > extremeSma : extremeClose < extremeSma)
+    [wickBeyond, bodyCommits, wave1Qualifies]
+
+string waveEndedLabelText = ""
+float waveEndedPinPrice = na
+int waveEndedPinBar = na
+bool waveEndedPinIsHighSide = false
+bool waveEndedBecomesOwner = false
+string waveEndedOwnerDowngradeText = ""
+bool waveEndedOwnerDelete = false
+bool waveOwnerClear = false
+float wavePendingAReleasePrice = na
+int wavePendingAReleaseBar = na
+bool wavePendingAReleaseIsHighSide = false
+bool waveEndedIsComplexC = false
+
+if cycleStartedThisBar and barstate.isconfirmed
+    bool boundaryClaimed = cycleZone != 0 and
+         (na(cycleExtreme) or (cycleZone == 1 ? high >= cycleExtreme : low <= cycleExtreme))
+    if boundaryClaimed
+        cycleExtreme := cycleZone == 1 ? high : low
+        cycleExtremeBar := bar_index
+        cycleExtremeOpen := open
+        cycleExtremeClose := close
+        cycleExtremeSma := trendSma
+        cycleExtremeDir := waveReadDir
+    float endedExtreme = cycleExtreme
+    int endedExtremeBar = cycleExtremeBar
+    float endedOpen = cycleExtremeOpen
+    float endedClose = cycleExtremeClose
+    float endedSma = cycleExtremeSma
+    bool hadPendingA = not na(wavePendingAPrice)
+    bool hadOwnerAPending = waveZoneOwnerAPending
+    bool endedPinnedBareLetter = false
+
+    int endedDir = na(endedExtreme) ? waveReadDir : cycleExtremeDir
+    bool endedFlatBroke = waveCycleSawFlat and waveTrendDir != 0
+    bool endedRebirth = waveCycleSawOpposite and not endedFlatBroke and waveTrendDir != 0 and
+         endedDir == waveTrendDir and waveReadDir == waveTrendDir
+    bool endedBarMismatch = not endedFlatBroke and endedDir != 0 and waveReadDir != 0 and endedDir != waveReadDir
+    if endedBarMismatch
+        endedDir := waveReadDir
+    if endedFlatBroke and not na(endedExtremeBar) and endedExtremeBar <= waveLastFlatBar
+        endedDir := 0
+    if endedDir != waveTrendDir or endedFlatBroke or endedRebirth or endedBarMismatch
+        waveLastImpulseExtreme := na
+        waveNextImpulseNumber := 1
+        waveZoneNextLetterIndex := 0
+        waveZoneRetraceCount := 0
+        waveZoneBestExtreme := na
+        waveZoneBestLetterIndex := -1
+        waveOwnerClear := true
+    waveTrendDir := endedDir
+
+    if waveTrendDir != 0 and not na(endedExtreme) and (not endedBarMismatch or waveNextImpulseNumber == 1)
+        bool endedIsImpulseSide = (waveTrendDir == 1) == cycleStartedLow
+        if endedIsImpulseSide
+            [endedWickBeyond, endedBodyCommits, endedWave1Qualifies] = f_qualifyImpulse(qualifyDir = waveTrendDir,
+                 extremePrice = endedExtreme, extremeOpen = endedOpen, extremeClose = endedClose,
+                 extremeSma = endedSma, baselineExtreme = waveLastImpulseExtreme)
+            if waveNextImpulseNumber == 1 ? endedWave1Qualifies : endedBodyCommits
+                waveEndedLabelText := str.tostring(value = waveNextImpulseNumber)
+                waveLastImpulseExtreme := endedExtreme
+                waveNextImpulseNumber := waveNextImpulseNumber + 2
+                waveZoneNextLetterIndex := 0
+                waveZoneRetraceCount := 0
+                waveZoneBestExtreme := na
+                waveZoneBestLetterIndex := -1
+                waveOwnerClear := true
+            else if endedWickBeyond
+                waveZoneNextLetterIndex := 0
+                waveZoneRetraceCount := 0
+            else if waveNextImpulseNumber > 1 and waveCycleLetterIndex >= 0
+                waveEndedLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
+                endedPinnedBareLetter := true
+        else if waveNextImpulseNumber > 1
+            waveZoneRetraceCount := waveZoneRetraceCount + 1
+            waveEndedIsComplexC := waveCycleLetterIndex == 2
+            bool zoneIsComplex = waveZoneRetraceCount >= 2
+            bool takesOwnership = na(waveZoneBestExtreme) or
+                 (waveTrendDir == 1 ? endedExtreme < waveZoneBestExtreme : endedExtreme > waveZoneBestExtreme)
+            if takesOwnership
+                if not na(waveZoneBestExtreme) and waveZoneBestLetterIndex >= 0
+                    if waveZoneBestLetterIndex == 0 and not waveZoneOwnerAConfirmed
+                        waveEndedOwnerDelete := true
+                    else
+                        waveEndedOwnerDowngradeText := f_waveLetterAt(letterIndex = waveZoneBestLetterIndex)
+                waveZoneBestExtreme := endedExtreme
+                waveZoneBestLetterIndex := waveCycleLetterIndex
+                waveZoneOwnerAConfirmed := waveCycleLetterIndex != 0
+                waveZoneOwnerAPending := waveCycleLetterIndex == 0
+                waveEndedLabelText := f_waveRetraceText(retraceNumber = waveNextImpulseNumber - 1,
+                     letterIndex = waveCycleLetterIndex == 0 ? -1 : waveCycleLetterIndex,
+                     zoneIsComplex = zoneIsComplex, isHighSide = waveTrendDir == -1)
+                waveEndedBecomesOwner := true
+            else if zoneIsComplex and waveCycleLetterIndex >= 1
+                waveEndedLabelText := f_waveLetterAt(letterIndex = waveCycleLetterIndex)
+                endedPinnedBareLetter := true
+            else if waveCycleLetterIndex == 0
+                wavePendingAPrice := endedExtreme
+                wavePendingABar := endedExtremeBar
+                wavePendingAIsHighSide := cycleStartedLow
+    waveEndedPinPrice := endedExtreme
+    waveEndedPinBar := endedExtremeBar
+    waveEndedPinIsHighSide := cycleStartedLow
+
+    waveCycleLetterIndex := -1
+    if waveTrendDir != 0 and waveNextImpulseNumber > 1
+        waveCycleLetterIndex := waveZoneNextLetterIndex
+        waveZoneNextLetterIndex := waveZoneNextLetterIndex + 1
+    if hadPendingA
+        if endedPinnedBareLetter
+            wavePendingAReleasePrice := wavePendingAPrice
+            wavePendingAReleaseBar := wavePendingABar
+            wavePendingAReleaseIsHighSide := wavePendingAIsHighSide
+        wavePendingAPrice := na
+        wavePendingABar := na
+    if hadOwnerAPending
+        waveZoneOwnerAConfirmed := endedPinnedBareLetter
+        waveZoneOwnerAPending := false
+    waveCycleSawFlat := false
+    waveCycleSawOpposite := false
+
     cycleZone := cycleStartedHigh ? 1 : -1
-    // The boundary bar belongs to the NEW window — seed everything from it.
-    cycleWindowExtremeHigh := high
-    cycleWindowExtremeLow := low
-    cycleWindowTouched80 := cycleK >= CYCLE_EXTREME_HIGH
-    cycleWindowTouched20 := cycleK <= CYCLE_EXTREME_LOW
-else
-    cycleWindowExtremeHigh := na(cycleWindowExtremeHigh) ? high : math.max(cycleWindowExtremeHigh, high)
-    cycleWindowExtremeLow := na(cycleWindowExtremeLow) ? low : math.min(cycleWindowExtremeLow, low)
-    cycleWindowTouched80 := cycleWindowTouched80 or cycleK >= CYCLE_EXTREME_HIGH
-    cycleWindowTouched20 := cycleWindowTouched20 or cycleK <= CYCLE_EXTREME_LOW
+    if boundaryClaimed
+        cycleExtreme := na
+        cycleExtremeBar := na
+        cycleExtremeOpen := na
+        cycleExtremeClose := na
+        cycleExtremeSma := na
+        cycleExtremeDir := 0
+    else
+        int cycleSeedLookback = na(endedExtremeBar) ? 1 : math.min(bar_index - endedExtremeBar - 1, CYCLE_SEED_MAX_LOOKBACK)
+        float cycleSeedExtreme = cycleStartedHigh ? high : low
+        int cycleSeedOffset = 0
+        if cycleSeedLookback > 0
+            for barOffset = 1 to cycleSeedLookback
+                float seedCandidate = cycleStartedHigh ? high[barOffset] : low[barOffset]
+                if cycleStartedHigh ? seedCandidate > cycleSeedExtreme : seedCandidate < cycleSeedExtreme
+                    cycleSeedExtreme := seedCandidate
+                    cycleSeedOffset := barOffset
+        cycleExtreme := cycleSeedExtreme
+        cycleExtremeBar := bar_index - cycleSeedOffset
+        cycleExtremeOpen := open[cycleSeedOffset]
+        cycleExtremeClose := close[cycleSeedOffset]
+        cycleExtremeSma := trendSma[cycleSeedOffset]
+        cycleExtremeDir := waveReadDir[cycleSeedOffset]
 
-// One-bar hook — Barry's "bar that created the hook" trigger.
-bool cycleHookUp = cycleK > cycleK[1] and cycleK[1] < cycleK[2]
-bool cycleHookDown = cycleK < cycleK[1] and cycleK[1] > cycleK[2]
+bool waveOwnerHasZone = not na(waveZoneBestExtreme)
+string waveOwnerText = ""
+if waveOwnerHasZone
+    bool ownerLetterShowable = waveZoneBestLetterIndex >= 1 or (waveZoneBestLetterIndex == 0 and waveZoneOwnerAConfirmed)
+    waveOwnerText := f_waveRetraceText(retraceNumber = waveNextImpulseNumber - 1,
+         letterIndex = ownerLetterShowable ? waveZoneBestLetterIndex : -1,
+         zoneIsComplex = waveZoneRetraceCount >= 2, isHighSide = waveTrendDir == -1)
 
-EnergyState cycleState = cycleZone == -1 and cycleHookUp and cycleWindowTouched20 ? EnergyState.LONG :
-     cycleZone == 1 and cycleHookDown and cycleWindowTouched80 ? EnergyState.SHORT : EnergyState.NEUTRAL
+// ─────────────────────────────────────────────────────────────────────────────
+// 📊 MOMENTUM
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Exported for Energy 4: recent CLOSED cycle highs/lows — exactly Barry's
-// cycle H/L definition (the extreme captured inside each closed %D window).
-// Array pushes persist across realtime rollbacks, so mutation is gated on the
-// confirmed tick — an intrabar boundary that reverts must not leave a level.
-var array<float> cycleRecentClosedHighs = array.new<float>()
-var array<float> cycleRecentClosedLows = array.new<float>()
-if barstate.isconfirmed
-    if cycleHighWindowClosed and not na(cycleEndedHighExtreme)
-        array.push(id = cycleRecentClosedHighs, value = cycleEndedHighExtreme)
-        if array.size(id = cycleRecentClosedHighs) > CYCLE_LEVELS_KEPT
-            array.shift(id = cycleRecentClosedHighs)
-    if cycleLowWindowClosed and not na(cycleEndedLowExtreme)
-        array.push(id = cycleRecentClosedLows, value = cycleEndedLowExtreme)
-        if array.size(id = cycleRecentClosedLows) > CYCLE_LEVELS_KEPT
-            array.shift(id = cycleRecentClosedLows)
+// ─────────────────────────────────────────────────────────────────────────────
+// 📉 VOLUME & ADVANCE/DECLINE [BREADTH]
+// ─────────────────────────────────────────────────────────────────────────────
 
-string cycleDetailText = barstate.islast ? (na(cycleD) ? "warming up — stochastic window not filled yet" :
-     str.format("{0} · %K {1, number, #.0} / %D {2, number, #.0} · hook {3} · touched {4}: {5}",
-     cycleZone == 1 ? "cycle-HIGH window open" : cycleZone == -1 ? "cycle-LOW window open" : "no window (unseeded)",
-     cycleK, cycleD,
-     cycleHookUp ? "up" : cycleHookDown ? "down" : "none",
-     cycleZone == 1 ? "≥80" : "≤20",
-     (cycleZone == 1 ? cycleWindowTouched80 : cycleWindowTouched20) ? "yes" : "no")) : ""
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚦 SUPPORT & RESISTANCE
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 📊 ENERGY 3 — MOMENTUM
-// Barry's MOM/DAD (custom MACD 5/20/30, both EMA, histogram off — same engine
-// as macd-waves). Division of labor: MOM lives on the setup chart, DAD on the
-// confirmation chart — so this light IS the DAD slope on the 3× timeframe,
-// read on the LAST CLOSED confirmation bar (the flicker rule: confirmation is
-// only locked in on the confirmation-bar close; the [1]-offset + lookahead_on
-// snapshot never repaints).
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_MOMENTUM = "3. 📊 Momentum"
-const int MOMENTUM_FAST_LENGTH = 5
-const int MOMENTUM_SLOW_LENGTH = 20
-const int MOMENTUM_SIGNAL_LENGTH = 30
-const int MOMENTUM_SLOPE_BARS = 3
-const int MOMENTUM_DEADBAND_STDEV_LENGTH = 100
+// ─────────────────────────────────────────────────────────────────────────────
+// 🏗️ PRICE/MOMENTUM PATTERNS
+// ─────────────────────────────────────────────────────────────────────────────
 
-float momentumDeadbandFraction = input.float(defval = 0.1, title = "DAD Deadband (× MOM StDev)", minval = 0.0, maxval = 2.0, step = 0.05,
-     tooltip = "A crawling DAD reads flat: the confirmation-chart DAD slope (3-bar net movement) must exceed this fraction of stdev(MOM, 100) — measured on the confirmation chart — before the light votes a side.", group = GROUP_MOMENTUM)
-
-// Computed in the confirmation-chart context via request.security. The [1]
-// offsets make this the last CLOSED confirmation bar — stable snapshot, so
-// lookahead_on only fixes realtime lag and nothing repaints.
-f_momentumConfirmationRead() =>
-    float momValue = ta.ema(source = close, length = MOMENTUM_FAST_LENGTH) - ta.ema(source = close, length = MOMENTUM_SLOW_LENGTH)
-    float dadValue = ta.ema(source = momValue, length = MOMENTUM_SIGNAL_LENGTH)
-    float dadSlopeValue = dadValue - dadValue[MOMENTUM_SLOPE_BARS]
-    float dadDeadbandValue = ta.stdev(source = momValue, length = MOMENTUM_DEADBAND_STDEV_LENGTH) * momentumDeadbandFraction
-    [dadSlopeValue[1], dadDeadbandValue[1]]
-
-[momentumDadSlopeClosed, momentumDadDeadbandClosed] = request.security(symbol = syminfo.tickerid,
-     timeframe = confirmationTimeframe, expression = f_momentumConfirmationRead(), lookahead = barmerge.lookahead_on)
-
-int momentumDadVote = confirmationDerivable ?
-     f_slopeVote(slopeValue = momentumDadSlopeClosed, deadbandValue = momentumDadDeadbandClosed) : 0
-
-EnergyState momentumState = momentumDadVote == 1 ? EnergyState.LONG :
-     momentumDadVote == -1 ? EnergyState.SHORT : EnergyState.NEUTRAL
-
-string momentumDetailText = barstate.islast ? (confirmationDerivable ?
-     str.format("DAD (30 EMA of MOM 5-20) on the {0} confirmation chart, last closed bar: {1}",
-         confirmationTimeframe, momentumDadVote == 1 ? "sloping up" : momentumDadVote == -1 ? "sloping down" : "flat") :
-     "confirmation timeframe cannot be derived on tick/range charts — no read") : ""
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLATILITY
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🚦 ENERGY 4 — SUPPORT / RESISTANCE
-// A LOCATION signal, not a direction signal: green when the bar is AT a zone
-// acting as support, red at resistance, dark in open space (correct behavior,
-// not a bug). Levels are zones (level ± 0.25 ATR), families are prior-day
-// H/L/C, floor pivots P/R1–R3/S1–S3 (same math as pivots.pine), and Energy 2's
-// closed cycle highs/lows. 2+ FAMILIES in one zone = cluster. Barry's neutral
-// zone: price between the central pivot and yesterday's close = no light.
+// 📊 PLOT
+// White price-bar labels only. All minting is close-gated.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_SR = "4. 🚦 Support / Resistance"
-const int SR_FAMILY_PRIOR_DAY = 0
-const int SR_FAMILY_PIVOT = 1
-const int SR_FAMILY_CYCLE = 2
+f_whiteLabel(int labelBarIndex, float labelPrice, string labelText, bool isHighSide, string labelSize) =>
+    label.new(x = labelBarIndex, y = labelPrice, text = labelText, xloc = xloc.bar_index, yloc = yloc.price,
+         style = isHighSide ? label.style_label_down : label.style_label_up,
+         color = NORD6, textcolor = NORD0, size = labelSize)
 
-float srZoneAtrFraction = input.float(defval = 0.25, title = "Zone ATR Fraction", minval = 0.05, maxval = 2.0, step = 0.05,
-     tooltip = "Half-width of every level's zone as a fraction of ATR(14) — levels are zones, not lines (\"as long as the bars are touching it, it's still providing support\"). The only input this energy needs.", group = GROUP_SR)
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔄 CYCLE
+// - extremes
+// ─────────────────────────────────────────────────────────────────────────────
+if barstate.isconfirmed and cycleStartedThisBar and not na(waveEndedPinPrice)
+    f_whiteLabel(labelBarIndex = waveEndedPinBar, labelPrice = waveEndedPinPrice, labelText = "",
+         isHighSide = waveEndedPinIsHighSide, labelSize = size.tiny)
 
-// Prior REGULAR-session day — session-modified ticker so extended-hours charts
-// still read the official daily bar (same pattern as pivots.pine).
-string srRegularSymbol = ticker.modify(tickerid = syminfo.tickerid, session = session.regular)
-[srPriorHigh, srPriorLow, srPriorClose] = request.security(symbol = srRegularSymbol, timeframe = "D",
-     expression = [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-
-// Standard floor pivot ladder from prior-day H/L/C.
-float srPivotPoint = (srPriorHigh + srPriorLow + srPriorClose) / 3
-float srPivotR1 = 2 * srPivotPoint - srPriorLow
-float srPivotS1 = 2 * srPivotPoint - srPriorHigh
-float srPivotR2 = srPivotPoint + (srPriorHigh - srPriorLow)
-float srPivotS2 = srPivotPoint - (srPriorHigh - srPriorLow)
-float srPivotR3 = srPriorHigh + 2 * (srPivotPoint - srPriorLow)
-float srPivotS3 = srPriorLow - 2 * (srPriorHigh - srPivotPoint)
-
-// Rebuild the level list each bar — ~18 levels, cheap, and it keeps the scan
-// below a single pass with no retained drawing state.
-array<SrLevel> srLevels = array.new<SrLevel>()
-if not na(srPriorHigh)
-    array.push(id = srLevels, value = SrLevel.new(price = srPriorHigh, family = SR_FAMILY_PRIOR_DAY, name = "PDH"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPriorLow, family = SR_FAMILY_PRIOR_DAY, name = "PDL"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPriorClose, family = SR_FAMILY_PRIOR_DAY, name = "PDC"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotPoint, family = SR_FAMILY_PIVOT, name = "PP"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotR1, family = SR_FAMILY_PIVOT, name = "R1"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotR2, family = SR_FAMILY_PIVOT, name = "R2"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotR3, family = SR_FAMILY_PIVOT, name = "R3"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotS1, family = SR_FAMILY_PIVOT, name = "S1"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotS2, family = SR_FAMILY_PIVOT, name = "S2"))
-    array.push(id = srLevels, value = SrLevel.new(price = srPivotS3, family = SR_FAMILY_PIVOT, name = "S3"))
-for cycleHighLevel in cycleRecentClosedHighs
-    array.push(id = srLevels, value = SrLevel.new(price = cycleHighLevel, family = SR_FAMILY_CYCLE, name = "Cycle High"))
-for cycleLowLevel in cycleRecentClosedLows
-    array.push(id = srLevels, value = SrLevel.new(price = cycleLowLevel, family = SR_FAMILY_CYCLE, name = "Cycle Low"))
-
-// Helper function answering the cluster question the way Barry counts it:
-// 2+ levels from DIFFERENT families whose zones mutually overlap (prices
-// within one combined zone of each other). R1 + R2 near each other is not a
-// cluster, and a wide bar touching two distant zones is not one either.
-f_srHasFamilyCluster(array<SrLevel> touchedLevels, float zoneWidth) =>
-    bool clusterFound = false
-    int touchedCount = array.size(id = touchedLevels)
-    if touchedCount >= 2
-        for firstIndex = 0 to touchedCount - 2
-            SrLevel firstLevel = array.get(id = touchedLevels, index = firstIndex)
-            for secondIndex = firstIndex + 1 to touchedCount - 1
-                SrLevel secondLevel = array.get(id = touchedLevels, index = secondIndex)
-                if firstLevel.family != secondLevel.family and math.abs(number = firstLevel.price - secondLevel.price) <= 2 * zoneWidth
-                    clusterFound := true
-    clusterFound
-
-// Single scan: which zones overlap the current bar, and on which side of the
-// close (support = level at/below close, resistance = level at/above close).
-float srZoneWidth = srZoneAtrFraction * sharedAtr
-array<SrLevel> srTouchedSupportLevels = array.new<SrLevel>()
-array<SrLevel> srTouchedResistanceLevels = array.new<SrLevel>()
-int srSupportTouchCount = 0
-int srResistanceTouchCount = 0
-bool srSupportFamilyPriorDay = false
-bool srSupportFamilyPivot = false
-bool srSupportFamilyCycle = false
-bool srResistanceFamilyPriorDay = false
-bool srResistanceFamilyPivot = false
-bool srResistanceFamilyCycle = false
-string srTouchedSupportNames = ""
-string srTouchedResistanceNames = ""
-
-for srLevel in srLevels
-    bool srZoneOverlapsBar = srLevel.price + srZoneWidth >= low and srLevel.price - srZoneWidth <= high
-    if srZoneOverlapsBar
-        if srLevel.price <= close
-            srSupportTouchCount += 1
-            array.push(id = srTouchedSupportLevels, value = srLevel)
-            srSupportFamilyPriorDay := srSupportFamilyPriorDay or srLevel.family == SR_FAMILY_PRIOR_DAY
-            srSupportFamilyPivot := srSupportFamilyPivot or srLevel.family == SR_FAMILY_PIVOT
-            srSupportFamilyCycle := srSupportFamilyCycle or srLevel.family == SR_FAMILY_CYCLE
-            if barstate.islast
-                srTouchedSupportNames := srTouchedSupportNames + (srTouchedSupportNames == "" ? "" : " + ") + srLevel.name
-        if srLevel.price >= close
-            srResistanceTouchCount += 1
-            array.push(id = srTouchedResistanceLevels, value = srLevel)
-            srResistanceFamilyPriorDay := srResistanceFamilyPriorDay or srLevel.family == SR_FAMILY_PRIOR_DAY
-            srResistanceFamilyPivot := srResistanceFamilyPivot or srLevel.family == SR_FAMILY_PIVOT
-            srResistanceFamilyCycle := srResistanceFamilyCycle or srLevel.family == SR_FAMILY_CYCLE
-            if barstate.islast
-                srTouchedResistanceNames := srTouchedResistanceNames + (srTouchedResistanceNames == "" ? "" : " + ") + srLevel.name
-
-int srSupportFamilyCount = (srSupportFamilyPriorDay ? 1 : 0) + (srSupportFamilyPivot ? 1 : 0) + (srSupportFamilyCycle ? 1 : 0)
-int srResistanceFamilyCount = (srResistanceFamilyPriorDay ? 1 : 0) + (srResistanceFamilyPivot ? 1 : 0) + (srResistanceFamilyCycle ? 1 : 0)
-
-// Barry's neutral-zone override: between the central pivot and yesterday's
-// close the whole zone is a neutral market — no S/R light either way.
-bool srInNeutralZone = not na(srPivotPoint) and close >= math.min(srPivotPoint, srPriorClose) and close <= math.max(srPivotPoint, srPriorClose)
-
-EnergyState srState = srInNeutralZone ? EnergyState.NEUTRAL :
-     srSupportTouchCount > 0 and srResistanceTouchCount == 0 ? EnergyState.LONG :
-     srResistanceTouchCount > 0 and srSupportTouchCount == 0 ? EnergyState.SHORT : EnergyState.NEUTRAL
-
-// Exported for the Cluster Setup: the true cluster read at the aligned side
-// (2+ families in ONE zone — pairwise proximity, not just same-bar touches).
-bool srClusterAtBar = srState == EnergyState.LONG ? f_srHasFamilyCluster(touchedLevels = srTouchedSupportLevels, zoneWidth = srZoneWidth) :
-     srState == EnergyState.SHORT ? f_srHasFamilyCluster(touchedLevels = srTouchedResistanceLevels, zoneWidth = srZoneWidth) : false
-
-string srDetailText = barstate.islast ? (srInNeutralZone ? "inside the P ↔ prior-close neutral zone — no S/R read" :
-     srState == EnergyState.LONG ? str.format("at support: {0} ({1} family(ies){2})", srTouchedSupportNames, srSupportFamilyCount, srClusterAtBar ? " — CLUSTER" : "") :
-     srState == EnergyState.SHORT ? str.format("at resistance: {0} ({1} family(ies){2})", srTouchedResistanceNames, srResistanceFamilyCount, srClusterAtBar ? " — CLUSTER" : "") :
-     srSupportTouchCount > 0 and srResistanceTouchCount > 0 ? "levels on both sides of the close — messy, no read" :
-     "no level's zone touches this bar (open space)") : ""
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🔭 ENERGY 5 — SCALE / FRACTALS
-// The cycle read on the 3:1 confirmation chart (Energy 3 already owns the
-// momentum read there — together the two lights are Barry's full higher-TF
-// confirmation). v1 keeps the strong form only: %D slope on the confirmation
-// chart, same 5/2/3 settings (settings never change per timeframe — that IS
-// the fractal idea), read on the last CLOSED confirmation bar (flicker rule).
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_SCALE = "5. 🔭 Scale"
-const int SCALE_SLOPE_BARS = 3
-
-float scaleDeadbandPoints = input.float(defval = 1.0, title = "%D Deadband (points)", minval = 0.0, maxval = 20.0, step = 0.5,
-     tooltip = "The confirmation-chart %D slope (3-bar net movement, in stochastic points 0–100) must exceed this before the light votes a side — a crawling %D reads flat. ATR scaling doesn't apply to a bounded oscillator, so this deadband is in absolute points.", group = GROUP_SCALE)
-
-f_scaleConfirmationRead() =>
-    float scaleKValue = ta.sma(source = ta.stoch(source = close, high = high, low = low, length = CYCLE_K_LENGTH), length = CYCLE_K_SMOOTHING)
-    float scaleDValue = ta.sma(source = scaleKValue, length = CYCLE_D_SMOOTHING)
-    float scaleDSlopeValue = scaleDValue - scaleDValue[SCALE_SLOPE_BARS]
-    scaleDSlopeValue[1]
-
-float scaleDSlopeClosed = request.security(symbol = syminfo.tickerid, timeframe = confirmationTimeframe,
-     expression = f_scaleConfirmationRead(), lookahead = barmerge.lookahead_on)
-
-int scaleDVote = confirmationDerivable ? f_slopeVote(slopeValue = scaleDSlopeClosed, deadbandValue = scaleDeadbandPoints) : 0
-
-EnergyState scaleState = scaleDVote == 1 ? EnergyState.LONG :
-     scaleDVote == -1 ? EnergyState.SHORT : EnergyState.NEUTRAL
-
-string scaleDetailText = barstate.islast ? (confirmationDerivable ?
-     str.format("%D (5/2/3) on the {0} confirmation chart, last closed bar: {1}",
-         confirmationTimeframe, scaleDVote == 1 ? "angling up" : scaleDVote == -1 ? "angling down" : "flat") :
-     "confirmation timeframe cannot be derived on tick/range charts — no read") : ""
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎳 ENERGY 6 — VOLATILITY
-// Bollinger Bands 20/2, intrabar touches (Barry's "calculate on bar close:
-// off"). Volatility is NOT directional by itself — the light reports where the
-// strength is via band interaction at cycle extremes: latest closed cycle high
-// touched the upper band while the latest closed cycle low failed the lower
-// band = bullish impulse (never a fade signal), and the mirror. Squeeze is a
-// deliberate 4th state — energy loading, no side, never counted.
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_VOLATILITY = "6. 🎳 Volatility"
-const int VOLATILITY_BB_LENGTH = 20
-const float VOLATILITY_BB_STDEV = 2.0
-
-int volatilitySqueezeLookback = input.int(defval = 100, title = "Squeeze Lookback (bars)", minval = 10, maxval = 500,
-     tooltip = "The bands read as a squeeze when bandwidth ((upper − lower) ÷ basis) is the lowest of this many bars — expansion coming, direction unknown. The 20/2 band settings are canon, not inputs.", group = GROUP_VOLATILITY)
-
-float volatilityBasis = ta.sma(source = close, length = VOLATILITY_BB_LENGTH)
-float volatilityDeviation = ta.stdev(source = close, length = VOLATILITY_BB_LENGTH) * VOLATILITY_BB_STDEV
-float volatilityUpperBand = volatilityBasis + volatilityDeviation
-float volatilityLowerBand = volatilityBasis - volatilityDeviation
-
-// Per-window touch latches, resolved into "did the last CLOSED cycle high/low
-// reach its band" on Energy 2's window-close events. -1 = no window closed yet.
-bool volatilityTouchUpperNow = high >= volatilityUpperBand
-bool volatilityTouchLowerNow = low <= volatilityLowerBand
-var bool volatilityWindowTouchedUpper = false
-var bool volatilityWindowTouchedLower = false
-var int volatilityLastHighTouch = -1
-var int volatilityLastLowTouch = -1
-
-if cycleStartedThisBar
-    if cycleHighWindowClosed
-        volatilityLastHighTouch := volatilityWindowTouchedUpper ? 1 : 0
-    if cycleLowWindowClosed
-        volatilityLastLowTouch := volatilityWindowTouchedLower ? 1 : 0
-    volatilityWindowTouchedUpper := volatilityTouchUpperNow
-    volatilityWindowTouchedLower := volatilityTouchLowerNow
-else
-    volatilityWindowTouchedUpper := volatilityWindowTouchedUpper or volatilityTouchUpperNow
-    volatilityWindowTouchedLower := volatilityWindowTouchedLower or volatilityTouchLowerNow
-
-float volatilityBandwidth = volatilityBasis != 0 ? (volatilityUpperBand - volatilityLowerBand) / volatilityBasis : na
-bool volatilitySqueeze = not na(volatilityBandwidth) and volatilityBandwidth <= ta.lowest(source = volatilityBandwidth, length = volatilitySqueezeLookback)
-
-EnergyState volatilityState = volatilitySqueeze ? EnergyState.SQUEEZE :
-     volatilityLastHighTouch == 1 and volatilityLastLowTouch == 0 ? EnergyState.LONG :
-     volatilityLastLowTouch == 1 and volatilityLastHighTouch == 0 ? EnergyState.SHORT : EnergyState.NEUTRAL
-
-string volatilityDetailText = barstate.islast ? (volatilitySqueeze ? "SQUEEZE — bandwidth at its lookback minimum: expansion coming, direction unknown (never counts toward a side)" :
-     str.format("last closed cycle high {0} the upper band · last closed cycle low {1} the lower band",
-         volatilityLastHighTouch == 1 ? "TOUCHED" : volatilityLastHighTouch == 0 ? "failed" : "(none yet)",
-         volatilityLastLowTouch == 1 ? "TOUCHED" : volatilityLastLowTouch == 0 ? "failed" : "(none yet)")) : ""
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🐳 ENERGY 7 — VOLUME
-// Barry's OBV read, same engine as obv.pine: a 20 SMA OF THE OBV LINE (never
-// of price). The MA's own slope is the dominant signal; the above/below check
-// only keeps the light from firing while OBV actively crosses against it.
-// Optional NYSE TICK overlay (his rule: USI:TICK regardless of instrument) —
-// disagreement dims the light to neutral.
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_VOLUME = "7. 🐳 Volume"
-const int VOLUME_OBV_MA_LENGTH = 20
-const int VOLUME_SLOPE_BARS = 3
-const int VOLUME_DEADBAND_STDEV_LENGTH = 100
-
-float volumeDeadbandFraction = input.float(defval = 0.1, title = "OBV MA Deadband (× OBV StDev)", minval = 0.0, maxval = 2.0, step = 0.05,
-     tooltip = "The OBV 20 SMA slope (3-bar net movement) must exceed this fraction of stdev(OBV, 100) before the light votes a side — a wiggling OBV over a flat MA is Barry's \"the default is do nothing\". OBV's units are share-volume, so the deadband scales to OBV's own deviation, not ATR.", group = GROUP_VOLUME)
-bool volumeTickOverlayEnabled = input.bool(defval = false, title = "NYSE TICK Overlay",
-     tooltip = "Day trading only: reads USI:TICK (NYSE TICK regardless of instrument — Barry's explicit rule, never TICKQ). TICK above zero = long bias, below = short; disagreement with the OBV vote dims this light to neutral. Off by default — intraday tool.", group = GROUP_VOLUME)
-
-float volumeObv = ta.obv
-float volumeObvMa = ta.sma(source = volumeObv, length = VOLUME_OBV_MA_LENGTH)
-float volumeObvSlope = volumeObvMa - volumeObvMa[VOLUME_SLOPE_BARS]
-float volumeDeadband = ta.stdev(source = volumeObv, length = VOLUME_DEADBAND_STDEV_LENGTH) * volumeDeadbandFraction
-int volumeObvVote = f_slopeVote(slopeValue = volumeObvSlope, deadbandValue = volumeDeadband)
-
-// Vendor volume guard — a symbol with no volume feed must read as "no data",
-// not as a false neutral.
-var float volumeCumulative = 0.0
-volumeCumulative += nz(source = volume)
-bool volumeFeedMissing = volumeCumulative == 0
-
-EnergyState volumeState = volumeFeedMissing ? EnergyState.NEUTRAL :
-     volumeObvVote == 1 and volumeObv > volumeObvMa ? EnergyState.LONG :
-     volumeObvVote == -1 and volumeObv < volumeObvMa ? EnergyState.SHORT : EnergyState.NEUTRAL
-
-// Optional TICK dimmer — gated dynamic request: zero cost when disabled.
-float volumeTickValue = na
-if volumeTickOverlayEnabled
-    volumeTickValue := request.security(symbol = "USI:TICK", timeframe = timeframe.period, expression = close, ignore_invalid_symbol = true)
-bool volumeTickDisagrees = volumeTickOverlayEnabled and not na(volumeTickValue) and
-     ((volumeState == EnergyState.LONG and volumeTickValue < 0) or (volumeState == EnergyState.SHORT and volumeTickValue > 0))
-if volumeTickDisagrees
-    volumeState := EnergyState.NEUTRAL
-
-string volumeDetailText = barstate.islast ? (volumeFeedMissing ? "no volume from the data vendor — no read" :
-     str.format("OBV 20 SMA {0} · OBV {1} its MA{2}",
-         volumeObvVote == 1 ? "rising" : volumeObvVote == -1 ? "falling" : "flat",
-         volumeObv > volumeObvMa ? "above" : "below",
-         volumeTickOverlayEnabled ? (volumeTickDisagrees ? " · TICK disagrees — dimmed to neutral" : na(volumeTickValue) ? " · TICK unavailable" : " · TICK agrees") : "")) : ""
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🧮 ALIGNMENT
-// The confluence count over all seven lights — Barry trades the confluence of
-// predominant energies, not unanimity. Squeeze counts toward neither side.
-// ═════════════════════════════════════════════════════════════════════════════
-int alignmentLongCount = (trendState == EnergyState.LONG ? 1 : 0) + (cycleState == EnergyState.LONG ? 1 : 0) +
-     (momentumState == EnergyState.LONG ? 1 : 0) + (srState == EnergyState.LONG ? 1 : 0) +
-     (scaleState == EnergyState.LONG ? 1 : 0) + (volatilityState == EnergyState.LONG ? 1 : 0) +
-     (volumeState == EnergyState.LONG ? 1 : 0)
-int alignmentShortCount = (trendState == EnergyState.SHORT ? 1 : 0) + (cycleState == EnergyState.SHORT ? 1 : 0) +
-     (momentumState == EnergyState.SHORT ? 1 : 0) + (srState == EnergyState.SHORT ? 1 : 0) +
-     (scaleState == EnergyState.SHORT ? 1 : 0) + (volatilityState == EnergyState.SHORT ? 1 : 0) +
-     (volumeState == EnergyState.SHORT ? 1 : 0)
-
-// Helper function producing the one-line energy snapshot used by setup
-// tooltips and the summary cell tooltip.
-f_alignmentSnapshot() =>
-    str.format("TREND {0} · CYCLE {1} · MOM {2} · S/R {3} · SCALE {4} · VOLAT {5} · VOLUME {6} — {7}▲ / {8}▼ aligned",
-         f_stateGlyph(state = trendState), f_stateGlyph(state = cycleState), f_stateGlyph(state = momentumState),
-         f_stateGlyph(state = srState), f_stateGlyph(state = scaleState), f_stateGlyph(state = volatilityState),
-         f_stateGlyph(state = volumeState), alignmentLongCount, alignmentShortCount)
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎯 SETUPS
-// The mechanically detectable subset of the setups catalog — every setup whose
-// definition is fully covered by the v1 energy engines (no wave counting).
-// One label per setup bar, below the bar for longs / above for shorts, with
-// the full explanation + energy snapshot as the hover tooltip. Detection and
-// label minting are close-gated (confirmed ticks only) — no phantom setups.
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_SETUPS = "🎯 Setups"
-
-const string SETUP_RULE_HOOK = "Basic Hook Entry (Foundations #1)\n%K reached the 20/80 extreme inside the %D window and hooked back WITH the 50 SMA trend.\nEntry: 1 tick beyond the hook bar. Stop: beyond the cycle extreme."
-const string SETUP_RULE_RETRACE = "Trend Retrace (Foundations #1 / Freedom Trades #3)\nClean pullback in an established trend: the cycle hook fired AT a support/resistance zone with the 50 SMA angling in the trade's direction.\nBarry's caveat this v1 cannot check: only retraces 1 and 2 (waves 2 and 4) are tradeable continuations — count the waves yourself."
-const string SETUP_RULE_CLUSTER = "Cluster Setup (Foundations #1 / Advanced 07)\nThe trend-retrace hook landed on 2+ NON-CORRELATED level families converging in one zone (pivot / prior-day / cycle H-L).\nCycle extremes landing on clusters are Barry's highest-probability entries."
-const string SETUP_RULE_RUBBER_BAND = "Rubber Band Trade (Foundations #1)\nThe 50 SMA is FLAT (the only setup permitted then) and price is stretched far away from it with the cycle at an extreme; the hook fires the snap-back.\nTarget: the return to the 50 SMA — reversion of the mean, and the mean is the 50."
-const string SETUP_RULE_DAD_TURN = "First Cycle High/Low After DAD Turns (Holy Grail)\nDAD (confirmation chart) just changed slope, and this is the first cycle hook in the new direction.\nEarliest entry in a new momentum trend."
-
-bool setupShowBasicHook = input.bool(defval = true, title = "Basic Hook Entry",
-     tooltip = "Cycle light + trend light aligned. The bread-and-butter trigger; the retrace/cluster variants below outrank it when they fire on the same bar.", group = GROUP_SETUPS)
-bool setupShowTrendRetrace = input.bool(defval = true, title = "Trend Retrace",
-     tooltip = "Basic hook firing AT a support/resistance zone (S/R light aligned too).", group = GROUP_SETUPS)
-bool setupShowCluster = input.bool(defval = true, title = "Cluster Setup",
-     tooltip = "Trend retrace where the zone holds 2+ non-correlated level families — Barry's highest-probability entry.", group = GROUP_SETUPS)
-bool setupShowRubberBand = input.bool(defval = true, title = "Rubber Band",
-     tooltip = "Flat 50 SMA + price stretched away from it + cycle hook back toward it. Target is the 50 itself.", group = GROUP_SETUPS)
-bool setupShowDadTurn = input.bool(defval = true, title = "First Hook After DAD Turn",
-     tooltip = "First cycle hook in the new direction after the confirmation-chart DAD changes slope.", group = GROUP_SETUPS)
-float setupRubberBandStretchAtr = input.float(defval = 2.0, title = "Rubber Band Stretch (× ATR)", minval = 0.5, maxval = 10.0, step = 0.25,
-     tooltip = "Minimum distance between the close and the flat 50 SMA, in ATR(14) units, for the market to count as \"stretched\". Barry judges the stretch by eye; this is the mechanical stand-in.", group = GROUP_SETUPS)
-color setupLongColor = input.color(defval = NORD8, title = "Long Marker", inline = "setup_colors", group = GROUP_SETUPS,
-     tooltip = "Marker colors for long (below bar) and short (above bar) setup labels.")
-color setupShortColor = input.color(defval = NORD11, title = "Short Marker", inline = "setup_colors", group = GROUP_SETUPS)
-TextSizeMode setupLabelSizeMode = input.enum(defval = TextSizeMode.SMALL, title = "Marker Size",
-     tooltip = "Text size of the setup labels on the chart.", group = GROUP_SETUPS)
-
-string setupLabelSize = switch setupLabelSizeMode
-    TextSizeMode.TINY => size.tiny
-    TextSizeMode.NORMAL => size.normal
-    => size.small
-
-// Raw conditions — all read bar-close energy states, so they are only
-// meaningful on confirmed ticks (the block below gates on that).
-bool setupHookLong = cycleState == EnergyState.LONG and trendState == EnergyState.LONG
-bool setupHookShort = cycleState == EnergyState.SHORT and trendState == EnergyState.SHORT
-bool setupRetraceLong = setupHookLong and srState == EnergyState.LONG
-bool setupRetraceShort = setupHookShort and srState == EnergyState.SHORT
-bool setupClusterLong = setupRetraceLong and srClusterAtBar
-bool setupClusterShort = setupRetraceShort and srClusterAtBar
-bool setupRubberBandLong = trendIsFlat and cycleState == EnergyState.LONG and (trendSmaForSetups - close) >= setupRubberBandStretchAtr * sharedAtr
-bool setupRubberBandShort = trendIsFlat and cycleState == EnergyState.SHORT and (close - trendSmaForSetups) >= setupRubberBandStretchAtr * sharedAtr
-
-// DAD-turn arm/fire machine: armed when the confirmation DAD vote flips to a
-// side, fires on the FIRST aligned cycle hook, disarms if DAD stops sloping
-// that way first. State writes live on the confirmed path only.
-var int setupDadArmedSide = 0
-bool setupDadTurnLong = false
-bool setupDadTurnShort = false
-
-// Fired-this-bar flags for labels and alerts (priority-resolved, toggles applied).
-bool setupFiredClusterLong = false
-bool setupFiredClusterShort = false
-bool setupFiredRetraceLong = false
-bool setupFiredRetraceShort = false
-bool setupFiredRubberBandLong = false
-bool setupFiredRubberBandShort = false
-bool setupFiredDadTurnLong = false
-bool setupFiredDadTurnShort = false
-bool setupFiredHookLong = false
-bool setupFiredHookShort = false
+// ─────────────────────────────────────────────────────────────────────────────
+// 📈 TREND
+// - trend shifts up/down
+// - first and second retrace
+// - complex retrace C
+// ─────────────────────────────────────────────────────────────────────────────
+var int plotTrendDir = 0
+var label plotRetraceLabel = na
 
 if barstate.isconfirmed
-    // DAD-turn machine.
-    if setupDadArmedSide == 1 and momentumDadVote != 1
-        setupDadArmedSide := 0
-    if setupDadArmedSide == -1 and momentumDadVote != -1
-        setupDadArmedSide := 0
-    if momentumDadVote == 1 and momentumDadVote[1] != 1
-        setupDadArmedSide := 1
-    if momentumDadVote == -1 and momentumDadVote[1] != -1
-        setupDadArmedSide := -1
-    if setupDadArmedSide == 1 and cycleState == EnergyState.LONG
-        setupDadTurnLong := true
-        setupDadArmedSide := 0
-    if setupDadArmedSide == -1 and cycleState == EnergyState.SHORT
-        setupDadTurnShort := true
-        setupDadArmedSide := 0
-
-    // Priority per side: cluster > retrace > DAD turn > hook; rubber band is
-    // mutually exclusive with all of them (it requires the flat 50).
-    setupFiredClusterLong := setupShowCluster and setupClusterLong
-    setupFiredRetraceLong := setupShowTrendRetrace and setupRetraceLong and not setupFiredClusterLong
-    setupFiredDadTurnLong := setupShowDadTurn and setupDadTurnLong and not setupFiredClusterLong and not setupFiredRetraceLong
-    setupFiredHookLong := setupShowBasicHook and setupHookLong and not setupFiredClusterLong and not setupFiredRetraceLong and not setupFiredDadTurnLong
-    setupFiredRubberBandLong := setupShowRubberBand and setupRubberBandLong
-
-    setupFiredClusterShort := setupShowCluster and setupClusterShort
-    setupFiredRetraceShort := setupShowTrendRetrace and setupRetraceShort and not setupFiredClusterShort
-    setupFiredDadTurnShort := setupShowDadTurn and setupDadTurnShort and not setupFiredClusterShort and not setupFiredRetraceShort
-    setupFiredHookShort := setupShowBasicHook and setupHookShort and not setupFiredClusterShort and not setupFiredRetraceShort and not setupFiredDadTurnShort
-    setupFiredRubberBandShort := setupShowRubberBand and setupRubberBandShort
-
-    // One label per side per bar — confirmed-tick minting only.
-    string setupLongName = setupFiredClusterLong ? "CLUSTER" : setupFiredRetraceLong ? "RETRACE" :
-         setupFiredDadTurnLong ? "DAD TURN" : setupFiredHookLong ? "HOOK" : setupFiredRubberBandLong ? "RUBBER BAND" : ""
-    string setupShortName = setupFiredClusterShort ? "CLUSTER" : setupFiredRetraceShort ? "RETRACE" :
-         setupFiredDadTurnShort ? "DAD TURN" : setupFiredHookShort ? "HOOK" : setupFiredRubberBandShort ? "RUBBER BAND" : ""
-    if setupLongName != ""
-        string setupLongRule = setupFiredClusterLong ? SETUP_RULE_CLUSTER : setupFiredRetraceLong ? SETUP_RULE_RETRACE :
-             setupFiredDadTurnLong ? SETUP_RULE_DAD_TURN : setupFiredHookLong ? SETUP_RULE_HOOK : SETUP_RULE_RUBBER_BAND
-        label.new(x = bar_index, y = low, yloc = yloc.belowbar, style = label.style_label_up,
-             text = "▲ " + setupLongName, color = setupLongColor, textcolor = NORD0, size = setupLabelSize,
-             tooltip = setupLongRule + "\n\n" + f_alignmentSnapshot())
-    if setupShortName != ""
-        string setupShortRule = setupFiredClusterShort ? SETUP_RULE_CLUSTER : setupFiredRetraceShort ? SETUP_RULE_RETRACE :
-             setupFiredDadTurnShort ? SETUP_RULE_DAD_TURN : setupFiredHookShort ? SETUP_RULE_HOOK : SETUP_RULE_RUBBER_BAND
-        label.new(x = bar_index, y = high, yloc = yloc.abovebar, style = label.style_label_down,
-             text = "▼ " + setupShortName, color = setupShortColor, textcolor = NORD0, size = setupLabelSize,
-             tooltip = setupShortRule + "\n\n" + f_alignmentSnapshot())
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 📋 TABLE
-// The row of lights — one cell per energy, read left to right, plus the
-// confluence summary cell. Header cells carry the canon rule as a tooltip;
-// state cells carry the live read. Repainted on every islast tick (tables
-// gated on "data changed" flash against the committed snapshot).
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_TABLE = "📋 Table"
-
-const string TABLE_TT_TREND = "TREND — the 50 SMA angle is the trend, not price position alone. ▲ close above a rising 50 · ▼ close below a falling 50 · — flat 50 or price fighting the MA."
-const string TABLE_TT_CYCLE = "CYCLE — stochastic 5/2/3, timing not direction. ▲ cycle-low window open, %K hooked up, %K touched ≤20 inside the window · ▼ mirror at ≥80 · — no window or the extreme was never reached. Only trust it WITH the trend light."
-const string TABLE_TT_MOMENTUM = "MOMENTUM — DAD (30 EMA of MOM 5−20) slope on the 3× confirmation chart, last closed bar. \"Reading DAD is simple. Just look at the slope of the line… usually not a good idea to trade against it.\""
-const string TABLE_TT_SR = "S/R — a LOCATION signal. ▲ bar at a zone acting as support · ▼ at resistance · — open space (correct behavior) or inside the P↔prior-close neutral zone. Zones = level ± 0.25 ATR; 2+ non-correlated families = cluster."
-const string TABLE_TT_SCALE = "SCALE — the cycle read on the 3:1 confirmation chart: %D (5/2/3) slope on the last closed confirmation bar. Together with MOMENTUM this is Barry's full higher-timeframe confirmation."
-const string TABLE_TT_VOLATILITY = "VOLATILITY — Bollinger 20/2 read at cycle extremes (never a fade signal). ▲ last cycle high touched the upper band while the last cycle low failed · ▼ mirror · — chop/dead/conflict · ◆ squeeze: expansion coming, direction unknown, counts for neither side."
-const string TABLE_TT_VOLUME = "VOLUME — OBV vs its 20 SMA; the MA's own slope is the dominant signal. ▲ MA rising and OBV above it · ▼ mirror · — flat MA or OBV fighting it. Optional NYSE TICK overlay dims disagreement to neutral."
-const string TABLE_TT_ALIGN = "Aligned energies, long vs short. Barry trades the confluence of predominant energies, not unanimity — the squeeze state never counts toward either side."
-
-bool tableShow = input.bool(defval = true, title = "Show Table",
-     tooltip = "The energy-alignment light row. Read left to right like the checklist.", group = GROUP_TABLE)
-TablePositionMode tablePositionMode = input.enum(defval = TablePositionMode.BOTTOM_CENTER, title = "Position",
-     tooltip = "Where the light row docks on the chart.", group = GROUP_TABLE)
-TextSizeMode tableTextSizeMode = input.enum(defval = TextSizeMode.SMALL, title = "Text Size",
-     tooltip = "Text size for every table cell.", group = GROUP_TABLE)
-bool tableShowHeader = input.bool(defval = true, title = "Show Energy Names",
-     tooltip = "Adds the energy-name header row above the lights. Hover any header for the canon rule, any light for the live read.", group = GROUP_TABLE)
-
-string tablePosition = switch tablePositionMode
-    TablePositionMode.TOP_LEFT => position.top_left
-    TablePositionMode.TOP_CENTER => position.top_center
-    TablePositionMode.TOP_RIGHT => position.top_right
-    TablePositionMode.MIDDLE_LEFT => position.middle_left
-    TablePositionMode.MIDDLE_RIGHT => position.middle_right
-    TablePositionMode.BOTTOM_LEFT => position.bottom_left
-    TablePositionMode.BOTTOM_RIGHT => position.bottom_right
-    => position.bottom_center
-
-string tableTextSize = switch tableTextSizeMode
-    TextSizeMode.TINY => size.tiny
-    TextSizeMode.NORMAL => size.normal
-    => size.small
-
-const color TABLE_HEADER_BG = color.new(color = NORD1, transp = 20)
-const color TABLE_NEUTRAL_BG = color.new(color = NORD1, transp = 40)
-const color TABLE_LONG_BG = color.new(color = NORD8, transp = 20)
-const color TABLE_SHORT_BG = color.new(color = NORD11, transp = 20)
-const color TABLE_SQUEEZE_BG = color.new(color = NORD13, transp = 20)
-
-var table alignmentTable = table.new(position = tablePosition, columns = 8, rows = 2,
-     border_width = 1, border_color = color.new(color = NORD0, transp = 60),
-     frame_width = 1, frame_color = NORD3)
-
-// Helper function writing one energy column: header (canon tooltip) + light
-// (live-read tooltip). glyphOverride carries the "no data" marks (∅ / n/a).
-f_energyCell(int column, string headerText, string headerTooltip, EnergyState state, string detailText, string glyphOverride) =>
-    if tableShowHeader
-        table.cell(table_id = alignmentTable, column = column, row = 0, text = headerText, tooltip = headerTooltip,
-             text_color = NORD4, text_size = tableTextSize, bgcolor = TABLE_HEADER_BG)
-    color cellBackground = state == EnergyState.LONG ? TABLE_LONG_BG :
-         state == EnergyState.SHORT ? TABLE_SHORT_BG :
-         state == EnergyState.SQUEEZE ? TABLE_SQUEEZE_BG : TABLE_NEUTRAL_BG
-    color cellTextColor = state == EnergyState.NEUTRAL ? NORD4 : NORD0
-    table.cell(table_id = alignmentTable, column = column, row = 1,
-         text = glyphOverride != "" ? glyphOverride : f_stateGlyph(state = state), tooltip = detailText,
-         text_color = cellTextColor, text_size = tableTextSize, bgcolor = cellBackground)
-
-if tableShow and barstate.islast
-    f_energyCell(column = 0, headerText = "TREND", headerTooltip = TABLE_TT_TREND, state = trendState, detailText = trendDetailText, glyphOverride = "")
-    f_energyCell(column = 1, headerText = "CYCLE", headerTooltip = TABLE_TT_CYCLE, state = cycleState, detailText = cycleDetailText, glyphOverride = "")
-    f_energyCell(column = 2, headerText = "MOM", headerTooltip = TABLE_TT_MOMENTUM, state = momentumState, detailText = momentumDetailText, glyphOverride = confirmationDerivable ? "" : "n/a")
-    f_energyCell(column = 3, headerText = "S/R", headerTooltip = TABLE_TT_SR, state = srState, detailText = srDetailText, glyphOverride = "")
-    f_energyCell(column = 4, headerText = "SCALE", headerTooltip = TABLE_TT_SCALE, state = scaleState, detailText = scaleDetailText, glyphOverride = confirmationDerivable ? "" : "n/a")
-    f_energyCell(column = 5, headerText = "VOLAT", headerTooltip = TABLE_TT_VOLATILITY, state = volatilityState, detailText = volatilityDetailText, glyphOverride = "")
-    f_energyCell(column = 6, headerText = "VOLUME", headerTooltip = TABLE_TT_VOLUME, state = volumeState, detailText = volumeDetailText, glyphOverride = volumeFeedMissing ? "∅" : "")
-    if tableShowHeader
-        table.cell(table_id = alignmentTable, column = 7, row = 0, text = "ALIGN", tooltip = TABLE_TT_ALIGN,
-             text_color = NORD4, text_size = tableTextSize, bgcolor = TABLE_HEADER_BG)
-    color alignmentSummaryBg = alignmentLongCount > alignmentShortCount ? TABLE_LONG_BG :
-         alignmentShortCount > alignmentLongCount ? TABLE_SHORT_BG : TABLE_NEUTRAL_BG
-    table.cell(table_id = alignmentTable, column = 7, row = 1,
-         text = str.format("{0}▲ {1}▼", alignmentLongCount, alignmentShortCount), tooltip = f_alignmentSnapshot(),
-         text_color = alignmentLongCount == alignmentShortCount ? NORD4 : NORD0,
-         text_size = tableTextSize, bgcolor = alignmentSummaryBg)
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🔔 ALERTS
-// One alertcondition per setup and side, plus the alignment-threshold pair.
-// All conditions are close-gated by construction (the setup flags only go true
-// on confirmed ticks); alignment alerts fire on the crossing bar only.
-// ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_ALERTS = "🔔 Alerts"
-
-int alertAlignmentThreshold = input.int(defval = 5, title = "Alignment Alert Threshold", minval = 2, maxval = 7,
-     tooltip = "The alignment alerts fire on the bar close where this many energies first point the same way (squeeze never counts).", group = GROUP_ALERTS)
-
-bool alertAlignedLong = barstate.isconfirmed and alignmentLongCount >= alertAlignmentThreshold and alignmentLongCount[1] < alertAlignmentThreshold
-bool alertAlignedShort = barstate.isconfirmed and alignmentShortCount >= alertAlignmentThreshold and alignmentShortCount[1] < alertAlignmentThreshold
-
-alertcondition(condition = setupFiredClusterLong, title = "Cluster Setup — Long", message = "⚡ EA: Cluster Setup LONG — hook at a 2+ family S/R cluster with the trend.")
-alertcondition(condition = setupFiredClusterShort, title = "Cluster Setup — Short", message = "⚡ EA: Cluster Setup SHORT — hook at a 2+ family S/R cluster with the trend.")
-alertcondition(condition = setupFiredRetraceLong, title = "Trend Retrace — Long", message = "⚡ EA: Trend Retrace LONG — cycle hook at support with the 50 SMA rising.")
-alertcondition(condition = setupFiredRetraceShort, title = "Trend Retrace — Short", message = "⚡ EA: Trend Retrace SHORT — cycle hook at resistance with the 50 SMA falling.")
-alertcondition(condition = setupFiredRubberBandLong, title = "Rubber Band — Long", message = "⚡ EA: Rubber Band LONG — stretched below a flat 50 SMA, hook back toward the mean.")
-alertcondition(condition = setupFiredRubberBandShort, title = "Rubber Band — Short", message = "⚡ EA: Rubber Band SHORT — stretched above a flat 50 SMA, hook back toward the mean.")
-alertcondition(condition = setupFiredDadTurnLong, title = "First Hook After DAD Turn — Long", message = "⚡ EA: first cycle hook up after DAD turned up on the confirmation chart.")
-alertcondition(condition = setupFiredDadTurnShort, title = "First Hook After DAD Turn — Short", message = "⚡ EA: first cycle hook down after DAD turned down on the confirmation chart.")
-alertcondition(condition = setupFiredHookLong, title = "Basic Hook — Long", message = "⚡ EA: Basic Hook LONG — %K hooked up from the cycle extreme with the trend.")
-alertcondition(condition = setupFiredHookShort, title = "Basic Hook — Short", message = "⚡ EA: Basic Hook SHORT — %K hooked down from the cycle extreme with the trend.")
-alertcondition(condition = alertAlignedLong, title = "Energies Aligned — Long", message = "⚡ EA: energy alignment reached the LONG threshold.")
-alertcondition(condition = alertAlignedShort, title = "Energies Aligned — Short", message = "⚡ EA: energy alignment reached the SHORT threshold.")
+    if trendDir != 0 and trendDir != plotTrendDir
+        label.new(x = bar_index, y = trendDir == 1 ? low : high,
+             yloc = trendDir == 1 ? yloc.belowbar : yloc.abovebar,
+             style = trendDir == 1 ? label.style_label_up : label.style_label_down,
+             text = trendDir == 1 ? "TREND UP" : "TREND DOWN",
+             color = NORD6, textcolor = NORD0, size = size.small)
+        plotTrendDir := trendDir
+    if cycleStartedThisBar
+        int plotRetraceNumber = waveNextImpulseNumber - 1
+        if (waveEndedOwnerDelete or waveEndedOwnerDowngradeText != "") and not na(plotRetraceLabel)
+            label.delete(id = plotRetraceLabel)
+            plotRetraceLabel := na
+        if waveEndedBecomesOwner and (plotRetraceNumber == 2 or plotRetraceNumber == 4)
+            string plotRetraceText = waveEndedIsComplexC ?
+                 (waveEndedPinIsHighSide ? str.tostring(value = plotRetraceNumber) + "\nC" : "C\n" + str.tostring(value = plotRetraceNumber)) :
+                 str.tostring(value = plotRetraceNumber)
+            plotRetraceLabel := f_whiteLabel(labelBarIndex = waveEndedPinBar, labelPrice = waveEndedPinPrice,
+                 labelText = plotRetraceText, isHighSide = waveEndedPinIsHighSide, labelSize = size.small)
+        else if waveEndedIsComplexC
+            f_whiteLabel(labelBarIndex = waveEndedPinBar, labelPrice = waveEndedPinPrice, labelText = "C",
+                 isHighSide = waveEndedPinIsHighSide, labelSize = size.small)
+        if waveOwnerClear
+            plotRetraceLabel := na

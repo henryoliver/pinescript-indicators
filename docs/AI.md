@@ -1239,6 +1239,21 @@ enum TrendDir
     - Deliberately carries no trend lines or horizontal S/R (Barry rejects both
       on OBV) — the signal MA is the only reference
 
+16. **`cvd.pine`**
+    - Cumulative Volume Delta — ONE anchored line in its own pane, tuned for
+      5-minute intraday (Session anchor, 1-second intrabars, 200K budget)
+    - Deliberately no delta candles, MA, histogram, threshold coloring or info
+      table: the read is the line's shape against price, everything else is
+      clutter in front of it. Slope-colored with the same NORD8/NORD9 pair as
+      the stochastic %D and the macd-waves signal line; NORD3 dashed zero line
+      with a toggle
+    - Divergence engine: pivots taken on the CVD line only, price read on those
+      same two bars, dotted lines (regular) / dashed (hidden) connecting the
+      two CVD pivots. Pairs are rejected across an anchor reset — the reset
+      prints an artificial swing and the levels either side are not comparable
+    - Lines are minted on confirmed closes only (the pivot window's right side
+      includes the forming bar), and retire through `max_lines_count`
+
 ### Common Features Across Indicators
 
 - **Nord Theme**: All use NORD0-NORD15 color constants

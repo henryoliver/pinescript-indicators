@@ -134,14 +134,14 @@ string compositeBreadthTickUniverse = input.string(
  )
 
 // ─── Zero Line ────────────────────────────────────────────────────────────────
-bool compositeBreadthShowZeroLine = input.bool(defval = false, title = "Show", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
+bool compositeBreadthShowZeroLine = input.bool(defval = true, title = "Show", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 color compositeBreadthZeroLineColor = input.color(defval = NORD3, title = "Color", group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 int compositeBreadthZeroLineWidth = input.int(defval = 3, title = "Width", minval = 1, maxval = 4, group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 string compositeBreadthZeroLineStyle = input.string(defval = "Solid", title = "Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_COMPOSITE_BREADTH_ZEROLINE)
 
 // ─── Session Divider ──────────────────────────────────────────────────────────
 // Vertical lines at each RTH open/close so trade days are separated.
-bool compositeBreadthShowSessionDivider = input.bool(defval = false, title = "Show", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
+bool compositeBreadthShowSessionDivider = input.bool(defval = true, title = "Show", tooltip = "Vertical lines at each NYSE RTH session's open and close (time-anchored in the gap between bars, so they never cover the first/last bar). On an RTH-only chart the 16:00 and next 09:30 share one gap = a single divider.", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
 color compositeBreadthSessionDividerColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "Color", group = GROUP_COMPOSITE_BREADTH_DIVIDER)
 int compositeBreadthSessionDividerWidth = input.int(defval = 2, title = "Width", minval = 1, maxval = 10, group = GROUP_COMPOSITE_BREADTH_DIVIDER)
 string compositeBreadthSessionDividerStyle = input.string(defval = "Dashed", title = "Style", options = ["Solid", "Dashed", "Dotted"], group = GROUP_COMPOSITE_BREADTH_DIVIDER)
@@ -329,14 +329,14 @@ float compositeBreadthCumTickWeight = input.float(
 // 20-BAR SMA on the 3-min chart = 60 minutes of post-09:30 convergence —
 // the entire prime open window burned on warmup.
 bool compositeBreadthShowSignalFast = input.bool(
-     defval = false,
+     defval = true,
      title = "Show Fast",
      tooltip = "FAST leg of the signal pair — the trigger line on the smoothed composite (fed from the same series that's plotted, so crosses and divergences read true). Toggling OFF turns the leg fully off — not computed. The slow leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
  )
 
 bool compositeBreadthShowSignalSlow = input.bool(
-     defval = false,
+     defval = true,
      title = "Show Slow",
      tooltip = "SLOW leg of the signal pair — the baseline. Composite above/below it = momentum building that way (the legacy single-signal read). Toggling OFF turns the leg fully off — not computed. The fast leg keeps running on its own.",
      group = GROUP_COMPOSITE_BREADTH_SIGNAL
@@ -735,7 +735,8 @@ float compositeBreadthCumTickSlopeScale = compositeBreadthCumTickSlopeWindow * c
 // tapes, and TVOL doubles as the exact Raschke opening-volume source. Net
 // effect: five CORE requests instead of six, one construction for all six
 // markets; the optional layers (PCCE, Lowry UPVOL/DNVOL) add gated requests
-// that cost nothing while disabled.
+// that cost nothing while disabled. The TICK request is likewise gated on the
+// CUMTICK weight (see its block) — four live requests in the default config.
 //
 // All breadth feeds use gaps_on so out-of-session bars come back as na rather
 // than being forward-filled with the last RTH value. On a futures or extended-
@@ -792,14 +793,24 @@ float compositeBreadthPctVwapValue = request.security(
 // TICK close — feeds the composite's CUMTICK component (and its bias mean),
 // where per-bar settlement is the right series. (The high/low tuple that fed
 // the removed extreme-detection layer is gone in this test build.)
-float compositeBreadthTickValue = request.security(
-     symbol = compositeBreadthTickSymbol,
-     timeframe = timeframe.period,
-     expression = close,
-     gaps = barmerge.gaps_on,
-     lookahead = barmerge.lookahead_off,
-     ignore_invalid_symbol = true
- )
+// GATED on the CUMTICK weight (2026-09-11 lean pass): with the component
+// deactivated at its default weight 0, nothing downstream ever reads this
+// series — the bias mean, adjusted value, and cumTick all terminate in the
+// weight-0 component, and session detection is time-anchored, so the request
+// was a pure per-bar cost. dynamic_requests (already on for the input-built
+// symbols) permits the conditional call; weight is an input, so the request
+// is either always live or never — re-enabling CUMTICK re-arms it in the
+// same one-input change.
+float compositeBreadthTickValue = na
+if compositeBreadthCumTickWeight > 0.0
+    compositeBreadthTickValue := request.security(
+         symbol = compositeBreadthTickSymbol,
+         timeframe = timeframe.period,
+         expression = close,
+         gaps = barmerge.gaps_on,
+         lookahead = barmerge.lookahead_off,
+         ignore_invalid_symbol = true
+     )
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔔 SESSION DETECTION
