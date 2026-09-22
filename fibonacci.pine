@@ -1,9 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © henry_oliver
-// Fibonacci - standalone extraction of the Support & Resistance Fibonacci engine
+// Fibonacci - price retracements, time extensions, and the confluence of the two
 
 //@version=6
-indicator(title = "Fibonacci", shorttitle = "🌀 Fib", overlay = true, max_lines_count = 100, max_labels_count = 100, calc_bars_count = 5000)
+indicator(title = "Fibonacci", shorttitle = "🌀 Fib", overlay = true, max_lines_count = 100, max_labels_count = 100, max_boxes_count = 60, calc_bars_count = 5000)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -32,6 +32,21 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ⚙️ GENERAL
+// Cross-cutting control: which of the two Fibonacci maps reaches the chart.
+// A chart has two axes — price on the y axis, time on the x axis — and the
+// retracement tool only measures one of them. Time levels measure the other,
+// and the trade is the point where both line up.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_GENERAL = "⚙️ General"
+
+string displayMode = input.string(defval = "Price + Time", title = "Display", options = ["Price", "Time", "Price + Time", "Confluence"], tooltip = "Price draws the horizontal retracement/extension levels. Time draws the vertical Fibonacci time extensions taken from the SAME impulse leg. Price + Time draws the full grid. Confluence is the filtered read: it hides every level that is not converging on the next time line, leaving only the price levels price can still reach by then, the time zone itself, and the intersections that already fired.", group = GROUP_GENERAL)
+
+bool displayPriceLevels = displayMode == "Price" or displayMode == "Price + Time"
+bool displayTimeLevels = displayMode == "Time" or displayMode == "Price + Time"
+bool displayConfluenceOnly = displayMode == "Confluence"
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 🧮 SHARED CALCULATIONS
 // Shared helpers and orchestration only.
 // ═════════════════════════════════════════════════════════════════════════════
@@ -40,14 +55,23 @@ bool confirmedBar = barstate.isconfirmed
 // ═════════════════════════════════════════════════════════════════════════════
 // 🌀 FIBONACCI
 // Builds retracement and extension levels from the latest confirmed impulse leg.
-// Anchors are filtered so weak swings do not constantly reset the map.
+// Anchors are filtered so weak swings do not constantly reset the map, and the
+// accepted leg is then measured for significance: a leg that is too short in
+// TIME or too choppy to be an impulse never reaches the chart, and a leg whose
+// origin has already been taken out is retired.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_FIB = "🌀 Fibonacci"
+const string GROUP_SIGNIFICANCE = "🎯 Significance"
 
 int fibStrengthSensitivity = input.int(defval = 5, title = "Strength Sensitivity", minval = 1, maxval = 20, tooltip = "How strong a swing must be before it becomes a Fibonacci anchor. Higher values use more important swing points.", group = GROUP_FIB)
 int fibAtrPeriod = input.int(defval = 10, title = "ATR Period", minval = 1, tooltip = "ATR lookback used to normalize the Fibonacci pivot deviation threshold.", group = GROUP_FIB)
-float fibAtrMultiplier = input.float(defval = 5.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier and the SOLE leg-quality filter: a new anchor is accepted only when the leg's percent move exceeds ATR-normalized percent × this multiplier (TradingView's official auto-fib construction). The old separate \"Minimum Leg ATR\" input was removed 2026-07-16 — it tested the same ATR-scaled quantity at a lower bar and could never reject anything this filter passed.", group = GROUP_FIB)
+float fibAtrMultiplier = input.float(defval = 5.0, title = "Deviation Multiplier", minval = 0.1, step = 0.1, tooltip = "Official-style deviation multiplier and the SOLE leg-SIZE filter: a new anchor is accepted only when the leg's percent move exceeds ATR-normalized percent × this multiplier (TradingView's official auto-fib construction). The old separate \"Minimum Leg ATR\" input was removed 2026-07-16 — it tested the same ATR-scaled quantity at a lower bar and could never reject anything this filter passed. The Significance group below tests different quantities (duration and path efficiency), which is why it can still reject a leg this filter accepted.", group = GROUP_FIB)
 bool fibUseHighAndLow = input.bool(defval = false, title = "Use High And Low", tooltip = "When on, Fibonacci anchors use raw highs and lows. When off, they use close-based pivots for a cleaner structure read.", group = GROUP_FIB)
+
+int fibMinLegBars = input.int(defval = 5, title = "Minimum Leg Bars", minval = 1, maxval = 200, tooltip = "How many bars the impulse leg must span before the map draws. This is the TIME half of leg quality and the Deviation Multiplier cannot see it: a three-bar spike passes the size filter but its time extensions are spaced three bars apart, which is noise, not a grid.", group = GROUP_SIGNIFICANCE)
+float fibMinLegEfficiency = input.float(defval = 0.25, title = "Minimum Impulse Efficiency", minval = 0.0, maxval = 1.0, step = 0.05, tooltip = "Straight-line distance between the two anchors divided by the total path (sum of true ranges) walked between them. 1.0 is a single uninterrupted thrust; chop that grinds sideways to the same place scores near zero. This is what makes a move an IMPULSE rather than a large wander, and it is the filter that keeps the grid off a chart that has no impulse to measure. Set to 0 to disable.", group = GROUP_SIGNIFICANCE)
+bool fibHideOnOriginBreak = input.bool(defval = true, title = "Hide When Origin Broken", tooltip = "Retires the map once price trades back through the 0% anchor — the leg's own origin. A retracement map only has meaning while the impulse it was measured from is still standing.", group = GROUP_SIGNIFICANCE)
+float fibOriginBreakAtr = input.float(defval = 0.5, title = "Origin Break Buffer (ATR)", minval = 0.0, step = 0.1, tooltip = "How far past the 0% anchor price must close before the map is retired. Keeps the stop-run poke through the low (the 2B pattern) from throwing the map away right when it is about to pay.", group = GROUP_SIGNIFICANCE)
 
 var array<float> fibLevelPercents = array.from(-100.0, -76.4, -61.8, -50.0, -38.2, -23.6, 0.0, 23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0)
 
@@ -64,45 +88,75 @@ float fibAtrValueRaw = ta.atr(length = fibAtrPeriod)
 float fibAtrValue = confirmedBar ? fibAtrValueRaw : na
 float fibDeviationThreshold = fibAtrValue / math.max(math.abs(number = close), syminfo.mintick) * 100.0 * fibAtrMultiplier
 
+// Path length is carried as a running true-range total so a leg's efficiency
+// is a single subtraction between two snapshots. Both snapshots are taken AT
+// the pivot bar (pivots confirm `fibStrengthSensitivity` bars late, so the
+// running total is read back by exactly that offset), which is what keeps the
+// measure latched to the leg instead of breathing with a live window.
+float fibCumTrueRange = ta.cum(source = ta.tr(handle_na = true))
+max_bars_back(fibCumTrueRange, 100)
+int fibPivotBar = bar_index - fibStrengthSensitivity
+float fibPivotCumTrueRange = fibCumTrueRange[fibStrengthSensitivity]
+
 var float fibPreviousPivotPrice = na
+var int fibPreviousPivotBar = na
+var float fibPreviousPivotCumTrueRange = na
 var bool fibPreviousPivotIsHigh = false
 var bool fibHasPreviousPivot = false
 var float fibLastPivotPrice = na
+var int fibLastPivotBar = na
+var float fibLastPivotCumTrueRange = na
 var bool fibLastPivotIsHigh = false
 var bool fibHasLastPivot = false
 
 if not na(fibPivotHigh)
     if not fibHasLastPivot
         fibLastPivotPrice := fibPivotHigh
+        fibLastPivotBar := fibPivotBar
+        fibLastPivotCumTrueRange := fibPivotCumTrueRange
         fibLastPivotIsHigh := true
         fibHasLastPivot := true
     else if fibLastPivotIsHigh
         if fibPivotHigh > fibLastPivotPrice
             fibLastPivotPrice := fibPivotHigh
+            fibLastPivotBar := fibPivotBar
+            fibLastPivotCumTrueRange := fibPivotCumTrueRange
     else
         float fibHighPivotPercent = f_fibPercentMove(referencePrice = fibLastPivotPrice, targetPrice = fibPivotHigh)
         if fibHighPivotPercent >= fibDeviationThreshold
             fibPreviousPivotPrice := fibLastPivotPrice
+            fibPreviousPivotBar := fibLastPivotBar
+            fibPreviousPivotCumTrueRange := fibLastPivotCumTrueRange
             fibPreviousPivotIsHigh := fibLastPivotIsHigh
             fibHasPreviousPivot := true
             fibLastPivotPrice := fibPivotHigh
+            fibLastPivotBar := fibPivotBar
+            fibLastPivotCumTrueRange := fibPivotCumTrueRange
             fibLastPivotIsHigh := true
 
 if not na(fibPivotLow)
     if not fibHasLastPivot
         fibLastPivotPrice := fibPivotLow
+        fibLastPivotBar := fibPivotBar
+        fibLastPivotCumTrueRange := fibPivotCumTrueRange
         fibLastPivotIsHigh := false
         fibHasLastPivot := true
     else if not fibLastPivotIsHigh
         if fibPivotLow < fibLastPivotPrice
             fibLastPivotPrice := fibPivotLow
+            fibLastPivotBar := fibPivotBar
+            fibLastPivotCumTrueRange := fibPivotCumTrueRange
     else
         float fibLowPivotPercent = f_fibPercentMove(referencePrice = fibLastPivotPrice, targetPrice = fibPivotLow)
         if fibLowPivotPercent >= fibDeviationThreshold
             fibPreviousPivotPrice := fibLastPivotPrice
+            fibPreviousPivotBar := fibLastPivotBar
+            fibPreviousPivotCumTrueRange := fibLastPivotCumTrueRange
             fibPreviousPivotIsHigh := fibLastPivotIsHigh
             fibHasPreviousPivot := true
             fibLastPivotPrice := fibPivotLow
+            fibLastPivotBar := fibPivotBar
+            fibLastPivotCumTrueRange := fibPivotCumTrueRange
             fibLastPivotIsHigh := false
 
 bool fibHasAnchors = fibHasPreviousPivot and fibHasLastPivot and fibPreviousPivotIsHigh != fibLastPivotIsHigh
@@ -112,27 +166,153 @@ bool fibDownSwing = fibHasAnchors ? not fibLastPivotIsHigh : true
 float fibLevelZero = fibHasAnchors ? fibDownSwing ? fibAnchorHigh : fibAnchorLow : na
 float fibLevelHundred = fibHasAnchors ? fibDownSwing ? fibAnchorLow : fibAnchorHigh : na
 
+// Exported for the time and confluence sections: the leg in BAR terms, which
+// is the axis the retracement tool ignores.
+int fibLegStartBar = fibHasAnchors ? fibPreviousPivotBar : na
+int fibLegEndBar = fibHasAnchors ? fibLastPivotBar : na
+int fibLegSpanBars = fibHasAnchors ? fibLegEndBar - fibLegStartBar : na
+
+f_fibLevelPrice(float levelPercent) =>
+    fibLevelZero + (fibLevelHundred - fibLevelZero) * levelPercent * 0.01
+
+float fibMapTop = fibHasAnchors ? math.max(f_fibLevelPrice(levelPercent = -100.0), f_fibLevelPrice(levelPercent = 200.0)) : na
+float fibMapBottom = fibHasAnchors ? math.min(f_fibLevelPrice(levelPercent = -100.0), f_fibLevelPrice(levelPercent = 200.0)) : na
+
+// Significance. Both leg tests read values latched at anchor acceptance, so a
+// leg that qualifies stays qualified for its whole life — nothing here can
+// flicker the map on and off as ATR breathes. Only the origin break is live,
+// because that IS a state change: price has retraced the whole impulse.
+float fibLegDisplacement = fibHasAnchors ? math.abs(number = fibLastPivotPrice - fibPreviousPivotPrice) : na
+float fibLegPathLength = fibHasAnchors ? fibLastPivotCumTrueRange - fibPreviousPivotCumTrueRange : na
+float fibLegEfficiency = fibHasAnchors and fibLegPathLength > 0.0 ? fibLegDisplacement / fibLegPathLength : 0.0
+float fibAtrLive = fibAtrValueRaw
+float fibOriginBreakBuffer = nz(fibAtrLive) * fibOriginBreakAtr
+bool fibOriginBroken = fibHideOnOriginBreak and fibHasAnchors and (fibDownSwing ? close > fibLevelZero + fibOriginBreakBuffer : close < fibLevelZero - fibOriginBreakBuffer)
+bool fibMapVisible = fibHasAnchors and fibLegSpanBars >= fibMinLegBars and fibLegEfficiency >= fibMinLegEfficiency and not fibOriginBroken
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⏱️ TIME LEVELS
+// The x-axis half of the tool. The SAME impulse leg that produced the price
+// retracements is projected forward in bars: the leg's own duration is the
+// 100% unit, and every ratio of it becomes a vertical line. Levels below 100%
+// fall inside the completed leg and stay off by default.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_TIME = "⏱️ Time Levels"
+
+bool fibTimeShowInLeg = input.bool(defval = false, title = "Include In-Leg Lines", tooltip = "Also draws the ratios below 100%, which land inside the impulse leg itself. Off by default: they sit in the past and only add ink to bars that have already printed.", group = GROUP_TIME)
+bool fibTimeExtendFull = input.bool(defval = true, title = "Full Height", tooltip = "Runs each time line the full height of the pane. When off, the lines span only the Fibonacci price map, which keeps the grid visually boxed in.", group = GROUP_TIME)
+
+var array<float> fibTimePercents = array.from(23.6, 38.2, 50.0, 61.8, 76.4, 100.0, 123.6, 138.2, 150.0, 161.8, 176.4, 200.0, 223.6, 261.8, 300.0, 361.8, 423.6)
+
+f_fibTimeBar(float levelPercent) =>
+    fibLegStartBar + int(math.round(number = fibLegSpanBars * levelPercent * 0.01))
+
+f_fibTimeLevelEnabled(float levelPercent) =>
+    levelPercent >= 100.0 or fibTimeShowInLeg
+
+// The next time line still ahead of price: the bar the confluence read is
+// waiting on.
+int fibTimeNextBar = na
+float fibTimeNextPercent = na
+if fibMapVisible
+    for timeIndex = 0 to array.size(id = fibTimePercents) - 1
+        float fibTimePercent = array.get(id = fibTimePercents, index = timeIndex)
+        if f_fibTimeLevelEnabled(levelPercent = fibTimePercent)
+            int fibTimeLevelBar = f_fibTimeBar(levelPercent = fibTimePercent)
+            if fibTimeLevelBar > bar_index and (na(fibTimeNextBar) or fibTimeLevelBar < fibTimeNextBar)
+                fibTimeNextBar := fibTimeLevelBar
+                fibTimeNextPercent := fibTimePercent
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚡ CONFLUENCE
+// Where the two maps meet. A price level alone says WHERE, a time level alone
+// says WHEN; the trade is the bar that satisfies both. Zones are stamped on
+// confirmed closes only — an intersection that a wick touched and left behind
+// is not evidence — and the section also exports the convergence reach the
+// render engine uses to strip the map down in Confluence mode.
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_CONFLUENCE = "⚡ Confluence"
+
+bool confluenceShowZones = input.bool(defval = true, title = "Show Hit Zones", tooltip = "Stamps a zone on every bar that closes inside a time line's window while its range is trading a price level. These are the intersections the grid actually delivered.", group = GROUP_CONFLUENCE)
+bool confluenceShowNextZone = input.bool(defval = true, title = "Show Next Time Zone", tooltip = "Shades the window around the next time line ahead of price — the band the market is currently walking into.", group = GROUP_CONFLUENCE)
+int confluenceBarTolerance = input.int(defval = 1, title = "Bar Tolerance", minval = 0, maxval = 10, tooltip = "How many bars either side of a time line still count as that time line. Market geometry is a zone, not a bar — a grid that demands the exact bar will miss almost everything.", group = GROUP_CONFLUENCE)
+float confluencePriceTolerance = input.float(defval = 0.25, title = "Price Tolerance (ATR)", minval = 0.05, step = 0.05, tooltip = "How far either side of a price level still counts as that level, in ATR. Same reasoning as Bar Tolerance, on the other axis.", group = GROUP_CONFLUENCE)
+float confluenceReachMultiplier = input.float(defval = 1.0, title = "Convergence Reach", minval = 0.1, step = 0.1, tooltip = "Scales how far price is assumed to be able to travel before the next time line lands: ATR × √(bars remaining) × this. In Confluence mode only the levels inside that reach are drawn — the ones price is actually converging on. Lower it for a stricter read.", group = GROUP_CONFLUENCE)
+int confluenceMaxZones = input.int(defval = 12, title = "Max Hit Zones", minval = 1, maxval = 40, tooltip = "How many past confluence zones stay on the chart before the oldest is dropped.", group = GROUP_CONFLUENCE)
+color confluenceZoneColor = input.color(defval = color.new(color = NORD13, transp = 80), title = "Zone Fill", tooltip = "Fill color of the confluence zones and the next-time-line band.", group = GROUP_CONFLUENCE)
+color confluenceZoneBorderColor = input.color(defval = color.new(color = NORD13, transp = 30), title = "Zone Border", tooltip = "Border and text color of the confluence zones and the next-time-line band.", group = GROUP_CONFLUENCE)
+
+float confluencePriceBand = nz(fibAtrLive) * confluencePriceTolerance
+int confluenceBarsToNextTime = na(fibTimeNextBar) ? na : fibTimeNextBar - bar_index
+float confluenceReach = na(confluenceBarsToNextTime) ? na : nz(fibAtrLive) * math.sqrt(number = confluenceBarsToNextTime) * confluenceReachMultiplier
+
+var array<box> confluenceZones = array.new<box>()
+var int confluenceLastZoneTimeBar = na
+var int confluenceLastZoneLegBar = na
+
+if confirmedBar and confluenceShowZones and fibMapVisible and bar_index > fibLegEndBar
+    int confluenceHitTimeBar = na
+    float confluenceHitTimePercent = na
+    for timeIndex = 0 to array.size(id = fibTimePercents) - 1
+        float confluenceTimePercent = array.get(id = fibTimePercents, index = timeIndex)
+        if f_fibTimeLevelEnabled(levelPercent = confluenceTimePercent)
+            int confluenceTimeBar = f_fibTimeBar(levelPercent = confluenceTimePercent)
+            if confluenceTimeBar > fibLegEndBar and math.abs(number = bar_index - confluenceTimeBar) <= confluenceBarTolerance
+                confluenceHitTimeBar := confluenceTimeBar
+                confluenceHitTimePercent := confluenceTimePercent
+    // One zone per time line per leg: with a tolerance window every bar in it
+    // would otherwise stamp its own box over the same intersection.
+    bool confluenceZoneIsNew = not na(confluenceHitTimeBar) and (confluenceHitTimeBar != confluenceLastZoneTimeBar or fibLegStartBar != confluenceLastZoneLegBar)
+    if confluenceZoneIsNew
+        float confluenceHitPrice = na
+        float confluenceHitPercent = na
+        float confluenceHitDistance = na
+        for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
+            float confluenceLevelPercent = array.get(id = fibLevelPercents, index = fibIndex)
+            float confluenceLevelPrice = f_fibLevelPrice(levelPercent = confluenceLevelPercent)
+            if confluenceLevelPrice >= low - confluencePriceBand and confluenceLevelPrice <= high + confluencePriceBand
+                float confluenceLevelDistance = math.abs(number = confluenceLevelPrice - close)
+                if na(confluenceHitDistance) or confluenceLevelDistance < confluenceHitDistance
+                    confluenceHitDistance := confluenceLevelDistance
+                    confluenceHitPrice := confluenceLevelPrice
+                    confluenceHitPercent := confluenceLevelPercent
+        if not na(confluenceHitPrice)
+            box confluenceZone = box.new(left = confluenceHitTimeBar - confluenceBarTolerance, top = confluenceHitPrice + confluencePriceBand, right = confluenceHitTimeBar + confluenceBarTolerance, bottom = confluenceHitPrice - confluencePriceBand, xloc = xloc.bar_index, border_color = confluenceZoneBorderColor, border_width = 1, bgcolor = confluenceZoneColor, text = str.tostring(value = confluenceHitPercent, format = "#.##") + "% ⨯ " + str.tostring(value = confluenceHitTimePercent, format = "#.##") + "%", text_color = confluenceZoneBorderColor, text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center)
+            array.push(id = confluenceZones, value = confluenceZone)
+            if array.size(id = confluenceZones) > confluenceMaxZones
+                box.delete(id = array.shift(id = confluenceZones))
+            confluenceLastZoneTimeBar := confluenceHitTimeBar
+            confluenceLastZoneLegBar := fibLegStartBar
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 RENDER ENGINE
-// Projects every Fibonacci level to the right of price: lines start one bar
+// Projects the grid to the right of price: horizontal levels start one bar
 // after the last bar and either run to the right edge of the screen or stop
-// after a fixed length. Weight drives both the line width and style: key
-// ratios solid, secondary dashed, minor dotted.
+// after a fixed length, vertical time lines stand on their projected bar.
+// Weight drives both width and style on BOTH axes: key ratios solid, secondary
+// dashed, minor dotted. In Confluence mode the horizontals are clipped to the
+// next time band and only the ones price can still reach are drawn, so the
+// chart shows the crossing points instead of the whole grid.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_LINES = "📏 Level Lines"
 const string GROUP_LABELS = "🏷️ Level Labels"
 
-bool renderExtendRight = input.bool(defval = true, title = "Extend to Screen Edge", tooltip = "Extends every level line to the right edge of the screen. When off, lines stop after Line Length bars.", group = GROUP_LINES)
 // Pine caps xloc.bar_index drawings at roughly 500 bars into the future, so
-// the future-side inputs stay at 400 to keep a safe margin from that limit.
-int renderLineLengthBars = input.int(defval = 40, title = "Line Length (Bars)", minval = 1, maxval = 400, tooltip = "How many bars the level lines run when Extend to Screen Edge is off.", group = GROUP_LINES)
-color renderLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Level Color", tooltip = "Line color used by all Fibonacci levels.", group = GROUP_LINES)
+// the future-side inputs and the projection cap stay at 400 to keep a safe
+// margin from that limit.
+const int RENDER_MAX_FUTURE_BARS = 400
 
-bool renderShowLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the percent label for each Fibonacci level.", group = GROUP_LABELS)
+bool renderExtendRight = input.bool(defval = true, title = "Extend to Screen Edge", tooltip = "Extends every level line to the right edge of the screen. When off, lines stop after Line Length bars. Ignored in Confluence mode, where lines always stop at the time band they are converging on.", group = GROUP_LINES)
+int renderLineLengthBars = input.int(defval = 40, title = "Line Length (Bars)", minval = 1, maxval = 400, tooltip = "How many bars the level lines run when Extend to Screen Edge is off.", group = GROUP_LINES)
+color renderLevelColor = input.color(defval = color.new(color = NORD4, transp = 60), title = "Level Color", tooltip = "Line color used by all Fibonacci price levels.", group = GROUP_LINES)
+color renderTimeLevelColor = input.color(defval = color.new(color = NORD9, transp = 60), title = "Time Level Color", tooltip = "Line color used by all Fibonacci time levels.", group = GROUP_LINES)
+
+bool renderShowLabels = input.bool(defval = true, title = "Show Labels", tooltip = "Shows the percent label for each Fibonacci level, on both axes.", group = GROUP_LABELS)
 int renderLabelSize = input.int(defval = 12, title = "Label Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], tooltip = "Controls the text size used by all Fibonacci labels.", group = GROUP_LABELS)
-int renderLabelOffsetBars = input.int(defval = 10, title = "Label Offset (Bars)", minval = 0, maxval = 400, tooltip = "How far right of the last bar the labels sit.", group = GROUP_LABELS)
+int renderLabelOffsetBars = input.int(defval = 10, title = "Label Offset (Bars)", minval = 0, maxval = 400, tooltip = "How far right of the last bar the price-level labels sit.", group = GROUP_LABELS)
 int renderLabelDistanceTicks = input.int(defval = 2, title = "Label Distance (Ticks)", minval = 0, maxval = 50, tooltip = "Lifts every label above its line by the chosen number of minimum ticks.", group = GROUP_LABELS)
-color renderLabelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by Fibonacci labels.", group = GROUP_LABELS)
+color renderLabelTextColor = input.color(defval = color.new(color = NORD4, transp = 40), title = "Label Text Color", tooltip = "Text color used by Fibonacci price-level labels.", group = GROUP_LABELS)
+color renderTimeLabelTextColor = input.color(defval = color.new(color = NORD9, transp = 40), title = "Time Label Text Color", tooltip = "Text color used by Fibonacci time-level labels.", group = GROUP_LABELS)
 
 // Rendering refreshes once per BAR plus a self-heal path — not once per
 // tick. The projections only move when bar_index advances and the anchors
@@ -174,35 +354,79 @@ f_levelLineStyle(int levelWeight) =>
 f_labelY(float levelPrice) =>
     levelPrice + syminfo.mintick * renderLabelDistanceTicks
 
+f_levelLabelText(float levelPercent) =>
+    str.tostring(value = levelPercent, format = "#.##") + "%"
+
+color renderHiddenColor = color.new(color = NORD0, transp = 100)
+
 var array<line> renderedLines = array.new<line>()
 var array<label> renderedLabels = array.new<label>()
+var array<line> renderedTimeLines = array.new<line>()
+var array<label> renderedTimeLabels = array.new<label>()
+var box renderNextTimeZone = na
 
-// Drawings are created once and then moved in place on every refresh (one
-// coordinate sweep per bar close — the stamp gate above keeps every other
-// tick at a single int compare). Color, width, style, extension, and label
-// text never change after creation (inputs and level percents are constant
-// per run), so only coordinates get updated — no delete/recreate churn, ever.
-if shouldRefreshRender and fibHasAnchors
-    lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
-    bool renderNeedsBuild = array.size(id = renderedLines) == 0
-    int renderStartBar = bar_index + 1
-    int renderEndBar = renderStartBar + (renderExtendRight ? 1 : renderLineLengthBars)
-    int renderLabelBar = bar_index + renderLabelOffsetBars
+// The pool is minted ONCE, blank and transparent, on the last confirmed
+// historical bar — never on an intrabar tick, where a creation cannot roll
+// back the way its reference does. Everything after that is set_* only:
+// coordinates and visibility move, objects never churn. Width and style are
+// fixed at mint because they follow the level's weight, which is constant.
+if barstate.islastconfirmedhistory and array.size(id = renderedLines) == 0
     for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
         float fibPercent = array.get(id = fibLevelPercents, index = fibIndex)
-        float fibPrice = f_roundToTick(rawPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01)
-        if renderNeedsBuild
-            int fibWeight = f_fibWeight(fibPercent = fibPercent)
-            line newLine = line.new(x1 = renderStartBar, y1 = fibPrice, x2 = renderEndBar, y2 = fibPrice, xloc = xloc.bar_index, extend = renderExtendRight ? extend.right : extend.none, color = renderLevelColor, width = f_levelLineWidth(levelWeight = fibWeight), style = f_levelLineStyle(levelWeight = fibWeight))
-            array.push(id = renderedLines, value = newLine)
-            if renderShowLabels
-                string fibLabelText = str.tostring(value = fibPercent, format = "#.##") + "%"
-                label newLabel = label.new(x = renderLabelBar, y = f_labelY(levelPrice = fibPrice), text = fibLabelText, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_right)
-                array.push(id = renderedLabels, value = newLabel)
-        else
-            line existingLine = array.get(id = renderedLines, index = fibIndex)
-            line.set_xy1(id = existingLine, x = renderStartBar, y = fibPrice)
-            line.set_xy2(id = existingLine, x = renderEndBar, y = fibPrice)
-            if renderShowLabels
-                label existingLabel = array.get(id = renderedLabels, index = fibIndex)
-                label.set_xy(id = existingLabel, x = renderLabelBar, y = f_labelY(levelPrice = fibPrice))
+        int fibWeight = f_fibWeight(fibPercent = fibPercent)
+        array.push(id = renderedLines, value = line.new(x1 = bar_index, y1 = close, x2 = bar_index + 1, y2 = close, xloc = xloc.bar_index, extend = extend.none, color = renderHiddenColor, width = f_levelLineWidth(levelWeight = fibWeight), style = f_levelLineStyle(levelWeight = fibWeight)))
+        array.push(id = renderedLabels, value = label.new(x = bar_index, y = close, text = "", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_right))
+    for timeIndex = 0 to array.size(id = fibTimePercents) - 1
+        float fibTimePercent = array.get(id = fibTimePercents, index = timeIndex)
+        int fibTimeWeight = f_fibWeight(fibPercent = fibTimePercent)
+        array.push(id = renderedTimeLines, value = line.new(x1 = bar_index, y1 = close, x2 = bar_index, y2 = close + syminfo.mintick, xloc = xloc.bar_index, extend = extend.none, color = renderHiddenColor, width = f_levelLineWidth(levelWeight = fibTimeWeight), style = f_levelLineStyle(levelWeight = fibTimeWeight)))
+        array.push(id = renderedTimeLabels, value = label.new(x = bar_index, y = close, text = "", xloc = xloc.bar_index, yloc = yloc.price, style = label.style_none, textcolor = renderTimeLabelTextColor, color = NORD0, size = renderLabelSize, textalign = text.align_center))
+    renderNextTimeZone := box.new(left = bar_index, top = close, right = bar_index + 1, bottom = close, xloc = xloc.bar_index, border_color = renderHiddenColor, border_width = 1, bgcolor = renderHiddenColor, text = "", text_color = renderHiddenColor, text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center)
+
+if shouldRefreshRender and array.size(id = renderedLines) > 0
+    lastRenderedBar := bar_index + (barstate.isconfirmed ? 1 : 0)
+    int renderStartBar = bar_index + 1
+    int renderLabelBar = bar_index + renderLabelOffsetBars
+    bool renderBandReachable = not na(fibTimeNextBar) and confluenceBarsToNextTime <= RENDER_MAX_FUTURE_BARS
+    int renderBandRight = renderBandReachable ? fibTimeNextBar + confluenceBarTolerance : na
+    bool renderBandVisible = fibMapVisible and renderBandReachable and confluenceShowNextZone and (displayTimeLevels or displayConfluenceOnly)
+    int renderClippedEndBar = renderBandReachable and renderBandRight > renderStartBar ? renderBandRight : renderStartBar + 1
+    int renderPlainEndBar = renderStartBar + (renderExtendRight ? 1 : renderLineLengthBars)
+
+    for fibIndex = 0 to array.size(id = fibLevelPercents) - 1
+        float fibPercent = array.get(id = fibLevelPercents, index = fibIndex)
+        float fibPrice = f_roundToTick(rawPrice = f_fibLevelPrice(levelPercent = fibPercent))
+        bool fibConverging = displayConfluenceOnly and renderBandReachable and not na(confluenceReach) and math.abs(number = fibPrice - close) <= confluenceReach
+        bool fibLevelVisible = fibMapVisible and (displayPriceLevels or fibConverging)
+        int fibEndBar = displayConfluenceOnly ? renderClippedEndBar : renderPlainEndBar
+        line fibLine = array.get(id = renderedLines, index = fibIndex)
+        line.set_xy1(id = fibLine, x = renderStartBar, y = fibPrice)
+        line.set_xy2(id = fibLine, x = fibEndBar, y = fibPrice)
+        line.set_extend(id = fibLine, extend = not displayConfluenceOnly and renderExtendRight ? extend.right : extend.none)
+        line.set_color(id = fibLine, color = fibLevelVisible ? renderLevelColor : renderHiddenColor)
+        // In Confluence mode the lines stop at the band, so the label is pulled
+        // back onto the line instead of floating past its end.
+        int fibLabelBar = displayConfluenceOnly and renderLabelBar > fibEndBar ? fibEndBar : renderLabelBar
+        label fibLabel = array.get(id = renderedLabels, index = fibIndex)
+        label.set_xy(id = fibLabel, x = fibLabelBar, y = f_labelY(levelPrice = fibPrice))
+        label.set_text(id = fibLabel, text = fibLevelVisible and renderShowLabels ? f_levelLabelText(levelPercent = fibPercent) : "")
+
+    for timeIndex = 0 to array.size(id = fibTimePercents) - 1
+        float fibTimePercent = array.get(id = fibTimePercents, index = timeIndex)
+        int fibTimeBar = f_fibTimeBar(levelPercent = fibTimePercent)
+        bool fibTimeVisible = fibMapVisible and displayTimeLevels and f_fibTimeLevelEnabled(levelPercent = fibTimePercent) and not na(fibTimeBar) and fibTimeBar - bar_index <= RENDER_MAX_FUTURE_BARS
+        line fibTimeLine = array.get(id = renderedTimeLines, index = timeIndex)
+        line.set_xy1(id = fibTimeLine, x = fibTimeVisible ? fibTimeBar : bar_index, y = fibMapBottom)
+        line.set_xy2(id = fibTimeLine, x = fibTimeVisible ? fibTimeBar : bar_index, y = fibMapTop)
+        line.set_extend(id = fibTimeLine, extend = fibTimeExtendFull ? extend.both : extend.none)
+        line.set_color(id = fibTimeLine, color = fibTimeVisible ? renderTimeLevelColor : renderHiddenColor)
+        label fibTimeLabel = array.get(id = renderedTimeLabels, index = timeIndex)
+        label.set_xy(id = fibTimeLabel, x = fibTimeVisible ? fibTimeBar : bar_index, y = f_labelY(levelPrice = fibAnchorHigh))
+        label.set_text(id = fibTimeLabel, text = fibTimeVisible and renderShowLabels ? f_levelLabelText(levelPercent = fibTimePercent) : "")
+
+    box.set_lefttop(id = renderNextTimeZone, left = renderBandVisible ? fibTimeNextBar - confluenceBarTolerance : bar_index, top = renderBandVisible ? fibMapTop : close)
+    box.set_rightbottom(id = renderNextTimeZone, right = renderBandVisible ? renderBandRight : bar_index + 1, bottom = renderBandVisible ? fibMapBottom : close)
+    box.set_bgcolor(id = renderNextTimeZone, color = renderBandVisible ? confluenceZoneColor : renderHiddenColor)
+    box.set_border_color(id = renderNextTimeZone, color = renderBandVisible ? confluenceZoneBorderColor : renderHiddenColor)
+    box.set_text_color(id = renderNextTimeZone, text_color = renderBandVisible ? confluenceZoneBorderColor : renderHiddenColor)
+    box.set_text(id = renderNextTimeZone, text = renderBandVisible and renderShowLabels ? "⏱ " + f_levelLabelText(levelPercent = fibTimeNextPercent) : "")

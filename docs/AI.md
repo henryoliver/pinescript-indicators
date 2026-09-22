@@ -1181,6 +1181,21 @@ enum TrendDir
 9. **`fibonacci.pine`** / **`pivots.pine`** / **`swings.pine`**
    - Standalone level engines (fib retracements, pivots, strength-scored
      major swings)
+   - `fibonacci.pine` measures BOTH axes off the same impulse leg: horizontal
+     price retracements/extensions and vertical Fibonacci time extensions
+     (the leg's own duration is the 100% unit). A Display input switches
+     Price / Time / Price + Time / Confluence; Confluence strips the grid to
+     the levels price can still reach before the next time line (ATR ×
+     √bars remaining) and clips them to that band, so only the crossings
+     survive. Confirmed-close hit zones mark intersections that actually
+     fired, one per time line per leg
+   - Its Significance gate is the ONE sanctioned return of a render gate
+     (Henry asked for it 2026-09-21 after two earlier removals): it tests
+     quantities the Deviation Multiplier cannot see — leg duration in BARS
+     and path efficiency (displacement ÷ Σ true range between the anchors,
+     both snapshotted at the pivot bars so nothing breathes with ATR) plus a
+     live origin-break retirement. A min-leg-ATR gate must never come back;
+     it is arithmetically redundant with the deviation filter
    - `swings.pine` (was `major-swings.pine`) draws the two-degree
      medium/major swing structure, with a Left/Middle/Right label anchor
    - `pivots.pine` (was `floor-pivots.pine`) holds three independent engines —
@@ -1188,11 +1203,25 @@ enum TrendDir
      each with its own resolution, history depth, styling and label placement,
      sharing one higher-timeframe request when their resolutions match
 
-10. **`options-gex-levels.pine`**
-    - Options gamma exposure (GEX) levels indicator
-    - Parses CSV data from `input.text_area()`
-    - Renders horizontal lines and zones for key GEX levels
-    - Uses arrays to manage lines/labels/boxes
+10. **`options-positioning-map.pine`** (was `options-gex-levels.pine`)
+    - Options positioning map — the whole book projected onto price, not gamma
+      alone: gamma walls + flip, delta (D1-D3) and vega (V1-V3) exposure, open
+      interest and volume concentrations, hedging peak, max pain, the expected
+      move band, an expiry marker, and IV30/HV30 + P/C chain context carried in
+      the FLIP and VEX tooltips
+    - Parses a pasted LADDER row (or a whole session of them) from
+      `input.text_area()`; the chart serves the most recent row the current bar
+      has reached, so bar replay walks the session forward
+    - STATIC BY DESIGN: nothing changes until a new row is served. Every
+      change-gate (`gexLastDrawnBar`, `gexNeedsRefresh`, `gexActiveIndex`, the
+      level scalars, the tooltip strings) is `varip` — a plain `var` gate rolls
+      back per realtime tick and re-runs the whole pipeline. `gexLastDataText`
+      is deliberately NOT varip: the parse writes UDT fields, which roll back
+      anyway, so it must re-run until it lands on a confirmed execution
+    - Drawing pool is minted once, blank, on `barstate.islastconfirmedhistory`;
+      the render is `set_*` only
+    - Known debt: eight slot-keyed parallel arrays + 29 index constants where
+      one `array<GexSlot>` belongs
 
 11. **`quote-window.pine`**
     - Table-based quote panel with regime/bifurcation/delta readouts
