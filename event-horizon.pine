@@ -63,12 +63,28 @@ const int MS_MINUTE = 60000
 const int MS_DAY = 86400000
 const string TZ_ET = "America/New_York"
 
+// How many of the seed symbol's own bars each request reaches back over. The
+// seed is DAILY and runs to 2007 - roughly 4,800 bars - while the furthest this
+// script looks is the 40-day band window. Requesting the whole history nine
+// times over was the single most expensive thing here; capping it is the
+// optimisation TradingView's own profiling guide points at for request.*().
+// 200 daily bars is about ten months: far past anything drawn, far short of the
+// full series.
+const int SEED_BARS = 200
+
 // The tier glyph used in the panel. A font circle rather than an emoji so it
 // takes the tier colour.
 const string TIER_GLYPH = "●"
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ⚙️ INPUTS
+// 🎛️ USER INPUT SETTINGS
+// A global inputs block rather than section-local ones, under the sanctioned
+// exception: the tier toggles, colours and band widths are read by 🇺🇸
+// CLASSIFICATION helpers, which 📡 FEED calls while decoding — so every one of
+// them has to be declared above the first section that consumes it. Splitting
+// them back into their owning sections would put each input below its reader.
+// The settings dialog also has to read tiers → window → style → band → panel,
+// which is not the order those sections appear in the file.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_TIERS = "🎚️ Event Tiers"
 const string GROUP_WINDOW = "🪟 Window"
@@ -93,7 +109,7 @@ int lineWidth = input.int(defval = 1, title = "Width", minval = 1, maxval = 4, g
 string markerSymbol = input.string(defval = "● Circle", title = "Marker", options = ["● Circle", "■ Square", "◆ Diamond", "▲ Triangle up", "▼ Triangle down", "★ Star", "✚ Cross", "▬ Bar"], group = GROUP_STYLE, inline = "marker", tooltip = "The mark sitting on the line, in the tier's colour.\n\nIt is also the only thing on the chart you can hover: in Pine a tooltip belongs to a label and nothing else — not a line, not a background shade — and a label has to render something visible to have a hit box at all. Remove the mark and the tooltip goes with it.")
 int markerSize = input.int(defval = 24, title = "", minval = 4, maxval = 60, group = GROUP_STYLE, inline = "marker", tooltip = "Point size. Pine v6 takes a real number here rather than the old five-step tiny-to-huge scale.")
 string markerCustom = input.string(defval = "⚲", title = "Paste your own", group = GROUP_STYLE, inline = "custom", tooltip = "Anything typed here replaces the preset — a glyph, an emoji, a short word. Clear the box to fall back to the dropdown.")
-int markerDrop = input.int(defval = 10, title = "Drop From Top %", minval = 0, maxval = 100, step = 1, group = GROUP_STYLE, inline = "custom", tooltip = "How far DOWN from the top of the chart window the mark sits. 0 pins it to the ceiling, 10 hangs it just below, 50 is mid-screen, 100 is the floor.\n\nPine cannot read the viewport directly, but reading chart.left_visible_bar_time and chart.right_visible_bar_time gives the script the property of recalculating whenever the visible range changes — so the high and low of the bars actually on screen are known, and that is the window this measures against. It re-solves as you scroll or zoom.\n\nTradingView keeps a margin above the data, so 0 sits just inside the true top edge rather than on it.")
+int markerDrop = input.int(defval = 0, title = "Drop From Top %", minval = -100, maxval = 200, step = 1, group = GROUP_STYLE, inline = "custom", tooltip = "How far DOWN from the top of the chart window the mark sits, as a percentage of the window's own height.\n\n  0    the highest visible bar\n  50   mid-screen\n  100  the lowest visible bar\n  -20  a fifth of a screen ABOVE the highest bar, up in the margin\n  150  below the lowest bar\n\nNegatives are the point: Pine measures the window from the bars themselves, while TradingView draws empty margin above and below them. 0 therefore lands on the highest candle, not on the pane's ceiling — go negative to climb into that margin.\n\nThe window is read through chart.left_visible_bar_time and chart.right_visible_bar_time, which make the script recalculate whenever the visible range changes, so this re-solves live as you scroll or zoom.")
 
 bool showBand = input.bool(defval = true, title = "Shade the no-trade band", group = GROUP_BAND, tooltip = "Full-height shading either side of every drawn release, in that tier's own colour. The line says when; the band says do not be in here.\n\nThe defaults are not guesses. Liquidity is pulled from the book about two minutes before a scheduled release, is thinnest at the release itself, and takes roughly nine minutes to come back. On the other side, an 08:30 print does its price discovery and IV crush inside the first 15 to 30 minutes.")
 int bandOpacity = input.int(defval = 5, title = "Shade Opacity %", minval = 1, maxval = 40, group = GROUP_BAND)
@@ -215,15 +231,15 @@ int forwardDays = showHistory ? math.max(daysForward, 7) : 7
 // literal. The payload expressions stay inline because request.seed evaluates
 // them in the SEED symbol's context, not the chart's.
 f_requestSlots() =>
-    [request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_1", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_2", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_3", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_4", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_5", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_6", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_7", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_8", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
-     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_9", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume))]
+    [request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_1", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_2", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_3", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_4", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_5", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_6", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_7", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_8", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS),
+     request.seed(source = "seed_toodegrees_toogit", symbol = "TOODEGREES_FOREX_FACTORY_SLOT_9", expression = str.tostring(value = open) + "," + str.tostring(value = high) + "," + str.tostring(value = low) + "," + str.tostring(value = close) + "," + str.tostring(value = volume), calc_bars_count = SEED_BARS)]
 
 [slot1, slot2, slot3, slot4, slot5, slot6, slot7, slot8, slot9] = f_requestSlots()
 
@@ -238,7 +254,7 @@ f_naSafe(string slotText) =>
 // Cheap na tests first: only 44 bars in 40,388 carry a payload, so the nine-way
 // concat below is skipped on essentially every bar.
 bool anySlotData = not na(slot1) or not na(slot2) or not na(slot3) or not na(slot4) or not na(slot5) or not na(slot6) or not na(slot7) or not na(slot8) or not na(slot9)
-string slotSignature = anySlotData ? f_naSafe(slot1) + "|" + f_naSafe(slot2) + "|" + f_naSafe(slot3) + "|" + f_naSafe(slot4) + "|" + f_naSafe(slot5) + "|" + f_naSafe(slot6) + "|" + f_naSafe(slot7) + "|" + f_naSafe(slot8) + "|" + f_naSafe(slot9) : ""
+string slotSignature = anySlotData ? f_naSafe(slotText = slot1) + "|" + f_naSafe(slotText = slot2) + "|" + f_naSafe(slotText = slot3) + "|" + f_naSafe(slotText = slot4) + "|" + f_naSafe(slotText = slot5) + "|" + f_naSafe(slotText = slot6) + "|" + f_naSafe(slotText = slot7) + "|" + f_naSafe(slotText = slot8) + "|" + f_naSafe(slotText = slot9) : ""
 
 var string lastSignature = ""
 var map<string, bool> seenEventKeys = map.new<string, bool>()
@@ -266,11 +282,11 @@ var map<int, bool> bandedStamps = map.new<int, bool>()
 
 f_addBand(int stamp, int tier) =>
     bool inWindow = stamp >= timenow - backDays * MS_DAY and stamp <= timenow + forwardDays * MS_DAY
-    if showBand and f_tierEnabled(tier) and inWindow and not map.contains(id = bandedStamps, key = stamp)
+    if showBand and f_tierEnabled(tier = tier) and inWindow and not map.contains(id = bandedStamps, key = stamp)
         map.put(id = bandedStamps, key = stamp, value = true)
-        array.push(id = bandStarts, value = stamp - f_bandBefore(tier) * MS_MINUTE)
-        array.push(id = bandEnds, value = stamp + f_bandAfter(tier) * MS_MINUTE)
-        array.push(id = bandColors, value = color.new(color = f_tierColor(tier), transp = 100 - bandOpacity))
+        array.push(id = bandStarts, value = stamp - f_bandBefore(tier = tier) * MS_MINUTE)
+        array.push(id = bandEnds, value = stamp + f_bandAfter(tier = tier) * MS_MINUTE)
+        array.push(id = bandColors, value = color.new(color = f_tierColor(tier = tier), transp = 100 - bandOpacity))
     array.size(id = bandStarts)
 
 bool shouldDecode = anySlotData and slotSignature != lastSignature
@@ -278,6 +294,8 @@ bool shouldDecode = anySlotData and slotSignature != lastSignature
 if shouldDecode
     lastSignature := slotSignature
 
+    // Positional by necessity: the imported library publishes no parameter
+    // names, which AI.md lists as the case where positional is required.
     array<ffUtil.News> dayNews = array.new<ffUtil.News>()
     ffDec.readNews(dayNews, slot1)
     ffDec.readNews(dayNews, slot2)
@@ -295,15 +313,15 @@ if shouldDecode
         for eventIndex = 0 to array.size(id = dayNews) - 1
             ffUtil.News candidate = array.get(id = dayNews, index = eventIndex)
             string lowerTitle = str.lower(source = candidate.ttl)
-            if str.upper(source = candidate.cur) == "USD" and not na(candidate.tmst) and candidate.tmst > 0 and not f_isForeignMisTag(lowerTitle)
-                string eventKey = str.tostring(candidate.tmst) + "|" + candidate.ttl
+            if str.upper(source = candidate.cur) == "USD" and not na(candidate.tmst) and candidate.tmst > 0 and not f_isForeignMisTag(lowerTitle = lowerTitle)
+                string eventKey = str.tostring(value = candidate.tmst) + "|" + candidate.ttl
                 if not map.contains(id = seenEventKeys, key = eventKey)
                     map.put(id = seenEventKeys, key = eventKey, value = true)
-                    int tier = f_eventTier(candidate.ttl)
+                    int tier = f_eventTier(rawTitle = candidate.ttl)
 
-                    if f_tierEnabled(tier)
-                        f_mergeCandidate(allStamps, allTiers, allTitles, allLeads, allCounts, candidate.tmst, tier, candidate.ttl)
-                    f_addBand(candidate.tmst, tier)
+                    if f_tierEnabled(tier = tier)
+                        f_mergeCandidate(stamps = allStamps, tiers = allTiers, titles = allTitles, leads = allLeads, counts = allCounts, stamp = candidate.tmst, tier = tier, title = candidate.ttl)
+                    f_addBand(stamp = candidate.tmst, tier = tier)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ✍️ MANUAL EVENTS
@@ -335,7 +353,7 @@ if barstate.isfirst or manualText != lastManualText
                 if array.size(id = tokens) >= 4
                     string dateText = str.trim(source = array.get(id = tokens, index = 0))
                     string timeText = str.trim(source = array.get(id = tokens, index = 1))
-                    int tier = f_digits(str.trim(source = array.get(id = tokens, index = 2)), 0, 1)
+                    int tier = f_digits(digitsText = str.trim(source = array.get(id = tokens, index = 2)), fromPos = 0, toPos = 1)
 
                     // The title is everything past the third comma, rejoined, so
                     // a comma inside a release name survives the split.
@@ -344,16 +362,16 @@ if barstate.isfirst or manualText != lastManualText
                         for tokenIndex = 4 to array.size(id = tokens) - 1
                             title := title + "," + array.get(id = tokens, index = tokenIndex)
 
-                    int stamp = timestamp(timezone = TZ_ET, year = f_digits(dateText, 0, 4), month = f_digits(dateText, 4, 6), day = f_digits(dateText, 6, 8), hour = f_digits(timeText, 0, 2), minute = f_digits(timeText, 2, 4), second = 0)
+                    int stamp = timestamp(timezone = TZ_ET, year = f_digits(digitsText = dateText, fromPos = 0, toPos = 4), month = f_digits(digitsText = dateText, fromPos = 4, toPos = 6), day = f_digits(digitsText = dateText, fromPos = 6, toPos = 8), hour = f_digits(digitsText = timeText, fromPos = 0, toPos = 2), minute = f_digits(digitsText = timeText, fromPos = 2, toPos = 4), second = 0)
                     if not na(stamp) and str.length(string = dateText) == 8 and tier >= 1 and tier <= 3
                         array.push(id = manualStamps, value = stamp)
                         array.push(id = manualTiers, value = tier)
                         array.push(id = manualTitles, value = title)
 
-                        if f_tierEnabled(tier)
-                            f_mergeCandidate(allStamps, allTiers, allTitles, allLeads, allCounts, stamp, tier, title)
+                        if f_tierEnabled(tier = tier)
+                            f_mergeCandidate(stamps = allStamps, tiers = allTiers, titles = allTitles, leads = allLeads, counts = allCounts, stamp = stamp, tier = tier, title = title)
                         // A manual line earns a band the same as a decoded one.
-                        f_addBand(stamp, tier)
+                        f_addBand(stamp = stamp, tier = tier)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ⛔ NO-TRADE BAND
@@ -412,12 +430,12 @@ if windowKnown and time >= visibleLeftTime and time <= visibleRightTime
     windowHigh := na(windowHigh) ? high : math.max(windowHigh, high)
     windowLow := na(windowLow) ? low : math.min(windowLow, low)
 
-// Fallback for the tick before a visible range is known. Computed unconditionally:
-// a ta.* call inside a ternary only runs on some bars and its series drifts.
-float fallbackHigh = ta.highest(source = high, length = 300)
-float fallbackLow = ta.lowest(source = low, length = 300)
-float rangeHigh = na(windowHigh) ? fallbackHigh : windowHigh
-float rangeLow = na(windowLow) ? fallbackLow : windowLow
+// If the viewport is not known yet, hang off the current bar rather than a fixed
+// lookback: a 300-bar range is a DIFFERENT range, and silently substituting it
+// makes the percentage meaningless without ever looking wrong enough to notice.
+float eventFallbackAtr = ta.atr(length = 14)
+float rangeHigh = na(windowHigh) ? high + eventFallbackAtr * 4.0 : windowHigh
+float rangeLow = na(windowLow) ? low - eventFallbackAtr * 4.0 : windowLow
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🗓️ RENDER
@@ -450,15 +468,15 @@ if barstate.islast
                 break
             if eventStamp >= windowStart
                 int tier = array.get(id = allTiers, index = signpostIndex)
-                color tierColor = f_tierColor(tier)
+                color tierColor = f_tierColor(tier = tier)
                 string titles = array.get(id = allTitles, index = signpostIndex)
                 string lowerTitles = str.lower(source = titles)
-                string clusterName = f_clusterName(lowerTitles)
+                string clusterName = f_clusterName(lowerTitles = lowerTitles)
                 string leadName = clusterName != "" ? clusterName : array.get(id = allLeads, index = signpostIndex)
 
-                string bandOpens = str.format_time(time = eventStamp - f_bandBefore(tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
-                string bandCloses = str.format_time(time = eventStamp + f_bandAfter(tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
-                string tooltipText = f_eventEmoji(lowerTitles) + "  " + leadName + "\n" + str.format_time(time = eventStamp, format = "EEEE d MMMM · HH:mm", timezone = TZ_ET) + " ET\n" + f_tierName(tier) + (showBand ? "\n⛔  Stand aside " + bandOpens + " → " + bandCloses : "") + "\n\nOn this minute:\n" + titles
+                string bandOpens = str.format_time(time = eventStamp - f_bandBefore(tier = tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
+                string bandCloses = str.format_time(time = eventStamp + f_bandAfter(tier = tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
+                string tooltipText = f_eventEmoji(lowerTitles = lowerTitles) + "  " + leadName + "\n" + str.format_time(time = eventStamp, format = "EEEE d MMMM · HH:mm", timezone = TZ_ET) + " ET\n" + f_tierName(tier = tier) + (showBand ? "\n⛔  Stand aside " + bandOpens + " → " + bandCloses : "") + "\n\nOn this minute:\n" + titles
 
                 line poolLine = array.get(id = poolLines, index = drawnCount)
                 line.set_xy1(id = poolLine, x = eventStamp, y = 0.0)
@@ -511,18 +529,18 @@ if barstate.islast
                 if eventStamp >= timenow and eventStamp <= windowEnd
                     int tier = array.get(id = allTiers, index = signpostIndex)
                     string titles = array.get(id = allTitles, index = signpostIndex)
-                    string clusterName = f_clusterName(str.lower(source = titles))
+                    string clusterName = f_clusterName(lowerTitles = str.lower(source = titles))
                     string leadName = clusterName != "" ? clusterName : array.get(id = allLeads, index = signpostIndex)
                     int alsoCount = array.get(id = allCounts, index = signpostIndex) - 1
 
                     int minutesOut = math.round(number = (eventStamp - timenow) / MS_MINUTE)
-                    string countdownText = minutesOut < 60 ? str.tostring(minutesOut) + "m" : minutesOut < 1440 ? str.tostring(math.floor(number = minutesOut / 60)) + "h" + str.tostring(minutesOut % 60) + "m" : str.tostring(math.floor(number = minutesOut / 1440)) + "d"
+                    string countdownText = minutesOut < 60 ? str.tostring(value = minutesOut) + "m" : minutesOut < 1440 ? str.tostring(value = math.floor(number = minutesOut / 60)) + "h" + str.tostring(value = minutesOut % 60) + "m" : str.tostring(value = math.floor(number = minutesOut / 1440)) + "d"
                     // The imminent one burns; everything behind it stays quiet.
                     color rowColor = minutesOut <= 30 ? NORD11 : minutesOut <= 120 ? NORD13 : NORD4
 
-                    table.cell(table_id = panel, column = 0, row = panelRow, text = TIER_GLYPH, text_color = f_tierColor(tier), text_size = size.tiny)
+                    table.cell(table_id = panel, column = 0, row = panelRow, text = TIER_GLYPH, text_color = f_tierColor(tier = tier), text_size = size.tiny)
                     table.cell(table_id = panel, column = 1, row = panelRow, text = str.format_time(time = eventStamp, format = "EEE HH:mm", timezone = TZ_ET), text_color = NORD9, text_size = size.tiny)
-                    table.cell(table_id = panel, column = 2, row = panelRow, text = f_eventEmoji(str.lower(source = titles)) + " " + leadName + (alsoCount > 0 ? "  +" + str.tostring(alsoCount) : ""), text_color = rowColor, text_size = size.tiny, text_halign = text.align_left)
+                    table.cell(table_id = panel, column = 2, row = panelRow, text = f_eventEmoji(lowerTitles = str.lower(source = titles)) + " " + leadName + (alsoCount > 0 ? "  +" + str.tostring(value = alsoCount) : ""), text_color = rowColor, text_size = size.tiny, text_halign = text.align_left)
                     table.cell(table_id = panel, column = 3, row = panelRow, text = countdownText, text_color = rowColor, text_size = size.tiny)
                     panelRow += 1
 

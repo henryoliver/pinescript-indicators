@@ -287,11 +287,19 @@ bool brokeLow = false
 bool mssThisBar = false
 
 if confirmedBar and swingCount > 0
+    // Hoisted out of the scan. `high` and `low` are series reads and the loop
+    // touches them up to four times per swing across a 40-slot store, so this
+    // removes a few hundred lookups a bar for free.
+    float barHigh = high
+    float barLow = low
     for swing in structuralSwings
         if not swing.isBroken
-            bool cleared = swing.isHigh ? low > swing.zoneTop : high < swing.zoneBottom
-            // Side-agnostic: zoneTop/zoneBottom already carry the orientation.
-            bool inside = high >= swing.zoneBottom and low <= swing.zoneTop
+            // Every `swing.field` is a dereference, and these three are read up
+            // to three times apiece below. Fetch once, use the locals.
+            bool swingIsHigh = swing.isHigh
+            float zoneTop = swing.zoneTop
+            float zoneBottom = swing.zoneBottom
+            bool cleared = swingIsHigh ? barLow > zoneTop : barHigh < zoneBottom
             if cleared
                 swing.isBroken := true
                 swing.brokenBarIndex := bar_index
@@ -302,19 +310,27 @@ if confirmedBar and swingCount > 0
                 // the shift; every PRIVILEGE that flows from strong structure is
                 // keyed off `isStrong and not isBroken` instead of `isStrong`.
                 mssThisBar := mssThisBar or swing.isStrong
-                if swing.isHigh
+                if swingIsHigh
                     brokeHigh := true
                 else
                     brokeLow := true
-            else if inside
-                // Count a visit on ENTRY only; the latch clears on the first bar
-                // that does not intersect the zone at all.
-                if not swing.isInsideZone
-                    swing.touchCount := swing.touchCount + 1
-                    swing.isInsideZone := true
-                swing.isPierced := swing.isPierced or (swing.isHigh ? high > swing.zoneTop : low < swing.zoneBottom)
             else
-                swing.isInsideZone := false
+                // Side-agnostic: zoneTop/zoneBottom already carry the orientation.
+                // Computed inside this branch rather than above it — a swing that
+                // cleared never reads it, so above the branch it was pure waste.
+                bool inside = barHigh >= zoneBottom and barLow <= zoneTop
+                if inside
+                    // Count a visit on ENTRY only; the latch clears on the first bar
+                    // that does not intersect the zone at all.
+                    if not swing.isInsideZone
+                        swing.touchCount := swing.touchCount + 1
+                        swing.isInsideZone := true
+                    // Same latch, written as a guard so an already-pierced swing
+                    // stops re-evaluating the comparison every bar it is visited.
+                    if not swing.isPierced
+                        swing.isPierced := swingIsHigh ? barHigh > zoneTop : barLow < zoneBottom
+                else
+                    swing.isInsideZone := false
 
     // After the scan, so the store is never iterated from two places at once.
     //
@@ -447,10 +463,13 @@ f_fillBucket(int wantDegree, bool wantHigh, int limit, float minSeparation, arra
     if reserveNearest and limit > 0
         Swing nearest = na
         float bestDistance = na
+        // Hoisted: `close` is a series read and this scan runs once per tier and
+        // side, so it was fetched forty times per bucket for no reason.
+        float barClose = close
         for candidate in structuralSwings
             if candidate.degree == wantDegree and candidate.isHigh == wantHigh
                 // Nearest resistance ABOVE price, nearest support BELOW it.
-                float distance = wantHigh ? candidate.levelPrice - close : close - candidate.levelPrice
+                float distance = wantHigh ? candidate.levelPrice - barClose : barClose - candidate.levelPrice
                 if distance > 0 and (na(bestDistance) or distance < bestDistance)
                     bestDistance := distance
                     nearest := candidate
@@ -461,20 +480,29 @@ f_fillBucket(int wantDegree, bool wantHigh, int limit, float minSeparation, arra
 
     if array.size(id = ranked) > 0
         for rank = 0 to array.size(id = ranked) - 1
-            if filled < limit
-                Swing candidate = array.get(id = structuralSwings, index = array.get(id = ranked, index = rank))
-                if candidate.degree == wantDegree and candidate.isHigh == wantHigh
-                    // A one-tick separation test doubles as the "is this the level
-                    // the reserved pass already took" check.
-                    bool alreadyHeld = f_isTooClose(renderedEdges = taken, candidateEdge = candidate.levelPrice, minSeparation = syminfo.mintick)
+            // Was `if filled < limit`, which kept walking all forty ranks after the
+            // bucket was already full. A bucket holds two or three levels, so the
+            // walk now ends where it used to idle.
+            if filled >= limit
+                break
+            Swing candidate = array.get(id = structuralSwings, index = array.get(id = ranked, index = rank))
+            if candidate.degree == wantDegree and candidate.isHigh == wantHigh
+                float candidatePrice = candidate.levelPrice
+                // A one-tick separation test doubles as the "is this the level
+                // the reserved pass already took" check.
+                bool alreadyHeld = f_isTooClose(renderedEdges = taken, candidateEdge = candidatePrice, minSeparation = syminfo.mintick)
+                if not alreadyHeld
                     // Collapse duplicate readings of the same shelf. Live strong
                     // structure is EXEMPT: collapsing a strong low into a fresher
                     // shelf that happens to sit inside the band throws away the one
                     // level the stop is supposed to hang from.
-                    bool tooClose = candidate.isStrong and not candidate.isBroken ? false : f_isTooClose(renderedEdges = taken, candidateEdge = candidate.levelPrice, minSeparation = minSeparation)
-                    if not alreadyHeld and not tooClose
+                    //
+                    // Nested under `alreadyHeld` rather than sitting beside it: a
+                    // candidate the first test rejected never needed the second.
+                    bool tooClose = candidate.isStrong and not candidate.isBroken ? false : f_isTooClose(renderedEdges = taken, candidateEdge = candidatePrice, minSeparation = minSeparation)
+                    if not tooClose
                         array.push(id = heldLevels, value = candidate)
-                        array.push(id = taken, value = candidate.levelPrice)
+                        array.push(id = taken, value = candidatePrice)
                         filled += 1
     // Explicit terminal expression: a Pine function ending on an `if` has no
     // determinable return type. Callers have no use for the count — the render
@@ -512,12 +540,17 @@ if barstate.islast or barstate.islastconfirmedhistory
         // tier and side filtering happens in f_fillBucket, while WALKING the ranked
         // order, precisely so this property survives.
         if swingCount > 0
+            // Loop-invariant: the divisor does not depend on the index, so it was
+            // being recomputed forty times for one value.
+            float recencyDivisor = swingCount * 100.0
             for swingIndex = 0 to swingCount - 1
                 Swing swing = array.get(id = structuralSwings, index = swingIndex)
-                float strongBonus = swing.isStrong and not swing.isBroken ? 4000.0 : 0.0
+                // Read once - it feeds both the strong and the unbroken term.
+                bool swingIsBroken = swing.isBroken
+                float strongBonus = swing.isStrong and not swingIsBroken ? 4000.0 : 0.0
                 float flipBonus = f_isFreshFlip(swing = swing) ? 3000.0 : 0.0
-                float unbrokenBonus = swing.isBroken ? 0.0 : 2000.0
-                float recency = (swingCount - swingIndex) / (swingCount * 100.0)
+                float unbrokenBonus = swingIsBroken ? 0.0 : 2000.0
+                float recency = (swingCount - swingIndex) / recencyDivisor
                 array.push(id = scores, value = strongBonus + flipBonus + unbrokenBonus + math.min(swing.touchCount, 5) * 100.0 + math.min(swing.prominence, 2.0) * 100.0 + recency)
 
         if array.size(id = scores) > 0

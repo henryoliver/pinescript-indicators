@@ -131,8 +131,11 @@ const string GEX_TIP_RANGE = "📐 EXPECTED MOVE\nThe 1σ band options are prici
 
 string gexDataText = input.text_area(defval = "", title = "Options Data", group = GROUP_GEX_DATA, tooltip = "📋 Paste one LADDER row, or a whole session — the watcher's log pastes as-is.\n\n⏪ Each bar is served the newest row it has reached, so replay walks the session forward.\n💡 `make copy` carries the last two sessions: overnight map + today.")
 
-bool gexShowPreMarket = input.bool(defval = true, title = "Show Levels Before The Bell", group = GROUP_GEX_SESSION, tooltip = "🌗 Before the bell this map is INHERITED — last night's open interest with nothing traded against it yet.\n\n✅ A legitimate overnight read: the board you inherited.\n🚫 Not a fresh measurement — it only rebuilds once 0DTE prints hit after 09:30.")
-bool gexShowMapPanel = input.bool(defval = true, title = "Dealer Map Panel Before The Bell", group = GROUP_GEX_SESSION, tooltip = "📊 A borderless read-out of the inherited map: regime, day type, ceiling/flip/floor, and whether the implied move even reaches the walls.\n\n⏰ Disappears at the bell — after that the levels are the map.")
+bool gexShowPreMarket = input.bool(defval = true, title = "Show Levels Before The Bell", group = GROUP_GEX_SESSION, tooltip = "🌗 Before the bell the map is built from last night's open interest with nothing traded against it yet.\n\n✅ A real read of the board the day opens into.\n🚫 Not a measurement of today's flow — no 0DTE volume exists until the open.")
+bool gexShowMapPanel = input.bool(defval = true, title = "Dealer Map Panel Before The Bell", group = GROUP_GEX_SESSION, tooltip = "📊 The morning read in four lines: ① regime ② flip ③ walls ④ book — the order each reading depends on the one above it.\n\n⚠️ Built from the last pull before the open, not from yesterday's close.\n\n⏰ Disappears at the bell — after that the levels are the map.")
+color gexPanelBgColor = input.color(defval = color.new(color = NORD0, transp = 8), title = "Panel Fill / Border", group = GROUP_GEX_SESSION, inline = "panel_style")
+color gexPanelBorderColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "", group = GROUP_GEX_SESSION, inline = "panel_style")
+int gexPanelTextSize = input.int(defval = 16, title = "Panel Text Size", options = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24], group = GROUP_GEX_SESSION, inline = "panel_style", tooltip = "The card's fill, its frame colour, and its text size. Pine draws table corners square — there is no rounded-corner option — so the card reads as a panel, not a pill.")
 int gexDimPct = input.int(defval = 55, title = "Dim Outside The Session (%)", minval = 0, maxval = 90, group = GROUP_GEX_SESSION, tooltip = "🌗 How far to fade every level before the bell and after the mapped expiry stops trading.\n\n👀 Dimmed, not hidden: inherited or spent levels are still worth seeing.\n0 = no fading.")
 bool gexShowExpiryLine = input.bool(defval = true, title = "Expiration Line", group = GROUP_GEX_STRUCTURE, tooltip = "⏰ A vertical line at the minute the mapped expiry stops trading, read from the feed — 16:15 ET for QQQ/SPY/IWM, 16:00 for most equity options. Carries the regime colour.\n\n⚠️ 0DTE-dominated structure dissolves here; monthly-backed structure persists for days.")
 bool gexShowCallWalls = input.bool(defval = true, title = "Call Walls (C1-C3)", group = GROUP_GEX_STRUCTURE, inline = "calls")
@@ -199,7 +202,6 @@ const int GEX_WALL_WIDTH = 3
 const int GEX_RIGHT_PAD_BARS = 22    // line overhang past the last bar
 const int GEX_THIN_WIDTH = 1
 const float GEX_FLIP_BAND_PCT = 0.05 // "at the flip" band, percent of price
-const int GEX_SESSION_OPEN_MIN = 570 // 09:30 ET, the bell
 const string GEX_DATA_TIMEZONE = "America/New_York"  // cboe-fetch stamps TIME in exchange time
 
 // One pool slot per level, assigned up front: no counter to mutate.
@@ -243,7 +245,7 @@ var label gexRegimeLabel = na
 var box gexRangeBox = na
 var box gexPocketUpBox = na
 var box gexPocketDownBox = na
-var table gexMapPanel = table.new(position = position.top_right, columns = 1, rows = 6, bgcolor = GEX_HIDDEN, border_width = 0, frame_width = 0)
+var table gexMapPanel = table.new(position = position.top_right, columns = 1, rows = 7, bgcolor = gexPanelBgColor, border_width = 0, frame_width = 1, frame_color = gexPanelBorderColor)
 var box gexFlipBox = na
 var line gexExpiryLine = na
 var array<GexSnapshot> gexSnapshots = array.new<GexSnapshot>()
@@ -494,7 +496,14 @@ if gexShouldParse
 // equity options), so the close of the map is read from the feed, never assumed.
 int gexBarMinutes = hour(time = time, timezone = GEX_DATA_TIMEZONE) * 60 + minute(time = time, timezone = GEX_DATA_TIMEZONE)
 int gexExpiryMinutes = str.length(string = gexExpiryTime) == 4 ? int(f_gexSafeFloat(rawText = str.substring(source = gexExpiryTime, begin_pos = 0, end_pos = 2))) * 60 + int(f_gexSafeFloat(rawText = str.substring(source = gexExpiryTime, begin_pos = 2, end_pos = 4))) : 16 * 60
-bool gexBeforeBell = gexBarMinutes < GEX_SESSION_OPEN_MIN
+// Before the bell means the bar sits in THIS symbol's own pre-market, read from
+// the chart's session — never a hardcoded 09:30 ET, which silently defines the
+// morning by US equity hours for every other symbol the map is loaded on. The
+// close end stays feed-driven (the option's own EXPTIME) because the contract
+// expires on ET regardless of what the chart is showing.
+// With extended hours off there are no pre-market bars, so this is simply never
+// true and the pre-bell layer stays out of the way.
+bool gexBeforeBell = session.ispremarket
 bool gexAfterExpiry = gexBarMinutes >= gexExpiryMinutes
 bool gexOutsideSession = gexBeforeBell or gexAfterExpiry
 
@@ -655,7 +664,9 @@ f_gexArm(int slotIndex, float levelPrice, bool isVisible) =>
     slot.visible := isVisible
 
 f_gexPanelRow(int rowIndex, string rowText, color rowTone) =>
-    table.cell(table_id = gexMapPanel, column = 0, row = rowIndex, text = rowText, text_color = rowTone, text_size = gexLabelTextSize, text_halign = text.align_left, bgcolor = GEX_HIDDEN)
+    // Padded with spaces because a Pine table cell has no padding property and
+    // the frame would otherwise sit flush against the text.
+    table.cell(table_id = gexMapPanel, column = 0, row = rowIndex, text = rowText == "" ? "" : "  " + rowText + "  ", text_color = rowTone, text_size = gexPanelTextSize, text_halign = text.align_left, bgcolor = GEX_HIDDEN)
 
 f_gexDrawLevel(int slotIndex, float levelPrice, string levelText, int padChars, color levelColor, color nameColor, string levelTooltip, int levelWidth, string levelStyle, bool drawLine, bool visible, bool ownsStrike) =>
     // One fade point for the whole map: every level, name and strike passes
@@ -1019,39 +1030,60 @@ if barstate.islast
     color gexLiveRegimeColor = na(gexFlip) ? gexServedRegimeColor : math.abs(number = close - gexFlip) <= gexFlipBand ? NORD4 : close > gexFlip ? NORD8 : NORD11
     color gexRegimeColor = f_gexFade(source = gexSymbolVisible ? gexLiveRegimeColor : gexServedRegimeColor)
     // ── Dealer map, before the bell ────────────────────────────────────────
-    // The inherited board, read out in words. Repainted on every islast tick
+    // The morning board, read out in words. Repainted on every islast tick
     // rather than on redraw: a table cell rolls back on an uncommitted tick, so
     // anything gated on "the data changed" blanks itself mid-bar.
     bool gexPanelOn = gexShowMapPanel and gexBeforeBell and not na(gexFlip)
-    for panelRow = 0 to 5
+    for panelRow = 0 to 6
         f_gexPanelRow(rowIndex = panelRow, rowText = "", rowTone = GEX_HIDDEN)
 
     if gexPanelOn
+        // Read order is REGIME -> FLIP -> WALLS -> BOOK, top to bottom, because
+        // that is the order the readings depend on each other in: the regime
+        // says which playbook applies, the flip is the line that decides the
+        // regime, and the walls are only tradable once you know which side of
+        // it you are on. Each row names the mechanism before the action —
+        // "dealers add to moves" earns "trade the break" in a way the bare
+        // instruction does not.
         bool gexLongGamma = gexRegime == "POSITIVE" or (gexRegime == "" and not na(gexTotalGex) and gexTotalGex >= 0)
         color gexPanelTone = gexRegime == "NEUTRAL" ? NORD4 : gexLongGamma ? NORD8 : NORD11
-        string gexLean = gexRegime == "NEUTRAL" ? "ON THE FLIP · stand aside" : gexLongGamma ? "CALM TAPE · fade the edges" : "TRENDING TAPE · follow the break"
-        string gexDayType = gexRegime == "NEUTRAL" ? "WHIPSAW day — wait for a side to hold" : gexLongGamma ? "RANGE day — sell the ceiling, buy the floor" : "TREND day — trade breaks, do not fade"
+        string gexRegimeName = gexRegime == "NEUTRAL" ? "ON THE FLIP" : gexLongGamma ? "POSITIVE GAMMA" : "NEGATIVE GAMMA"
+        string gexRegimeRead = gexRegime == "NEUTRAL" ? "no edge either way → stand aside" : gexLongGamma ? "dealers damp moves → fade the edges" : "dealers add to moves → trade the break"
 
         string gexCeil = na(gexCall1) ? "—" : str.tostring(value = gexCall1, format = "#")
         string gexFloor = na(gexPut1) ? "—" : str.tostring(value = gexPut1, format = "#")
-        string gexBookLine = na(gexTotalGex) ? "" : "   ·   net gamma " + str.tostring(value = gexTotalGex, format = "#.##") + "bn"
+
+        // Which side of the flip price sits on IS the regime, so say it rather
+        // than leaving the reader to compare two numbers.
+        string gexFlipSide = close > gexFlip ? "price above → calm holds while it does" : close < gexFlip ? "price below → expect follow-through" : "price on it → the coin is in the air"
 
         // Does the day's implied move even reach the walls? A wall outside the
         // band needs a bigger move than options are pricing — so it is context,
         // not a target.
-        string gexReach = "implied move unavailable"
+        string gexReach = ""
         if not na(gexRangeLow) and not na(gexRangeHigh)
             bool ceilInside = not na(gexCall1) and gexCall1 <= gexRangeHigh
             bool floorInside = not na(gexPut1) and gexPut1 >= gexRangeLow
-            string gexVerdict = ceilInside and floorInside ? "both walls are within reach" : ceilInside ? "the ceiling is reachable, the floor is not" : floorInside ? "the floor is reachable, the ceiling is not" : "neither wall is within reach — expect the middle"
-            gexReach := "implied " + str.tostring(value = gexRangeLow, format = "#.##") + "–" + str.tostring(value = gexRangeHigh, format = "#.##") + " · " + gexVerdict
+            gexReach := ceilInside and floorInside ? "both in reach today" : ceilInside ? "ceiling in reach, floor is not" : floorInside ? "floor in reach, ceiling is not" : "neither in reach — expect the middle"
 
-        f_gexPanelRow(rowIndex = 0, rowText = syminfo.ticker + " · DEALER MAP — inherited overnight", rowTone = NORD4)
-        f_gexPanelRow(rowIndex = 1, rowText = gexLean, rowTone = gexPanelTone)
-        f_gexPanelRow(rowIndex = 2, rowText = gexDayType, rowTone = NORD4)
-        f_gexPanelRow(rowIndex = 3, rowText = "ceiling " + gexCeil + "   flip " + str.tostring(value = gexFlip, format = "#.##") + "   floor " + gexFloor + gexBookLine, rowTone = NORD4)
-        f_gexPanelRow(rowIndex = 4, rowText = gexReach, rowTone = NORD4)
-        f_gexPanelRow(rowIndex = 5, rowText = "last night's book · rebuilds after 09:30", rowTone = color.new(color = NORD4, transp = 45))
+        // Where price sits between the walls, as a percentage of the span. A
+        // number beats "near the floor": 32% and 8% are both "near" and mean
+        // very different things.
+        string gexPerch = ""
+        if not na(gexCall1) and not na(gexPut1) and gexCall1 > gexPut1
+            float gexSpan = (close - gexPut1) / (gexCall1 - gexPut1) * 100
+            gexPerch := str.tostring(value = math.max(0, math.min(100, gexSpan)), format = "#") + "% up the floor-to-ceiling range"
+
+        string gexBookLine = na(gexTotalGex) ? "" : "net gamma " + str.tostring(value = gexTotalGex, format = "#.##") + "bn"
+        string gexBookRow = gexBookLine == "" ? gexPerch : gexPerch == "" ? gexBookLine : gexBookLine + "  ·  " + gexPerch
+
+        f_gexPanelRow(rowIndex = 0, rowText = syminfo.ticker + " · PRE-MARKET DEALER MAP", rowTone = NORD6)
+        f_gexPanelRow(rowIndex = 1, rowText = "① REGIME  " + gexRegimeName + " — " + gexRegimeRead, rowTone = gexPanelTone)
+        f_gexPanelRow(rowIndex = 2, rowText = "② FLIP    " + str.tostring(value = gexFlip, format = "#.##") + " — " + gexFlipSide, rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 3, rowText = "③ WALLS   " + gexCeil + " ceiling  ·  " + gexFloor + " floor" + (gexReach == "" ? "" : " — " + gexReach), rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 4, rowText = gexBookRow == "" ? "" : "④ BOOK    " + gexBookRow, rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 5, rowText = "", rowTone = GEX_HIDDEN)
+        f_gexPanelRow(rowIndex = 6, rowText = "last pull before the bell · levels take over at the open", rowTone = color.new(color = NORD4, transp = 45))
 
     label.set_textcolor(id = gexRegimeLabel, textcolor = gexSymbolVisible and (gexShowPreMarket or not gexBeforeBell) ? gexRegimeColor : GEX_HIDDEN)
     line.set_color(id = gexExpiryLine, color = gexExpiryVisible ? gexRegimeColor : GEX_HIDDEN)
