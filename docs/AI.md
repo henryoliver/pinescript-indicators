@@ -1181,21 +1181,6 @@ enum TrendDir
 9. **`fibonacci.pine`** / **`pivots.pine`** / **`swings.pine`**
    - Standalone level engines (fib retracements, pivots, strength-scored
      major swings)
-   - `fibonacci.pine` measures BOTH axes off the same impulse leg: horizontal
-     price retracements/extensions and vertical Fibonacci time extensions
-     (the leg's own duration is the 100% unit). A Display input switches
-     Price / Time / Price + Time / Confluence; Confluence strips the grid to
-     the levels price can still reach before the next time line (ATR ×
-     √bars remaining) and clips them to that band, so only the crossings
-     survive. Confirmed-close hit zones mark intersections that actually
-     fired, one per time line per leg
-   - Its Significance gate is the ONE sanctioned return of a render gate
-     (Henry asked for it 2026-09-21 after two earlier removals): it tests
-     quantities the Deviation Multiplier cannot see — leg duration in BARS
-     and path efficiency (displacement ÷ Σ true range between the anchors,
-     both snapshotted at the pivot bars so nothing breathes with ATR) plus a
-     live origin-break retirement. A min-leg-ATR gate must never come back;
-     it is arithmetically redundant with the deviation filter
    - `swings.pine` (was `major-swings.pine`) draws the two-degree
      medium/major swing structure, with a Left/Middle/Right label anchor
    - `pivots.pine` (was `floor-pivots.pine`) holds three independent engines —

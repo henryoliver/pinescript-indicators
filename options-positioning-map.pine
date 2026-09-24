@@ -3,7 +3,7 @@
 // Options Positioning Map - dealer and customer structure from a pasted LADDER line
 
 //@version=6
-indicator(title = "Options Positioning Map", shorttitle = "🧬 OPM", overlay = true, max_lines_count = 40, max_labels_count = 80, max_boxes_count = 5)
+indicator(title = "Options Positioning Map", shorttitle = "🧬 OPM", overlay = true, max_lines_count = 40, max_labels_count = 80, max_boxes_count = 6)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -74,9 +74,30 @@ type GexSnapshot
     float iv30
     float hv30
     float vix
+    float totalGex
+    float netOverGross
+    float vanna
+    float charm
+    float pocketUpLow
+    float pocketUpHigh
+    float pocketDownLow
+    float pocketDownHigh
     string expiry
     string expiryTime
     string regime
+
+// One drawable level. These eight fields were eight parallel arrays indexed by
+// slot; a single typed array keeps a slot's state together, so adding a field
+// cannot leave one array a different length than the rest.
+type GexSlot
+    string code      // the short name drawn beside the line
+    string note      // its own tooltip
+    string hoverText // what it actually shows: its note alone, or the whole cluster's
+    float price
+    bool visible
+    bool ownsStrike  // only the first label at a price prints the strike number
+    int padChars     // leading spaces that queue it behind earlier labels
+    int cluster      // which visual cluster it belongs to, -1 when alone
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧬 GEX LADDER
@@ -85,31 +106,35 @@ type GexSnapshot
 // implied range. Lines, labels and one optional box: nothing else.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_GEX_DATA = "📝 Data Input"
+const string GROUP_GEX_SESSION = "🌗 Outside Hours"
 const string GROUP_GEX_STRUCTURE = "📏 Structure"
 const string GROUP_GEX_PINS = "📌 Pins"
 const string GROUP_GEX_CONTEXT = "🧭 Context"
 const string GROUP_GEX_RANGE = "📐 Expected Move"
 const string GROUP_GEX_LABELS = "🏷️ Labels"
 
-const string GEX_TIP_C1 = "C1 — CALL WALL\nThe strike above the flip carrying the most positive dealer gamma. Hedging leans against rallies into it, so moves tend to slow and reverse there.\n\n👉 Positive gamma: fade the test — stop just past the wall, never fade-and-forget (tested walls hold roughly as often as they break). A decisive break on volume flips the read: the ceiling becomes a chase (squeeze) and first support on the retest.\n\n⚠ Repeated tests with no rejection = customer-held, not dealer-hedged — the wall has lost its power, stop trading it. Walls are weaker in negative gamma. Let the map stabilize (~11:00 ET) before leaning on the first tag."
-const string GEX_TIP_C2 = "C2 — SECOND CALL WALL\nThe next concentration of positive gamma above the flip. Weaker than C1: a staging level, not a ceiling.\n\n👉 A gatekeeper: price has to get through it first — a clean run to C1 is less likely with a large C2 in between. Expect a pause here on the way up; it becomes the first target once C1 breaks."
-const string GEX_TIP_C3 = "C3 — THIRD CALL WALL\nThe thinnest mapped ceiling. Real but easily overrun.\n\n👉 Context only — a pause, not a turn. Trading it alone is trading noise. If the strikes between here and the next wall carry near-zero gamma (air pocket), price can traverse them fast — don't fade inside the pocket."
-const string GEX_TIP_FLIP = "FLIP — GAMMA FLIP (HVL)\nThe price where total dealer gamma crosses zero: the single most important level on this map. Above it hedging absorbs moves (compression, failed breakouts, mean reversion); below it hedging amplifies them (trend days, cascades, squeezes).\n\n👉 A volatility statement, not a direction one — it picks which playbook to open, not which trade to take. Above → fade extremes, sell premium. A break below on volume → de-risk, stop fading, trade momentum.\n\n⚠ An immediate re-cross is flip chop: no-man's-land, wait for a side to hold. Watch it migrate — the flip rising toward a falling price warns the tape is going short-gamma. A flip far from spot (>10%) means thin data: treat with caution."
-const string GEX_TIP_P1 = "P1 — PUT WALL\nThe strike below the flip carrying the most negative dealer gamma. Hedging cushions dips into it.\n\n👉 Positive gamma: buy reactions here — stop just past the wall. A clean break below is the warning: the mapped floor is gone and the tape may be turning short-gamma, where dips cascade.\n\n⚠ In negative gamma a put wall can be an air pocket, not a floor — never buy it blindly there. Repeated tests with no bounce = the wall has lost its power."
-const string GEX_TIP_P2 = "P2 — SECOND PUT WALL\nThe next concentration of negative gamma below the flip.\n\n👉 A gatekeeper on the way down, and where price tends to land once P1 gives way — the first downside target after a P1 break."
-const string GEX_TIP_P3 = "P3 — THIRD PUT WALL\nThe thinnest mapped floor.\n\n👉 Context only — expect a pause, not a turn. Thin strikes beyond it are an air pocket: dips can travel fast to the far side."
-const string GEX_TIP_ABS = "Ab1-Ab3 — ABSOLUTE GAMMA\nThe strikes with the most total gamma, calls and puts added together, sign ignored. A wall says which way hedging leans; Ab says how much hedging is there at all.\n\n👉 Expect a reaction, not a direction. Ab stacked on a wall is the strongest level on the chart — but stacked levels resolve as DECISION zones more often than clean bounces: expect two-way auction work there, and read the outcome instead of assuming the first touch holds."
-const string GEX_TIP_VEX = "V1-V3 — VEGA EXPOSURE\nWhere vega concentrates: the strikes whose hedges move when implied volatility moves, rather than when price does. Calls and puts both count — a vol move lifts them together.\n\n👉 Read it against gamma, not instead of it. Gamma says where price gets pinned; vega says where a change in IV forces dealers to trade. When V1 sits on top of C1 or P1 the level is doubly defended — an IV drop and a price test both push hedging the same way, and it is the strongest level on the map.\n\n⚠ When V1 sits away from every gamma wall, that strike is an IV-event level: it matters on a volatility move (a headline, a crush after the open) and is quiet otherwise. Vega exposure decays toward expiry, so on a 0DTE afternoon these levels thin out — trust them most in the morning."
-const string GEX_TIP_DEX = "D1-D3 — DELTA EXPOSURE\nWhere directional exposure concentrates. Positive means call delta dominates the strike, negative means put delta does — positioning, not dealers being long or short.\n\n👉 A filter, not a trigger: DEX shows where the book stands now; gamma shows how hedging responds when price moves. A heavily one-sided strike is context for how hard the gamma effects can lean there — never a bull/bear signal on its own."
-const string GEX_TIP_HP = "HP — HEDGING PEAK (KING NODE)\nThe single strike carrying the largest absolute dealer gamma anywhere on the board: the centre of gravity for hedging.\n\n👉 A magnet, not a destination — it bends the tape toward itself more often than it catches the close exactly. Pull is strongest ~14:00–15:30 ET and on expiration-heavy days; weakest when an air pocket sits between spot and it.\n\n⚠ In negative 0DTE gamma the afternoon can accelerate AWAY instead of pinning — trade the break, don't fade it, don't sell same-day premium around it."
-const string GEX_TIP_MP = "MP — MAX PAIN\nThe strike where the most option value expires worthless — where the hedged side of the book wants price to land.\n\n👉 A pin reference for the final hours before expiry, not a level to trade off. Conviction is highest when MP, the hedging peak and a wall line up — build the day plan around that price."
-const string GEX_TIP_OI = "OI LEVELS — POSITIONING\nnCOI / nPOI: the biggest call or put open-interest excess over the other side.\nCOI / POI: the highest outright call or put open interest.\nAbOI: the highest combined open interest.\n\n👉 Where size is actually held — but OI settles overnight (T+1), so this is yesterday's book: structure, not today's intent. OI with no volume today is an old wall nobody is defending — verify a level has live interest before respecting it."
-const string GEX_TIP_VOL = "VOLUME LEVELS — FLOW\nnCV / nPV: the biggest net call or put volume today.\nCV / PV: the highest outright call or put volume.\n\n👉 Where contracts are changing hands right now — today's fight. Volume against little OI = fresh positioning being built. At a wall, this is the tell: price tags it and flow rolls over → the cap is holding, a fade setup; price tags it and flow keeps pressing → the wall may be giving way, stand aside or go with it."
-const string GEX_TIP_RANGE = "D± — EXPECTED MOVE\nThe 1σ band options are pricing through the stated expiry (spot × ATM IV × √T, whole-day time). Price stays inside it roughly 68% of the time. It keeps the expiry's FULL horizon — it is not decayed intraday, so late in the day read it as a horizon band, not the next hour's range.\n\n👉 A sizing filter: a wall inside the band is within a normal day's reach; outside it, don't build the day around tagging it. Positive gamma → trading inside the band fits the regime; negative gamma → band breaks can run. Premium sellers set wings just outside it, near the walls. It never promises containment."
+const string GEX_TIP_C1 = "🧱 C1 — CALL WALL\nThe heaviest positive dealer gamma above the flip. Hedging leans against rallies here.\n\n✅ Positive gamma: fade the test, stop just past it.\n⚠️ A break on volume flips it — ceiling becomes support.\n🚫 Repeated tests with no rejection = the wall is spent."
+const string GEX_TIP_C2 = "🧱 C2 — SECOND CALL WALL\nA staging level, not a ceiling.\n\n✅ Expect a pause here on the way up.\n🎯 First target once C1 breaks."
+const string GEX_TIP_C3 = "🧱 C3 — THIRD CALL WALL\nThe thinnest mapped ceiling.\n\n👀 Context only — a pause, not a turn.\n🚫 Trading it alone is trading noise."
+const string GEX_TIP_FLIP = "⚖️ FLIP — GAMMA FLIP\nWhere dealer gamma crosses zero. The most important level here.\n\n🟦 Above: hedging absorbs moves → fade extremes, sell premium.\n🟥 Below: hedging amplifies them → trade momentum, widen stops.\n\n⚠️ It picks the playbook, not the trade.\n🚫 An immediate re-cross is chop — wait for a side to hold."
+const string GEX_TIP_P1 = "🛡️ P1 — PUT WALL\nThe heaviest negative dealer gamma below the flip. Hedging cushions dips here.\n\n✅ Positive gamma: buy reactions, stop just past it.\n⚠️ A clean break means the mapped floor is gone.\n🚫 In negative gamma this can be an air pocket, not a floor."
+const string GEX_TIP_P2 = "🛡️ P2 — SECOND PUT WALL\nA staging level below P1.\n\n✅ Expect a pause here on the way down.\n🎯 First target once P1 breaks."
+const string GEX_TIP_P3 = "🛡️ P3 — THIRD PUT WALL\nThe thinnest mapped floor.\n\n👀 Context only.\n🚫 Real but easily overrun."
+const string GEX_TIP_ABS = "🌀 Ab1-Ab3 — GAMMA CONCENTRATION\nThe strikes with the most hedging of any kind, calls and puts combined, sign ignored.\n\n🧲 Where the tape gets sticky.\n👀 Direction-free: read them with the walls, not instead of them."
+const string GEX_TIP_VEX = "🌊 V1-V3 — VEGA EXPOSURE\nStrikes whose hedging reacts when implied vol moves, not when price does.\n\n💪 V1 sitting on C1 or P1 = doubly defended, the strongest level on the map.\n👀 V1 away from every wall = an IV-event level, quiet otherwise.\n⏳ Decays into expiry — trust it most in the morning."
+const string GEX_TIP_DEX = "🧭 D1-D3 — DELTA EXPOSURE\nWhere directional exposure sits right now.\n\n👀 A filter, not a trigger: it shows where the book stands, gamma shows how it reacts.\n🚫 Never a bull/bear signal on its own."
+const string GEX_TIP_HP = "👑 HP — HEDGING PEAK\nThe single strike carrying the most dealer gamma anywhere.\n\n🧲 The day's likeliest pin, strongest into the close.\n💪 Conviction is highest when HP, MP and a wall line up.\n🚫 Weak when an air pocket sits between price and it."
+const string GEX_TIP_MP = "📌 MP — MAX PAIN\nThe strike where the most option value expires worthless.\n\n🧲 A pin reference into expiry, not a level to trade on its own.\n💪 Build the day around it only when it agrees with HP and a wall."
+const string GEX_TIP_OI = "🏦 OI LEVELS\nWhere contracts are HELD — positioning carried overnight.\n\n👀 Slow-moving structure, updated once a day by OCC.\n🚫 Not today's flow: read with the volume levels."
+const string GEX_TIP_VOL = "⚡ VOLUME LEVELS\nWhere contracts are CHANGING HANDS today.\n\n👀 Fresh intent versus OI's inherited positioning.\n💪 Volume landing on an OI level is the strongest confirmation on the map."
+const string GEX_TIP_RANGE = "📐 EXPECTED MOVE\nThe 1σ band options are pricing into the mapped expiry's close.\n\n✅ Positive gamma: trading inside the band fits the regime.\n⚠️ A wall inside the band is reachable today; one outside it is not.\n🚫 Not a ceiling — price closes outside it roughly 1 day in 5."
 
-string gexDataText = input.text_area(defval = "", title = "Options Data", group = GROUP_GEX_DATA, tooltip = "Paste one LADDER row, or a whole session of them — the watcher's log pastes as-is, banners and all.\nThe chart serves the most recent row the current bar has reached, so bar replay walks the session forward.\n\nQQQ,20260918,LADDER,TIME:0952,C1:720,C2:725,C3:722,FLIP:717.39,P1:716,P2:714,P3:713,HP:720,MP:704,NCOI:735,ABOI:715,CV:718,D_LOW:712.12,D_HIGH:726.14,EXPIRY:20260918,REGIME:POSITIVE")
+string gexDataText = input.text_area(defval = "", title = "Options Data", group = GROUP_GEX_DATA, tooltip = "📋 Paste one LADDER row, or a whole session — the watcher's log pastes as-is.\n\n⏪ Each bar is served the newest row it has reached, so replay walks the session forward.\n💡 `make copy` carries the last two sessions: overnight map + today.")
 
-bool gexShowExpiryLine = input.bool(defval = true, title = "Expiration Line", group = GROUP_GEX_STRUCTURE, tooltip = "A vertical line at the minute the mapped expiry stops trading, read from the feed: 16:15 ET for QQQ, SPY and IWM, 16:00 for most equity options. It carries the regime colour.\n\n👉 Everything on this map is built from that expiry's book — 0DTE-dominated structure dissolves at this line, so treat those levels as same-day references; monthly-backed structure persists past it for days or weeks.")
+bool gexShowPreMarket = input.bool(defval = true, title = "Show Levels Before The Bell", group = GROUP_GEX_SESSION, tooltip = "🌗 Before the bell this map is INHERITED — last night's open interest with nothing traded against it yet.\n\n✅ A legitimate overnight read: the board you inherited.\n🚫 Not a fresh measurement — it only rebuilds once 0DTE prints hit after 09:30.")
+bool gexShowMapPanel = input.bool(defval = true, title = "Dealer Map Panel Before The Bell", group = GROUP_GEX_SESSION, tooltip = "📊 A borderless read-out of the inherited map: regime, day type, ceiling/flip/floor, and whether the implied move even reaches the walls.\n\n⏰ Disappears at the bell — after that the levels are the map.")
+int gexDimPct = input.int(defval = 55, title = "Dim Outside The Session (%)", minval = 0, maxval = 90, group = GROUP_GEX_SESSION, tooltip = "🌗 How far to fade every level before the bell and after the mapped expiry stops trading.\n\n👀 Dimmed, not hidden: inherited or spent levels are still worth seeing.\n0 = no fading.")
+bool gexShowExpiryLine = input.bool(defval = true, title = "Expiration Line", group = GROUP_GEX_STRUCTURE, tooltip = "⏰ A vertical line at the minute the mapped expiry stops trading, read from the feed — 16:15 ET for QQQ/SPY/IWM, 16:00 for most equity options. Carries the regime colour.\n\n⚠️ 0DTE-dominated structure dissolves here; monthly-backed structure persists for days.")
 bool gexShowCallWalls = input.bool(defval = true, title = "Call Walls (C1-C3)", group = GROUP_GEX_STRUCTURE, inline = "calls")
 color gexCallWallColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "", group = GROUP_GEX_STRUCTURE, inline = "calls", tooltip = GEX_TIP_C1)
 bool gexShowPutWalls = input.bool(defval = true, title = "Put Walls (P1-P3)", group = GROUP_GEX_STRUCTURE, inline = "puts")
@@ -117,6 +142,8 @@ color gexPutWallColor = input.color(defval = color.new(color = NORD11, transp = 
 bool gexShowFlip = input.bool(defval = true, title = "Gamma Flip (FLIP)", group = GROUP_GEX_STRUCTURE, inline = "flip")
 color gexFlipColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "", group = GROUP_GEX_STRUCTURE, inline = "flip")
 string gexRegimeSymbol = input.string(defval = "●", title = "", options = ["●", "◆", "▲", "■"], group = GROUP_GEX_STRUCTURE, inline = "flip", tooltip = "Drawn beside the FLIP label in the colour of the side price is trading on.")
+bool gexShowPockets = input.bool(defval = true, title = "Air Pockets", group = GROUP_GEX_STRUCTURE, inline = "pocket")
+color gexPocketColor = input.color(defval = color.new(color = NORD3, transp = 88), title = "", group = GROUP_GEX_STRUCTURE, inline = "pocket", tooltip = "💨 AIR POCKET\nA run of strikes with almost no dealer gamma. Not support, not resistance — the ABSENCE of both, so it is about SPEED.\n\n🚫 Never fade inside one: a wall has a mechanism, a pocket has nothing.\n🎯 Use it for targets — when a wall breaks, the far side of the pocket is the destination.\n⚡ Pocket + negative gamma = the acceleration case.")
 bool gexShowFlipZone = input.bool(defval = true, title = "Gamma Flip Zone", group = GROUP_GEX_STRUCTURE, inline = "flipzone")
 color gexFlipZoneColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "", group = GROUP_GEX_STRUCTURE, inline = "flipzone")
 color gexFlipZoneFillColor = input.color(defval = color.new(color = NORD4, transp = 92), title = "", group = GROUP_GEX_STRUCTURE, inline = "flipzone", tooltip = "The crossing sits between two strikes, so the flip is really a band. Border colour, then the fill. No labels: the FLIP line already carries them.")
@@ -149,7 +176,8 @@ int gexLabelTextSize = input.int(defval = 12, title = "Label Text Size", options
 int gexStrikeTextSize = input.int(defval = 12, title = "Strike Text Size", options = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], group = GROUP_GEX_LABELS, tooltip = "Size of the strike number, in pixels. Set independently of the code text so the price can sit quieter than the label.")
 int gexStrikeOffsetChars = input.int(defval = 0, title = "Strike Shift (Characters)", minval = 0, maxval = 40, group = GROUP_GEX_LABELS, tooltip = "Pushes the strike number back along its line, measured in characters so it holds at any zoom. 0 parks it against the end of the line.")
 int gexStrikeOffsetTicks = input.int(defval = 6, title = "Strike Lift (Ticks)", minval = -200, maxval = 200, group = GROUP_GEX_LABELS, tooltip = "How far above the line the strike number floats, in ticks. Negative drops it below the line.")
-int gexStackGapChars = input.int(defval = 12, title = "Stack Gap (Characters)", minval = 1, maxval = 20, group = GROUP_GEX_LABELS, tooltip = "When levels share a price their codes queue to the right, this many characters apart — a glyph is the same width at every zoom. Slot order decides the queue, so the strongest reading sits leftmost: C1 before C2, a wall before the pins and context that land on it.\n\nSet the font to Monospace for an exact queue.")
+float gexStackDistancePct = input.float(defval = 0.1, title = "Stack Distance (%)", minval = 0.0, maxval = 2.0, step = 0.01, group = GROUP_GEX_LABELS, tooltip = "📏 How close two levels must be to count as the same price and share a queue.\n\n👀 Percent of price, so it scales with the symbol.")
+int gexStackGapChars = input.int(defval = 10, title = "Stack Gap (Characters)", minval = 1, maxval = 20, group = GROUP_GEX_LABELS, tooltip = "↔️ Blank characters between stacked level names.\n\n👀 Character-based so the spacing holds when you zoom.")
 string gexLabelFont = input.string(defval = "Default", title = "Label Font", options = ["Monospace", "Default"], group = GROUP_GEX_LABELS, tooltip = "Monospace makes codes that share a price line up exactly; the proportional font is prettier but stacks approximately.")
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -169,8 +197,9 @@ const int GEX_WALL_WIDTH = 3
 // and separate from each other with text padding, which is measured in glyphs
 // and therefore does not change with zoom either. The line runs on past them.
 const int GEX_RIGHT_PAD_BARS = 22    // line overhang past the last bar
-const float GEX_FLIP_BAND_PCT = 0.05 // "at the flip" band, percent of price
 const int GEX_THIN_WIDTH = 1
+const float GEX_FLIP_BAND_PCT = 0.05 // "at the flip" band, percent of price
+const int GEX_SESSION_OPEN_MIN = 570 // 09:30 ET, the bell
 const string GEX_DATA_TIMEZONE = "America/New_York"  // cboe-fetch stamps TIME in exchange time
 
 // One pool slot per level, assigned up front: no counter to mutate.
@@ -204,6 +233,7 @@ const int GEX_SLOT_VEX1 = 26
 const int GEX_SLOT_VEX2 = 27
 const int GEX_SLOT_VEX3 = 28
 const int GEX_MAX_SLOTS = 29
+const float GEX_SYMBOL_GAP_FRACTION = 0.5 // the regime symbol hugs FLIP at this share of the stack gap
 const int GEX_TOOLTIP_MAX = 3900     // Pine caps a tooltip at 4,096 characters
 
 var array<line> gexLevelLines = array.new<line>()
@@ -211,29 +241,27 @@ var array<label> gexStrikeLabels = array.new<label>()
 var array<label> gexCodeLabels = array.new<label>()
 var label gexRegimeLabel = na
 var box gexRangeBox = na
+var box gexPocketUpBox = na
+var box gexPocketDownBox = na
+var table gexMapPanel = table.new(position = position.top_right, columns = 1, rows = 6, bgcolor = GEX_HIDDEN, border_width = 0, frame_width = 0)
 var box gexFlipBox = na
 var line gexExpiryLine = na
 var array<GexSnapshot> gexSnapshots = array.new<GexSnapshot>()
 
-// Slot scratch space. Allocating these on every redraw is what made the render
-// block grow in memory: six arrays a bar, every bar, for numbers that only ever
-// get overwritten. Allocated once, refilled in place.
-var array<float> gexSlotPrices = array.new<float>(GEX_MAX_SLOTS, na)
-var array<bool> gexSlotVisible = array.new<bool>(GEX_MAX_SLOTS, false)
-var array<int> gexSlotPadChars = array.new<int>(GEX_MAX_SLOTS, 0)
-var array<bool> gexSlotOwnsStrike = array.new<bool>(GEX_MAX_SLOTS, true)
-// A level's own note, in slot order. FLIP and V1-V3 are overwritten every
-// redraw because theirs carry the chain-context block.
-var array<string> gexSlotNotes = array.from(GEX_TIP_C1, GEX_TIP_C2, GEX_TIP_C3, GEX_TIP_FLIP, GEX_TIP_P1, GEX_TIP_P2, GEX_TIP_P3, GEX_TIP_ABS, GEX_TIP_ABS, GEX_TIP_ABS, GEX_TIP_HP, GEX_TIP_MP, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_DEX, GEX_TIP_DEX, GEX_TIP_DEX, GEX_TIP_RANGE, GEX_TIP_RANGE, GEX_TIP_VEX, GEX_TIP_VEX, GEX_TIP_VEX)
+// Slot state. Allocating these on every redraw is what made the render block
+// grow in memory: arrays a bar, every bar, for values that only get overwritten.
+// Built once, refilled in place.
+var array<GexSlot> gexSlots = array.new<GexSlot>()
+var array<float> gexClusterAnchor = array.new<float>(GEX_MAX_SLOTS, na)
 
-// What a label actually shows on hover: its own note when it stands alone, the
-// whole strike's story when it shares a price. Labels stacked on one anchor
-// nest their hover boxes — TradingView sizes a label to its rendered text,
-// padding spaces included — so the widest (weakest) code swallows every hover
-// in the stack. Rather than fight that, every label at a shared price answers
-// for all of them.
-var array<string> gexSlotHoverText = array.new<string>(GEX_MAX_SLOTS, "")
-var array<string> gexSlotCodes = array.from("C1", "C2", "C3", "FLIP", "P1", "P2", "P3", "Ab1", "Ab2", "Ab3", "HP", "MP", "nCOI", "nPOI", "COI", "POI", "AbOI", "nCV", "nPV", "CV", "PV", "D1", "D2", "D3", "D+", "D-", "V1", "V2", "V3")
+// Codes and notes are the only per-slot constants; everything else is recomputed
+// each redraw. FLIP and V1-V3 have their notes overwritten because theirs carry
+// the chain-context block.
+if array.size(id = gexSlots) == 0
+    array<string> gexSlotCodeSeed = array.from("C1", "C2", "C3", "FLIP", "P1", "P2", "P3", "Ab1", "Ab2", "Ab3", "HP", "MP", "nCOI", "nPOI", "COI", "POI", "AbOI", "nCV", "nPV", "CV", "PV", "D1", "D2", "D3", "D+", "D-", "V1", "V2", "V3")
+    array<string> gexSlotNoteSeed = array.from(GEX_TIP_C1, GEX_TIP_C2, GEX_TIP_C3, GEX_TIP_FLIP, GEX_TIP_P1, GEX_TIP_P2, GEX_TIP_P3, GEX_TIP_ABS, GEX_TIP_ABS, GEX_TIP_ABS, GEX_TIP_HP, GEX_TIP_MP, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_OI, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_VOL, GEX_TIP_DEX, GEX_TIP_DEX, GEX_TIP_DEX, GEX_TIP_RANGE, GEX_TIP_RANGE, GEX_TIP_VEX, GEX_TIP_VEX, GEX_TIP_VEX)
+    for seedIndex = 0 to GEX_MAX_SLOTS - 1
+        array.push(id = gexSlots, value = GexSlot.new(code = array.get(id = gexSlotCodeSeed, index = seedIndex), note = array.get(id = gexSlotNoteSeed, index = seedIndex), hoverText = "", price = na, visible = false, ownsStrike = true, padChars = 0, cluster = -1))
 // varip, not var: a plain `var` write made on an unconfirmed realtime tick is
 // ROLLED BACK before the next tick, so every change-gate built on one reads
 // stale and fires again — the whole parse/select/render pipeline re-ran on
@@ -273,6 +301,14 @@ varip float gexPCVol = na
 varip float gexIV30 = na
 varip float gexHV30 = na
 varip float gexVIX = na
+varip float gexTotalGex = na
+varip float gexNetOverGross = na
+varip float gexVanna = na
+varip float gexCharm = na
+varip float gexPocketUpLow = na
+varip float gexPocketUpHigh = na
+varip float gexPocketDownLow = na
+varip float gexPocketDownHigh = na
 varip float gexDex1 = na
 varip float gexDex2 = na
 varip float gexDex3 = na
@@ -336,7 +372,7 @@ if gexShouldParse
         int rowHour = 0
         int rowMinute = 0
 
-        GexSnapshot snapshot = GexSnapshot.new(stamp = 0, call1 = na, call2 = na, call3 = na, flip = na, flipLow = na, flipHigh = na, put1 = na, put2 = na, put3 = na, abs1 = na, abs2 = na, abs3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, maxPain = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, rangeLow = na, rangeHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, expiry = "", expiryTime = "", regime = "")
+        GexSnapshot snapshot = GexSnapshot.new(stamp = 0, call1 = na, call2 = na, call3 = na, flip = na, flipLow = na, flipHigh = na, put1 = na, put2 = na, put3 = na, abs1 = na, abs2 = na, abs3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, maxPain = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, rangeLow = na, rangeHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, totalGex = na, netOverGross = na, vanna = na, charm = na, pocketUpLow = na, pocketUpHigh = na, pocketDownLow = na, pocketDownHigh = na, expiry = "", expiryTime = "", regime = "")
 
         for tokenIndex = 3 to array.size(id = lineTokens) - 1
             array<string> keyValueParts = str.split(string = str.trim(source = array.get(id = lineTokens, index = tokenIndex)), separator = ":")
@@ -400,6 +436,22 @@ if gexShouldParse
                 snapshot.hv30 := fieldValue
             else if fieldKey == "VIX"
                 snapshot.vix := fieldValue
+            else if fieldKey == "GEX"
+                snapshot.totalGex := fieldValue
+            else if fieldKey == "GEXNET"
+                snapshot.netOverGross := fieldValue
+            else if fieldKey == "VANNA"
+                snapshot.vanna := fieldValue
+            else if fieldKey == "CHARM"
+                snapshot.charm := fieldValue
+            else if fieldKey == "POCKET_UP_LOW"
+                snapshot.pocketUpLow := fieldValue
+            else if fieldKey == "POCKET_UP_HIGH"
+                snapshot.pocketUpHigh := fieldValue
+            else if fieldKey == "POCKET_DN_LOW"
+                snapshot.pocketDownLow := fieldValue
+            else if fieldKey == "POCKET_DN_HIGH"
+                snapshot.pocketDownHigh := fieldValue
             else if fieldKey == "NCOI"
                 snapshot.netCallOI := fieldValue
             else if fieldKey == "NPOI"
@@ -437,6 +489,24 @@ if gexShouldParse
 // are not blank — set_* mutations made on an unconfirmed tick roll back anyway,
 // so what a skipped tick shows is the last COMMITTED render, and with static
 // data that render is identical to the one being skipped.
+// Which part of the day this bar sits in, in exchange time. The mapped expiry
+// names its own last trading minute (16:15 for the index ETFs, 16:00 for most
+// equity options), so the close of the map is read from the feed, never assumed.
+int gexBarMinutes = hour(time = time, timezone = GEX_DATA_TIMEZONE) * 60 + minute(time = time, timezone = GEX_DATA_TIMEZONE)
+int gexExpiryMinutes = str.length(string = gexExpiryTime) == 4 ? int(f_gexSafeFloat(rawText = str.substring(source = gexExpiryTime, begin_pos = 0, end_pos = 2))) * 60 + int(f_gexSafeFloat(rawText = str.substring(source = gexExpiryTime, begin_pos = 2, end_pos = 4))) : 16 * 60
+bool gexBeforeBell = gexBarMinutes < GEX_SESSION_OPEN_MIN
+bool gexAfterExpiry = gexBarMinutes >= gexExpiryMinutes
+bool gexOutsideSession = gexBeforeBell or gexAfterExpiry
+
+// Fade rather than hide: outside the session these levels are inherited or
+// spent, and the distinction is worth showing rather than blanking.
+f_gexFade(color source) =>
+    na(source) or not gexOutsideSession or gexDimPct == 0 ? source : color.new(color = source, transp = math.min(100, color.t(source) + gexDimPct))
+
+// Whether anything on the chart is tracking price tick by tick. Global because
+// the regime colour is set outside the redraw block and depends on it.
+bool gexSymbolVisible = gexShowFlip and gexShowLabels and not na(gexFlip)
+
 bool gexShouldRedraw = barstate.islast and (gexShouldParse or gexNeedsRefresh or bar_index != gexLastDrawnBar or barstate.isconfirmed)
 
 // The chart serves the most recent row the current bar has reached, so bar
@@ -484,6 +554,14 @@ if gexShouldRedraw and array.size(id = gexSnapshots) > 0
             gexIV30 := na
             gexHV30 := na
             gexVIX := na
+            gexTotalGex := na
+            gexNetOverGross := na
+            gexVanna := na
+            gexCharm := na
+            gexPocketUpLow := na
+            gexPocketUpHigh := na
+            gexPocketDownLow := na
+            gexPocketDownHigh := na
             gexHedgingPeak := na
             gexMaxPain := na
             gexNetCallOI := na
@@ -525,6 +603,14 @@ if gexShouldRedraw and array.size(id = gexSnapshots) > 0
             gexIV30 := active.iv30
             gexHV30 := active.hv30
             gexVIX := active.vix
+            gexTotalGex := active.totalGex
+            gexNetOverGross := active.netOverGross
+            gexVanna := active.vanna
+            gexCharm := active.charm
+            gexPocketUpLow := active.pocketUpLow
+            gexPocketUpHigh := active.pocketUpHigh
+            gexPocketDownLow := active.pocketDownLow
+            gexPocketDownHigh := active.pocketDownHigh
             gexHedgingPeak := active.hedgingPeak
             gexMaxPain := active.maxPain
             gexNetCallOI := active.netCallOI
@@ -552,8 +638,32 @@ if gexShouldRedraw and array.size(id = gexSnapshots) > 0
 // ═════════════════════════════════════════════════════════════════════════════
 // A slot always renders: a level that is absent or switched off parks its own
 // drawings transparent, so no bookkeeping is needed between calls.
+// One cell, one style. The panel is six rows of the same shape, so the styling
+// lives here rather than being repeated at every call site.
+// Price and visibility are one decision per slot, so they are set together.
+// Held apart in two blocks they could silently drift out of step — a slot armed
+// with a price nobody shows, or shown with no price to draw.
+// FLIP and V1-V3 carry the chain-context block, so their notes are rewritten
+// every redraw rather than fixed at seed time.
+f_gexSetNote(int slotIndex, string noteText) =>
+    GexSlot slot = array.get(id = gexSlots, index = slotIndex)
+    slot.note := noteText
+
+f_gexArm(int slotIndex, float levelPrice, bool isVisible) =>
+    GexSlot slot = array.get(id = gexSlots, index = slotIndex)
+    slot.price := levelPrice
+    slot.visible := isVisible
+
+f_gexPanelRow(int rowIndex, string rowText, color rowTone) =>
+    table.cell(table_id = gexMapPanel, column = 0, row = rowIndex, text = rowText, text_color = rowTone, text_size = gexLabelTextSize, text_halign = text.align_left, bgcolor = GEX_HIDDEN)
+
 f_gexDrawLevel(int slotIndex, float levelPrice, string levelText, int padChars, color levelColor, color nameColor, string levelTooltip, int levelWidth, string levelStyle, bool drawLine, bool visible, bool ownsStrike) =>
-    bool hasLevel = visible and not na(levelPrice) and levelPrice > 0
+    // One fade point for the whole map: every level, name and strike passes
+    // through here, so the session state cannot be applied to some and missed
+    // on others.
+    color lineTone = f_gexFade(source = levelColor)
+    color nameTone = f_gexFade(source = nameColor)
+    bool hasLevel = visible and not na(levelPrice) and levelPrice > 0 and (gexShowPreMarket or not gexBeforeBell)
     int rightBarIndex = bar_index + GEX_RIGHT_PAD_BARS
     int leftBarIndex = gexDayStartBar
     int anchorBarIndex = gexLabelSide == "Right" ? rightBarIndex + gexLabelOffset : leftBarIndex - gexLabelOffset
@@ -563,7 +673,7 @@ f_gexDrawLevel(int slotIndex, float levelPrice, string levelText, int padChars, 
     line slotLine = array.get(id = gexLevelLines, index = slotIndex)
     line.set_xy1(id = slotLine, x = leftBarIndex, y = anchorPrice)
     line.set_xy2(id = slotLine, x = rightBarIndex, y = anchorPrice)
-    line.set_color(id = slotLine, color = hasLevel and drawLine ? levelColor : GEX_HIDDEN)
+    line.set_color(id = slotLine, color = hasLevel and drawLine ? lineTone : GEX_HIDDEN)
     line.set_style(id = slotLine, style = levelStyle)
     line.set_width(id = slotLine, width = levelWidth)
 
@@ -576,7 +686,7 @@ f_gexDrawLevel(int slotIndex, float levelPrice, string levelText, int padChars, 
 
     label.set_xy(id = strikeLabel, x = anchorBarIndex, y = anchorPrice + gexStrikeOffsetTicks * syminfo.mintick)
     label.set_text(id = strikeLabel, text = showStrikeText ? strikeText : "")
-    label.set_textcolor(id = strikeLabel, textcolor = showStrikeText ? levelColor : GEX_HIDDEN)
+    label.set_textcolor(id = strikeLabel, textcolor = showStrikeText ? lineTone : GEX_HIDDEN)
     label.set_style(id = strikeLabel, style = isRightSide ? label.style_label_right : label.style_label_left)
     label.set_textalign(id = strikeLabel, textalign = isRightSide ? text.align_right : text.align_left)
     label.set_size(id = strikeLabel, size = gexStrikeTextSize)
@@ -600,7 +710,7 @@ f_gexDrawLevel(int slotIndex, float levelPrice, string levelText, int padChars, 
         queued := isRightSide ? pad + levelText : levelText + pad
     label.set_xy(id = codeLabel, x = anchorBarIndex, y = anchorPrice)
     label.set_text(id = codeLabel, text = showCodeText ? queued : "")
-    label.set_textcolor(id = codeLabel, textcolor = showCodeText ? nameColor : GEX_HIDDEN)
+    label.set_textcolor(id = codeLabel, textcolor = showCodeText ? nameTone : GEX_HIDDEN)
     label.set_style(id = codeLabel, style = isRightSide ? label.style_label_left : label.style_label_right)
     label.set_textalign(id = codeLabel, textalign = text.align_left)
     label.set_size(id = codeLabel, size = gexLabelTextSize)
@@ -621,6 +731,8 @@ if (barstate.islastconfirmedhistory or barstate.islast) and array.size(id = gexL
     gexExpiryLine := line.new(x1 = bar_index, y1 = close, x2 = bar_index, y2 = close, xloc = xloc.bar_index, color = GEX_HIDDEN, style = line.style_dotted, width = 1)
     gexFlipBox := box.new(left = bar_index, top = close, right = bar_index, bottom = close, xloc = xloc.bar_index, border_color = GEX_HIDDEN, bgcolor = GEX_HIDDEN)
     gexRangeBox := box.new(left = bar_index, top = close, right = bar_index, bottom = close, xloc = xloc.bar_index, border_color = GEX_HIDDEN, bgcolor = GEX_HIDDEN)
+    gexPocketUpBox := box.new(left = bar_index, top = close, right = bar_index, bottom = close, xloc = xloc.bar_index, border_color = GEX_HIDDEN, bgcolor = GEX_HIDDEN)
+    gexPocketDownBox := box.new(left = bar_index, top = close, right = bar_index, bottom = close, xloc = xloc.bar_index, border_color = GEX_HIDDEN, bgcolor = GEX_HIDDEN)
 
 // Chain-wide context travels with the row but describes the whole book, not the
 // mapped expiry, so it belongs in the tooltips of the levels it qualifies
@@ -640,97 +752,137 @@ if gexShouldRedraw
         string pcVolLine = na(gexPCVol) ? "" : "  ·  P/C volume " + str.tostring(value = gexPCVol, format = "#.##")
         string vixLine = na(gexVIX) ? "" : "\nVIX " + str.tostring(value = gexVIX, format = "#.##")
         string vixRead = (na(gexVIX) or na(gexIV30)) ? "" : (gexIV30 > gexVIX ? " — this symbol's implied vol sits ABOVE the market's: its options are the richer of the two." : " — this symbol's implied vol sits BELOW the market's: its options are the cheaper of the two.")
-        gexNote := "\n\n📊 CHAIN CONTEXT — the whole book, not this expiry\n" + ivLine + hvLine + ratioLine + pcOILine + pcVolLine + vixLine + vixRead + "\n\nIV/HV above 1 means the market is paying up for protection relative to how much the underlying has actually moved: premium is rich, and a vol crush is the risk to a long-option trade. Below 1 the opposite. P/C above 1 is put-heavy positioning. VIX is the market's own 30-day implied vol — a rising VIX is what makes the V1-V3 vega levels matter."
+        gexNote := "\n\n📊 CHAIN CONTEXT — the whole book, not this expiry\n" + ivLine + hvLine + ratioLine + pcOILine + pcVolLine + vixLine + vixRead + "\n\n📈 IV/HV above 1 = premium is rich, vol-crush risk on longs. P/C above 1 = put-heavy."
+
+    // Net dealer gamma for the whole book. Where spot sits decides the playbook
+    // right now; the SIGN of this decides how the book behaves wherever price
+    // goes. When the two disagree, say so — that is the one reading the chart
+    // cannot derive on its own.
+    if not na(gexTotalGex)
+        string bookSide = gexTotalGex >= 0 ? "net LONG gamma" : "net SHORT gamma"
+        string priceSide = gexRegime == "" ? "" : ", served regime " + gexRegime
+        string agreement = gexRegime == "POSITIVE" or gexRegime == "NEGATIVE" ? ((gexTotalGex >= 0) == (gexRegime == "POSITIVE") ? "  ✓ book and regime agree." : "  ⚠ book and regime DISAGREE — the flip points one way and the whole book leans the other. Levels hold less well here: size down.") : ""
+        string forceLine = na(gexNetOverGross) ? "" : "\nOne-sidedness " + str.tostring(value = gexNetOverGross, format = "#.##") + " of gross" + (math.abs(number = gexNetOverGross) < 0.15 ? " — BALANCED: the regime has little force behind it and is one small move from flipping. Size down and stop selling premium." : " — the regime has real weight behind it.")
+        string vannaLine = na(gexVanna) ? "" : "\nVanna " + str.tostring(value = gexVanna, format = "#.##") + "bn per vol point — " + (gexVanna >= 0 ? "falling IV tends to add dealer BUYING, an IV spike tends to add selling." : "falling IV tends to add dealer SELLING.")
+        string charmLine = na(gexCharm) ? "" : "\nCharm " + str.tostring(value = gexCharm, format = "#.##") + "bn per day — " + (gexCharm < 0 ? "a late-day BUY lean builds into the close." : "a late-day SELL lean builds into the close.") + " Strongest in the last 90 minutes, gone after the OPEX roll."
+        gexNote := gexNote + "\n\n📐 BOOK STRUCTURE\nNet dealer gamma " + str.tostring(value = gexTotalGex, format = "#.###") + "bn per 1% move — " + bookSide + priceSide + "." + agreement + forceLine + vannaLine + charmLine + "\n\n⚠️ Vanna and charm are sensitivities of an assumed book, not measured flows."
 
     gexVexTooltip := GEX_TIP_VEX + gexNote
     gexFlipTooltip := GEX_TIP_FLIP + gexNote
-    array.set(id = gexSlotNotes, index = GEX_SLOT_FLIP, value = gexFlipTooltip)
-    array.set(id = gexSlotNotes, index = GEX_SLOT_VEX1, value = gexVexTooltip)
-    array.set(id = gexSlotNotes, index = GEX_SLOT_VEX2, value = gexVexTooltip)
-    array.set(id = gexSlotNotes, index = GEX_SLOT_VEX3, value = gexVexTooltip)
+    f_gexSetNote(slotIndex = GEX_SLOT_FLIP, noteText = gexFlipTooltip)
+    f_gexSetNote(slotIndex = GEX_SLOT_VEX1, noteText = gexVexTooltip)
+    f_gexSetNote(slotIndex = GEX_SLOT_VEX2, noteText = gexVexTooltip)
+    f_gexSetNote(slotIndex = GEX_SLOT_VEX3, noteText = gexVexTooltip)
 
 if barstate.islast
-    bool gexRangeVisible = gexShowRange and not na(gexRangeLow) and not na(gexRangeHigh)
-    bool gexFlipZoneVisible = gexShowFlipZone and not na(gexFlipLow) and not na(gexFlipHigh)
+    bool gexSessionDraws = gexShowPreMarket or not gexBeforeBell
+    bool gexRangeVisible = gexShowRange and gexSessionDraws and not na(gexRangeLow) and not na(gexRangeHigh)
+    bool gexFlipZoneVisible = gexShowFlipZone and gexSessionDraws and not na(gexFlipLow) and not na(gexFlipHigh)
     if gexShouldRedraw
         // The crossing sits between two strikes, so the flip gets a band as
         // well as a line. No labels: the FLIP line already carries them.
         box.set_lefttop(id = gexFlipBox, left = gexDayStartBar, top = gexFlipZoneVisible ? gexFlipHigh : close)
         box.set_rightbottom(id = gexFlipBox, right = bar_index + GEX_RIGHT_PAD_BARS, bottom = gexFlipZoneVisible ? gexFlipLow : close)
-        box.set_border_color(id = gexFlipBox, color = gexFlipZoneVisible ? gexFlipZoneColor : GEX_HIDDEN)
+        box.set_border_color(id = gexFlipBox, color = gexFlipZoneVisible ? f_gexFade(source = gexFlipZoneColor) : GEX_HIDDEN)
         box.set_border_style(id = gexFlipBox, style = line.style_dotted)
-        box.set_bgcolor(id = gexFlipBox, color = gexFlipZoneVisible ? gexFlipZoneFillColor : GEX_HIDDEN)
+        box.set_bgcolor(id = gexFlipBox, color = gexFlipZoneVisible ? f_gexFade(source = gexFlipZoneFillColor) : GEX_HIDDEN)
 
         box.set_lefttop(id = gexRangeBox, left = gexDayStartBar, top = gexRangeVisible ? gexRangeHigh : close)
         box.set_rightbottom(id = gexRangeBox, right = bar_index + GEX_RIGHT_PAD_BARS, bottom = gexRangeVisible ? gexRangeLow : close)
-        box.set_border_color(id = gexRangeBox, color = gexRangeVisible ? color.new(color = gexRangeColor, transp = 60) : GEX_HIDDEN)
+        box.set_border_color(id = gexRangeBox, color = gexRangeVisible ? f_gexFade(source = color.new(color = gexRangeColor, transp = 60)) : GEX_HIDDEN)
         box.set_border_style(id = gexRangeBox, style = line.style_dashed)
-        box.set_bgcolor(id = gexRangeBox, color = gexRangeVisible ? gexRangeFillColor : GEX_HIDDEN)
+        box.set_bgcolor(id = gexRangeBox, color = gexRangeVisible ? f_gexFade(source = gexRangeFillColor) : GEX_HIDDEN)
+
+        bool gexPocketUpVisible = gexShowPockets and gexSessionDraws and not na(gexPocketUpLow) and not na(gexPocketUpHigh)
+        box.set_lefttop(id = gexPocketUpBox, left = gexDayStartBar, top = gexPocketUpVisible ? gexPocketUpHigh : close)
+        box.set_rightbottom(id = gexPocketUpBox, right = bar_index + GEX_RIGHT_PAD_BARS, bottom = gexPocketUpVisible ? gexPocketUpLow : close)
+        box.set_border_color(id = gexPocketUpBox, color = GEX_HIDDEN)
+        box.set_bgcolor(id = gexPocketUpBox, color = gexPocketUpVisible ? f_gexFade(source = gexPocketColor) : GEX_HIDDEN)
+
+        bool gexPocketDownVisible = gexShowPockets and gexSessionDraws and not na(gexPocketDownLow) and not na(gexPocketDownHigh)
+        box.set_lefttop(id = gexPocketDownBox, left = gexDayStartBar, top = gexPocketDownVisible ? gexPocketDownHigh : close)
+        box.set_rightbottom(id = gexPocketDownBox, right = bar_index + GEX_RIGHT_PAD_BARS, bottom = gexPocketDownVisible ? gexPocketDownLow : close)
+        box.set_border_color(id = gexPocketDownBox, color = GEX_HIDDEN)
+        box.set_bgcolor(id = gexPocketDownBox, color = gexPocketDownVisible ? f_gexFade(source = gexPocketColor) : GEX_HIDDEN)
 
         // Slot order is draw order, and draw order is read order: calls down from
         // the top, then the flip, then puts, then the pins and the implied range.
-        array.set(id = gexSlotPrices, index = GEX_SLOT_C1, value = gexCall1)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_C2, value = gexCall2)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_C3, value = gexCall3)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_FLIP, value = gexFlip)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_P1, value = gexPut1)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_P2, value = gexPut2)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_P3, value = gexPut3)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_AB1, value = gexAbs1)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_AB2, value = gexAbs2)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_AB3, value = gexAbs3)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_HP, value = gexHedgingPeak)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_MP, value = gexMaxPain)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_NCOI, value = gexNetCallOI)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_NPOI, value = gexNetPutOI)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_COI, value = gexCallOI)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_POI, value = gexPutOI)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_ABOI, value = gexAbsOI)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_NCV, value = gexNetCallVol)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_NPV, value = gexNetPutVol)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_CV, value = gexCallVol)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_PV, value = gexPutVol)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_DEX1, value = gexDex1)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_DEX2, value = gexDex2)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_DEX3, value = gexDex3)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_VEX1, value = gexVex1)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_VEX2, value = gexVex2)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_VEX3, value = gexVex3)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_RANGE_HIGH, value = gexRangeHigh)
-        array.set(id = gexSlotPrices, index = GEX_SLOT_RANGE_LOW, value = gexRangeLow)
+        f_gexArm(slotIndex = GEX_SLOT_C1, levelPrice = gexCall1, isVisible = gexShowCallWalls)
+        f_gexArm(slotIndex = GEX_SLOT_C2, levelPrice = gexCall2, isVisible = gexShowCallWalls)
+        f_gexArm(slotIndex = GEX_SLOT_C3, levelPrice = gexCall3, isVisible = gexShowCallWalls)
+        f_gexArm(slotIndex = GEX_SLOT_FLIP, levelPrice = gexFlip, isVisible = gexShowFlip)
+        f_gexArm(slotIndex = GEX_SLOT_P1, levelPrice = gexPut1, isVisible = gexShowPutWalls)
+        f_gexArm(slotIndex = GEX_SLOT_P2, levelPrice = gexPut2, isVisible = gexShowPutWalls)
+        f_gexArm(slotIndex = GEX_SLOT_P3, levelPrice = gexPut3, isVisible = gexShowPutWalls)
+        f_gexArm(slotIndex = GEX_SLOT_AB1, levelPrice = gexAbs1, isVisible = gexShowAbs)
+        f_gexArm(slotIndex = GEX_SLOT_AB2, levelPrice = gexAbs2, isVisible = gexShowAbs)
+        f_gexArm(slotIndex = GEX_SLOT_AB3, levelPrice = gexAbs3, isVisible = gexShowAbs)
+        f_gexArm(slotIndex = GEX_SLOT_HP, levelPrice = gexHedgingPeak, isVisible = gexShowHedgingPeak)
+        f_gexArm(slotIndex = GEX_SLOT_MP, levelPrice = gexMaxPain, isVisible = gexShowMaxPain)
+        f_gexArm(slotIndex = GEX_SLOT_NCOI, levelPrice = gexNetCallOI, isVisible = gexShowOI)
+        f_gexArm(slotIndex = GEX_SLOT_NPOI, levelPrice = gexNetPutOI, isVisible = gexShowOI)
+        f_gexArm(slotIndex = GEX_SLOT_COI, levelPrice = gexCallOI, isVisible = gexShowOI)
+        f_gexArm(slotIndex = GEX_SLOT_POI, levelPrice = gexPutOI, isVisible = gexShowOI)
+        f_gexArm(slotIndex = GEX_SLOT_ABOI, levelPrice = gexAbsOI, isVisible = gexShowOI)
+        f_gexArm(slotIndex = GEX_SLOT_NCV, levelPrice = gexNetCallVol, isVisible = gexShowVolume)
+        f_gexArm(slotIndex = GEX_SLOT_NPV, levelPrice = gexNetPutVol, isVisible = gexShowVolume)
+        f_gexArm(slotIndex = GEX_SLOT_CV, levelPrice = gexCallVol, isVisible = gexShowVolume)
+        f_gexArm(slotIndex = GEX_SLOT_PV, levelPrice = gexPutVol, isVisible = gexShowVolume)
+        f_gexArm(slotIndex = GEX_SLOT_DEX1, levelPrice = gexDex1, isVisible = gexShowDex)
+        f_gexArm(slotIndex = GEX_SLOT_DEX2, levelPrice = gexDex2, isVisible = gexShowDex)
+        f_gexArm(slotIndex = GEX_SLOT_DEX3, levelPrice = gexDex3, isVisible = gexShowDex)
+        f_gexArm(slotIndex = GEX_SLOT_VEX1, levelPrice = gexVex1, isVisible = gexShowVex)
+        f_gexArm(slotIndex = GEX_SLOT_VEX2, levelPrice = gexVex2, isVisible = gexShowVex)
+        f_gexArm(slotIndex = GEX_SLOT_VEX3, levelPrice = gexVex3, isVisible = gexShowVex)
+        f_gexArm(slotIndex = GEX_SLOT_RANGE_HIGH, levelPrice = gexRangeHigh, isVisible = gexRangeVisible)
+        f_gexArm(slotIndex = GEX_SLOT_RANGE_LOW, levelPrice = gexRangeLow, isVisible = gexRangeVisible)
 
-        array.set(id = gexSlotVisible, index = GEX_SLOT_C1, value = gexShowCallWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_C2, value = gexShowCallWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_C3, value = gexShowCallWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_FLIP, value = gexShowFlip)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_P1, value = gexShowPutWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_P2, value = gexShowPutWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_P3, value = gexShowPutWalls)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_AB1, value = gexShowAbs)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_AB2, value = gexShowAbs)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_AB3, value = gexShowAbs)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_HP, value = gexShowHedgingPeak)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_MP, value = gexShowMaxPain)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_NCOI, value = gexShowOI)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_NPOI, value = gexShowOI)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_COI, value = gexShowOI)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_POI, value = gexShowOI)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_ABOI, value = gexShowOI)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_NCV, value = gexShowVolume)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_NPV, value = gexShowVolume)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_CV, value = gexShowVolume)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_PV, value = gexShowVolume)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_DEX1, value = gexShowDex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_DEX2, value = gexShowDex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_DEX3, value = gexShowDex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_VEX1, value = gexShowVex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_VEX2, value = gexShowVex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_VEX3, value = gexShowVex)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_RANGE_HIGH, value = gexRangeVisible)
-        array.set(id = gexSlotVisible, index = GEX_SLOT_RANGE_LOW, value = gexRangeVisible)
+        // The regime symbol rides the FLIP anchor, so it occupies a place in
+        // any queue the flip is part of. Declared up here because the pre-pass
+        // has to reserve room for it before the codes behind it are placed.
+        bool gexSymbolRight = gexLabelSide == "Right"
+        // The symbol belongs to FLIP, so it sits nearer than a queue gap — one
+        // value, used both to place it and to step the queue over it.
+        int gexSymbolGapChars = int(math.max(1, math.round(number = gexStackGapChars * GEX_SYMBOL_GAP_FRACTION)))
+
+        // Cluster pass. Levels do not have to share a strike to collide — they
+        // only have to land on the same patch of chart, and a label has height.
+        // The old test was "same price to within a tick", which the FLIP can
+        // never pass: it prices between strikes, so it never queued and printed
+        // behind whatever else was there.
+        int gexClusterCount = 0
         for slotIndex = 0 to GEX_MAX_SLOTS - 1
-            float slotPrice = array.get(id = gexSlotPrices, index = slotIndex)
-            bool slotVisible = array.get(id = gexSlotVisible, index = slotIndex) and not na(slotPrice)
+            GexSlot clearedSlot = array.get(id = gexSlots, index = slotIndex)
+            clearedSlot.cluster := -1
+            float slotPrice = array.get(id = gexSlots, index = slotIndex).price
+            bool slotVisible = array.get(id = gexSlots, index = slotIndex).visible and not na(slotPrice)
+            // D+ / D- are the edges of the expected-move band, not levels on
+            // the ladder, and they draw no line of their own. Queued behind a
+            // neighbour their code floats off the END of that neighbour's line,
+            // which reads as the band edge sitting at the wrong price. They
+            // stay at their own anchor: their own cluster, joined by nobody
+            // (an `na` anchor matches nothing) and joining nobody.
+            bool slotJoinsQueue = slotIndex != GEX_SLOT_RANGE_HIGH and slotIndex != GEX_SLOT_RANGE_LOW
+            if slotVisible
+                int foundCluster = -1
+                if slotJoinsQueue and gexClusterCount > 0
+                    for clusterIndex = 0 to gexClusterCount - 1
+                        float anchorPrice = array.get(id = gexClusterAnchor, index = clusterIndex)
+                        float clusterTolerance = math.max(syminfo.mintick, anchorPrice * gexStackDistancePct / 100)
+                        if math.abs(number = anchorPrice - slotPrice) <= clusterTolerance
+                            foundCluster := clusterIndex
+                            break
+                if foundCluster == -1
+                    array.set(id = gexClusterAnchor, index = gexClusterCount, value = slotJoinsQueue ? slotPrice : na)
+                    foundCluster := gexClusterCount
+                    gexClusterCount += 1
+                GexSlot clusteredSlot = array.get(id = gexSlots, index = slotIndex)
+                clusteredSlot.cluster := foundCluster
+
+        for slotIndex = 0 to GEX_MAX_SLOTS - 1
+            float slotPrice = array.get(id = gexSlots, index = slotIndex).price
+            bool slotVisible = array.get(id = gexSlots, index = slotIndex).visible and not na(slotPrice)
+            int slotCluster = array.get(id = gexSlots, index = slotIndex).cluster
 
             // Walk the visible levels already sitting on this price and add up
             // what they occupy: each earlier code's own LENGTH plus one gap.
@@ -743,11 +895,21 @@ if barstate.islast
             bool ownsStrike = true
             if slotVisible and slotIndex > 0
                 for earlierIndex = 0 to slotIndex - 1
-                    float earlierPrice = array.get(id = gexSlotPrices, index = earlierIndex)
-                    bool earlierVisible = array.get(id = gexSlotVisible, index = earlierIndex) and not na(earlierPrice)
-                    if earlierVisible and math.abs(number = earlierPrice - slotPrice) < syminfo.mintick
-                        padChars += str.length(string = array.get(id = gexSlotCodes, index = earlierIndex)) + gexStackGapChars
-                        ownsStrike := false
+                    float earlierPrice = array.get(id = gexSlots, index = earlierIndex).price
+                    bool earlierVisible = array.get(id = gexSlots, index = earlierIndex).visible and not na(earlierPrice)
+                    if earlierVisible and array.get(id = gexSlots, index = earlierIndex).cluster == slotCluster
+                        // FLIP carries a passenger: code, a short gap, the
+                        // symbol, then the normal gap. Everything queued behind
+                        // the flip steps over BOTH or it lands on the symbol.
+                        if earlierIndex == GEX_SLOT_FLIP and gexSymbolVisible
+                            padChars += str.length(string = array.get(id = gexSlots, index = earlierIndex).code) + gexSymbolGapChars + str.length(string = gexRegimeSymbol) + gexStackGapChars
+                        else
+                            padChars += str.length(string = array.get(id = gexSlots, index = earlierIndex).code) + gexStackGapChars
+                        // Suppress the strike only when it would print the SAME
+                        // number. Clustered-but-distinct prices each keep theirs
+                        // — that difference is the reason they are two levels.
+                        if math.abs(number = earlierPrice - slotPrice) < syminfo.mintick
+                            ownsStrike := false
 
             // Everything sharing this price, in slot order — strongest first,
             // because slot order IS read order. One member means the level
@@ -759,59 +921,59 @@ if barstate.islast
             int groupCount = 0
             if slotVisible
                 for memberIndex = 0 to GEX_MAX_SLOTS - 1
-                    float memberPrice = array.get(id = gexSlotPrices, index = memberIndex)
-                    bool memberVisible = array.get(id = gexSlotVisible, index = memberIndex) and not na(memberPrice)
-                    if memberVisible and math.abs(number = memberPrice - slotPrice) < syminfo.mintick
+                    float memberPrice = array.get(id = gexSlots, index = memberIndex).price
+                    bool memberVisible = array.get(id = gexSlots, index = memberIndex).visible and not na(memberPrice)
+                    if memberVisible and array.get(id = gexSlots, index = memberIndex).cluster == slotCluster
                         groupCount += 1
-                        string memberCode = array.get(id = gexSlotCodes, index = memberIndex)
-                        groupCodes := groupCodes == "" ? memberCode : groupCodes + " · " + memberCode
-                        string memberNote = array.get(id = gexSlotNotes, index = memberIndex)
+                        string memberCode = array.get(id = gexSlots, index = memberIndex).code
+                        string memberLabel = memberCode + " " + f_gexFormatPrice(levelPrice = memberPrice)
+                        groupCodes := groupCodes == "" ? memberLabel : groupCodes + "  ·  " + memberLabel
+                        string memberNote = array.get(id = gexSlots, index = memberIndex).note
                         bool noteIsNew = not str.contains(source = groupNotes, str = memberNote)
                         bool noteFits = str.length(string = groupNotes) + str.length(string = memberNote) < GEX_TOOLTIP_MAX
                         if noteIsNew and noteFits
                             groupNotes := groupNotes == "" ? memberNote : groupNotes + "\n\n─────\n\n" + memberNote
 
-            string hoverText = groupCount > 1 ? str.format("{0} LEVELS AT {1}\n{2}\n\n", groupCount, f_gexFormatPrice(levelPrice = slotPrice), groupCodes) + groupNotes : array.get(id = gexSlotNotes, index = slotIndex)
+            string hoverText = groupCount > 1 ? str.format("{0} LEVELS STACKED HERE\n{1}\n\n", groupCount, groupCodes) + groupNotes : array.get(id = gexSlots, index = slotIndex).note
 
-            array.set(id = gexSlotHoverText, index = slotIndex, value = hoverText)
-            array.set(id = gexSlotPadChars, index = slotIndex, value = padChars)
-            array.set(id = gexSlotOwnsStrike, index = slotIndex, value = ownsStrike)
+            GexSlot laidOutSlot = array.get(id = gexSlots, index = slotIndex)
+            laidOutSlot.hoverText := hoverText
+            laidOutSlot.padChars := padChars
+            laidOutSlot.ownsStrike := ownsStrike
 
-        f_gexDrawLevel(slotIndex = GEX_SLOT_C1, levelPrice = gexCall1, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_C1), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_C1), levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_C1), levelWidth = f_gexWallWidth(rank = 0), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_C1), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_C1))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_C2, levelPrice = gexCall2, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_C2), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_C2), levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_C2), levelWidth = f_gexWallWidth(rank = 1), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_C2), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_C2))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_C3, levelPrice = gexCall3, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_C3), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_C3), levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_C3), levelWidth = f_gexWallWidth(rank = 2), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_C3), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_C3))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_FLIP, levelPrice = gexFlip, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_FLIP), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_FLIP), levelColor = gexFlipColor, nameColor = gexFlipColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_FLIP), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_FLIP), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_FLIP))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_P1, levelPrice = gexPut1, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_P1), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_P1), levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_P1), levelWidth = f_gexWallWidth(rank = 0), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_P1), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_P1))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_P2, levelPrice = gexPut2, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_P2), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_P2), levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_P2), levelWidth = f_gexWallWidth(rank = 1), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_P2), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_P2))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_P3, levelPrice = gexPut3, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_P3), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_P3), levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_P3), levelWidth = f_gexWallWidth(rank = 2), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_P3), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_P3))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_HP, levelPrice = gexHedgingPeak, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_HP), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_HP), levelColor = gexHedgingPeakColor, nameColor = gexHedgingPeakColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_HP), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_HP), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_HP))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_MP, levelPrice = gexMaxPain, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_MP), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_MP), levelColor = gexMaxPainColor, nameColor = gexMaxPainColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_MP), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_MP), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_MP))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_AB1, levelPrice = gexAbs1, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_AB1), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_AB1), levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_AB1), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_AB1), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_AB1))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_AB2, levelPrice = gexAbs2, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_AB2), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_AB2), levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_AB2), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_AB2), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_AB2))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_AB3, levelPrice = gexAbs3, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_AB3), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_AB3), levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_AB3), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_AB3), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_AB3))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_NCOI, levelPrice = gexNetCallOI, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_NCOI), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_NCOI), levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_NCOI), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_NCOI), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_NCOI))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_NPOI, levelPrice = gexNetPutOI, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_NPOI), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_NPOI), levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_NPOI), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_NPOI), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_NPOI))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_COI, levelPrice = gexCallOI, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_COI), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_COI), levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_COI), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_COI), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_COI))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_POI, levelPrice = gexPutOI, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_POI), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_POI), levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_POI), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_POI), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_POI))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_ABOI, levelPrice = gexAbsOI, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_ABOI), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_ABOI), levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_ABOI), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_ABOI), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_ABOI))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_NCV, levelPrice = gexNetCallVol, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_NCV), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_NCV), levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_NCV), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_NCV), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_NCV))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_NPV, levelPrice = gexNetPutVol, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_NPV), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_NPV), levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_NPV), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_NPV), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_NPV))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_CV, levelPrice = gexCallVol, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_CV), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_CV), levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_CV), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_CV), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_CV))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_PV, levelPrice = gexPutVol, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_PV), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_PV), levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_PV), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_PV), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_PV))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX1, levelPrice = gexDex1, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_DEX1), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_DEX1), levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_DEX1), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_DEX1), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_DEX1))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX2, levelPrice = gexDex2, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_DEX2), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_DEX2), levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_DEX2), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_DEX2), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_DEX2))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX3, levelPrice = gexDex3, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_DEX3), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_DEX3), levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_DEX3), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_DEX3), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_DEX3))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX1, levelPrice = gexVex1, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_VEX1), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_VEX1), levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_VEX1), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_VEX1), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_VEX1))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX2, levelPrice = gexVex2, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_VEX2), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_VEX2), levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_VEX2), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_VEX2), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_VEX2))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX3, levelPrice = gexVex3, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_VEX3), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_VEX3), levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_VEX3), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlotVisible, index = GEX_SLOT_VEX3), ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_VEX3))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_RANGE_HIGH, levelPrice = gexRangeHigh, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_RANGE_HIGH), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_RANGE_HIGH), levelColor = gexRangeColor, nameColor = gexRangeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_RANGE_HIGH), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = false, visible = gexRangeVisible, ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_RANGE_HIGH))
-        f_gexDrawLevel(slotIndex = GEX_SLOT_RANGE_LOW, levelPrice = gexRangeLow, levelText = array.get(id = gexSlotCodes, index = GEX_SLOT_RANGE_LOW), padChars = array.get(id = gexSlotPadChars, index = GEX_SLOT_RANGE_LOW), levelColor = gexRangeColor, nameColor = gexRangeColor, levelTooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_RANGE_LOW), levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = false, visible = gexRangeVisible, ownsStrike = array.get(id = gexSlotOwnsStrike, index = GEX_SLOT_RANGE_LOW))
+        f_gexDrawLevel(slotIndex = GEX_SLOT_C1, levelPrice = gexCall1, levelText = array.get(id = gexSlots, index = GEX_SLOT_C1).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_C1).padChars, levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_C1).hoverText, levelWidth = f_gexWallWidth(rank = 0), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_C1).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_C1).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_C2, levelPrice = gexCall2, levelText = array.get(id = gexSlots, index = GEX_SLOT_C2).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_C2).padChars, levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_C2).hoverText, levelWidth = f_gexWallWidth(rank = 1), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_C2).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_C2).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_C3, levelPrice = gexCall3, levelText = array.get(id = gexSlots, index = GEX_SLOT_C3).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_C3).padChars, levelColor = gexCallWallColor, nameColor = gexCallWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_C3).hoverText, levelWidth = f_gexWallWidth(rank = 2), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_C3).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_C3).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_FLIP, levelPrice = gexFlip, levelText = array.get(id = gexSlots, index = GEX_SLOT_FLIP).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_FLIP).padChars, levelColor = gexFlipColor, nameColor = gexFlipColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_FLIP).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_FLIP).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_FLIP).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_P1, levelPrice = gexPut1, levelText = array.get(id = gexSlots, index = GEX_SLOT_P1).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_P1).padChars, levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_P1).hoverText, levelWidth = f_gexWallWidth(rank = 0), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_P1).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_P1).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_P2, levelPrice = gexPut2, levelText = array.get(id = gexSlots, index = GEX_SLOT_P2).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_P2).padChars, levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_P2).hoverText, levelWidth = f_gexWallWidth(rank = 1), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_P2).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_P2).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_P3, levelPrice = gexPut3, levelText = array.get(id = gexSlots, index = GEX_SLOT_P3).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_P3).padChars, levelColor = gexPutWallColor, nameColor = gexPutWallColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_P3).hoverText, levelWidth = f_gexWallWidth(rank = 2), levelStyle = line.style_solid, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_P3).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_P3).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_HP, levelPrice = gexHedgingPeak, levelText = array.get(id = gexSlots, index = GEX_SLOT_HP).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_HP).padChars, levelColor = gexHedgingPeakColor, nameColor = gexHedgingPeakColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_HP).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_HP).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_HP).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_MP, levelPrice = gexMaxPain, levelText = array.get(id = gexSlots, index = GEX_SLOT_MP).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_MP).padChars, levelColor = gexMaxPainColor, nameColor = gexMaxPainColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_MP).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_MP).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_MP).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_AB1, levelPrice = gexAbs1, levelText = array.get(id = gexSlots, index = GEX_SLOT_AB1).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_AB1).padChars, levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_AB1).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_AB1).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_AB1).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_AB2, levelPrice = gexAbs2, levelText = array.get(id = gexSlots, index = GEX_SLOT_AB2).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_AB2).padChars, levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_AB2).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_AB2).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_AB2).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_AB3, levelPrice = gexAbs3, levelText = array.get(id = gexSlots, index = GEX_SLOT_AB3).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_AB3).padChars, levelColor = gexAbsColor, nameColor = gexAbsColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_AB3).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_AB3).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_AB3).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_NCOI, levelPrice = gexNetCallOI, levelText = array.get(id = gexSlots, index = GEX_SLOT_NCOI).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_NCOI).padChars, levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_NCOI).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_NCOI).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_NCOI).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_NPOI, levelPrice = gexNetPutOI, levelText = array.get(id = gexSlots, index = GEX_SLOT_NPOI).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_NPOI).padChars, levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_NPOI).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_NPOI).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_NPOI).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_COI, levelPrice = gexCallOI, levelText = array.get(id = gexSlots, index = GEX_SLOT_COI).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_COI).padChars, levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_COI).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_COI).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_COI).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_POI, levelPrice = gexPutOI, levelText = array.get(id = gexSlots, index = GEX_SLOT_POI).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_POI).padChars, levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_POI).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_POI).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_POI).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_ABOI, levelPrice = gexAbsOI, levelText = array.get(id = gexSlots, index = GEX_SLOT_ABOI).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_ABOI).padChars, levelColor = gexOIColor, nameColor = gexOIColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_ABOI).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_ABOI).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_ABOI).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_NCV, levelPrice = gexNetCallVol, levelText = array.get(id = gexSlots, index = GEX_SLOT_NCV).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_NCV).padChars, levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_NCV).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_NCV).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_NCV).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_NPV, levelPrice = gexNetPutVol, levelText = array.get(id = gexSlots, index = GEX_SLOT_NPV).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_NPV).padChars, levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_NPV).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_NPV).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_NPV).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_CV, levelPrice = gexCallVol, levelText = array.get(id = gexSlots, index = GEX_SLOT_CV).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_CV).padChars, levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_CV).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_CV).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_CV).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_PV, levelPrice = gexPutVol, levelText = array.get(id = gexSlots, index = GEX_SLOT_PV).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_PV).padChars, levelColor = gexVolumeColor, nameColor = gexVolumeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_PV).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_PV).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_PV).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX1, levelPrice = gexDex1, levelText = array.get(id = gexSlots, index = GEX_SLOT_DEX1).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_DEX1).padChars, levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_DEX1).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_DEX1).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_DEX1).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX2, levelPrice = gexDex2, levelText = array.get(id = gexSlots, index = GEX_SLOT_DEX2).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_DEX2).padChars, levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_DEX2).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_DEX2).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_DEX2).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_DEX3, levelPrice = gexDex3, levelText = array.get(id = gexSlots, index = GEX_SLOT_DEX3).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_DEX3).padChars, levelColor = gexDexColor, nameColor = gexDexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_DEX3).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_DEX3).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_DEX3).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX1, levelPrice = gexVex1, levelText = array.get(id = gexSlots, index = GEX_SLOT_VEX1).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_VEX1).padChars, levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_VEX1).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_VEX1).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_VEX1).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX2, levelPrice = gexVex2, levelText = array.get(id = gexSlots, index = GEX_SLOT_VEX2).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_VEX2).padChars, levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_VEX2).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_VEX2).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_VEX2).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_VEX3, levelPrice = gexVex3, levelText = array.get(id = gexSlots, index = GEX_SLOT_VEX3).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_VEX3).padChars, levelColor = gexVexColor, nameColor = gexVexColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_VEX3).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dotted, drawLine = true, visible = array.get(id = gexSlots, index = GEX_SLOT_VEX3).visible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_VEX3).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_RANGE_HIGH, levelPrice = gexRangeHigh, levelText = array.get(id = gexSlots, index = GEX_SLOT_RANGE_HIGH).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_RANGE_HIGH).padChars, levelColor = gexRangeColor, nameColor = gexRangeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_RANGE_HIGH).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = false, visible = gexRangeVisible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_RANGE_HIGH).ownsStrike)
+        f_gexDrawLevel(slotIndex = GEX_SLOT_RANGE_LOW, levelPrice = gexRangeLow, levelText = array.get(id = gexSlots, index = GEX_SLOT_RANGE_LOW).code, padChars = array.get(id = gexSlots, index = GEX_SLOT_RANGE_LOW).padChars, levelColor = gexRangeColor, nameColor = gexRangeColor, levelTooltip = array.get(id = gexSlots, index = GEX_SLOT_RANGE_LOW).hoverText, levelWidth = GEX_THIN_WIDTH, levelStyle = line.style_dashed, drawLine = false, visible = gexRangeVisible, ownsStrike = array.get(id = gexSlots, index = GEX_SLOT_RANGE_LOW).ownsStrike)
 
         // The regime symbol shares the FLIP anchor and is pushed clear of it
         // with character padding, so the gap holds however far you zoom.
-        bool gexSymbolVisible = gexShowFlip and gexShowLabels and not na(gexFlip)
-        bool gexSymbolRight = gexLabelSide == "Right"
-        int gexSymbolShift = array.get(id = gexSlotPadChars, index = GEX_SLOT_FLIP) + str.length(string = array.get(id = gexSlotCodes, index = GEX_SLOT_FLIP)) + gexStackGapChars
+        int gexSymbolShift = array.get(id = gexSlots, index = GEX_SLOT_FLIP).padChars + str.length(string = array.get(id = gexSlots, index = GEX_SLOT_FLIP).code) + gexSymbolGapChars
         label.set_xy(id = gexRegimeLabel, x = gexSymbolRight ? bar_index + GEX_RIGHT_PAD_BARS + gexLabelOffset : gexDayStartBar - gexLabelOffset, y = gexSymbolVisible ? gexFlip : close)
         string gexSymbolPad = ""
         if gexSymbolShift > 0
@@ -821,7 +983,7 @@ if barstate.islast
         label.set_style(id = gexRegimeLabel, style = gexSymbolRight ? label.style_label_left : label.style_label_right)
         label.set_size(id = gexRegimeLabel, size = gexLabelTextSize)
         label.set_text_font_family(id = gexRegimeLabel, text_font_family = f_gexLabelFontFamily())
-        label.set_tooltip(id = gexRegimeLabel, tooltip = array.get(id = gexSlotHoverText, index = GEX_SLOT_FLIP))
+        label.set_tooltip(id = gexRegimeLabel, tooltip = array.get(id = gexSlots, index = GEX_SLOT_FLIP).hoverText)
 
         gexLastDrawnBar := bar_index
         // Cleared only on the execution that COMMITS this render. A repaint made
@@ -831,8 +993,6 @@ if barstate.islast
         if barstate.isconfirmed
             gexNeedsRefresh := false
 
-    // The regime symbol shares the FLIP anchor and is pushed clear of it with
-    // character padding, so the gap holds however far the chart is zoomed.
     // A vertical marker at the minute the mapped expiry stops trading. x1 == x2
     // with extend.both is how Pine draws a full-height vertical: the two price
     // points only fix the line's slope, which here is undefined, so it spans.
@@ -846,10 +1006,52 @@ if barstate.islast
         line.set_style(id = gexExpiryLine, style = line.style_dotted)
         line.set_width(id = gexExpiryLine, width = 1)
 
-    // The only reading that follows price tick by tick: which side of the flip
-    // we are on. One set_* call, not a full repaint.
-    // Three states, not two: above the flip, below it, and sitting on it.
+    // Two ways to answer the same question, and the symbol decides which.
+    //
+    // Symbol ON: derive it here from the live bar, so the colour flips the tick
+    // price crosses the flip. That is the whole point of putting a mark on the
+    // chart — it has to be live to be worth watching.
+    //
+    // Symbol OFF: nothing is tracking price tick by tick, so take the server's
+    // verdict as served. One rule, one place, no drift.
     float gexFlipBand = na(gexFlip) ? 0 : gexFlip * GEX_FLIP_BAND_PCT / 100
-    color gexRegimeColor = na(gexFlip) or math.abs(number = close - gexFlip) <= gexFlipBand ? NORD4 : close > gexFlip ? NORD8 : NORD11
-    label.set_textcolor(id = gexRegimeLabel, textcolor = gexShowFlip and gexShowLabels and not na(gexFlip) ? gexRegimeColor : GEX_HIDDEN)
+    color gexServedRegimeColor = gexRegime == "POSITIVE" ? NORD8 : gexRegime == "NEGATIVE" ? NORD11 : NORD4
+    color gexLiveRegimeColor = na(gexFlip) ? gexServedRegimeColor : math.abs(number = close - gexFlip) <= gexFlipBand ? NORD4 : close > gexFlip ? NORD8 : NORD11
+    color gexRegimeColor = f_gexFade(source = gexSymbolVisible ? gexLiveRegimeColor : gexServedRegimeColor)
+    // ── Dealer map, before the bell ────────────────────────────────────────
+    // The inherited board, read out in words. Repainted on every islast tick
+    // rather than on redraw: a table cell rolls back on an uncommitted tick, so
+    // anything gated on "the data changed" blanks itself mid-bar.
+    bool gexPanelOn = gexShowMapPanel and gexBeforeBell and not na(gexFlip)
+    for panelRow = 0 to 5
+        f_gexPanelRow(rowIndex = panelRow, rowText = "", rowTone = GEX_HIDDEN)
+
+    if gexPanelOn
+        bool gexLongGamma = gexRegime == "POSITIVE" or (gexRegime == "" and not na(gexTotalGex) and gexTotalGex >= 0)
+        color gexPanelTone = gexRegime == "NEUTRAL" ? NORD4 : gexLongGamma ? NORD8 : NORD11
+        string gexLean = gexRegime == "NEUTRAL" ? "ON THE FLIP · stand aside" : gexLongGamma ? "CALM TAPE · fade the edges" : "TRENDING TAPE · follow the break"
+        string gexDayType = gexRegime == "NEUTRAL" ? "WHIPSAW day — wait for a side to hold" : gexLongGamma ? "RANGE day — sell the ceiling, buy the floor" : "TREND day — trade breaks, do not fade"
+
+        string gexCeil = na(gexCall1) ? "—" : str.tostring(value = gexCall1, format = "#")
+        string gexFloor = na(gexPut1) ? "—" : str.tostring(value = gexPut1, format = "#")
+        string gexBookLine = na(gexTotalGex) ? "" : "   ·   net gamma " + str.tostring(value = gexTotalGex, format = "#.##") + "bn"
+
+        // Does the day's implied move even reach the walls? A wall outside the
+        // band needs a bigger move than options are pricing — so it is context,
+        // not a target.
+        string gexReach = "implied move unavailable"
+        if not na(gexRangeLow) and not na(gexRangeHigh)
+            bool ceilInside = not na(gexCall1) and gexCall1 <= gexRangeHigh
+            bool floorInside = not na(gexPut1) and gexPut1 >= gexRangeLow
+            string gexVerdict = ceilInside and floorInside ? "both walls are within reach" : ceilInside ? "the ceiling is reachable, the floor is not" : floorInside ? "the floor is reachable, the ceiling is not" : "neither wall is within reach — expect the middle"
+            gexReach := "implied " + str.tostring(value = gexRangeLow, format = "#.##") + "–" + str.tostring(value = gexRangeHigh, format = "#.##") + " · " + gexVerdict
+
+        f_gexPanelRow(rowIndex = 0, rowText = syminfo.ticker + " · DEALER MAP — inherited overnight", rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 1, rowText = gexLean, rowTone = gexPanelTone)
+        f_gexPanelRow(rowIndex = 2, rowText = gexDayType, rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 3, rowText = "ceiling " + gexCeil + "   flip " + str.tostring(value = gexFlip, format = "#.##") + "   floor " + gexFloor + gexBookLine, rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 4, rowText = gexReach, rowTone = NORD4)
+        f_gexPanelRow(rowIndex = 5, rowText = "last night's book · rebuilds after 09:30", rowTone = color.new(color = NORD4, transp = 45))
+
+    label.set_textcolor(id = gexRegimeLabel, textcolor = gexSymbolVisible and (gexShowPreMarket or not gexBeforeBell) ? gexRegimeColor : GEX_HIDDEN)
     line.set_color(id = gexExpiryLine, color = gexExpiryVisible ? gexRegimeColor : GEX_HIDDEN)

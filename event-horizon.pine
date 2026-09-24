@@ -1,0 +1,533 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+// Event Horizon - US macro releases as vertical signposts, so no trade opens into a print
+//
+// Data: the ForexFactory calendar, published to TradingView by toodegrees via
+// Pine Seeds. "Forex" is the source's brand, not its scope - it is a general
+// macro calendar, and every US government release (CPI, NFP, FOMC, PCE, ISM,
+// claims) arrives tagged cur = "USD". That USD subset is the only one drawn.
+//
+// Verified against the live ForexFactory JSON, the Federal Reserve's own FOMC
+// calendar and two independent calendars on 2026-09-23. Every Tier 1 event
+// matched to the minute, including the Sep 15-16 FOMC with its projections and
+// press conference. Three limits surfaced in the same check, all in the feed:
+//   1. Titles can resolve stale - an "ADP Weekly Employment Change" slot decoded
+//      as "RBNZ Gov Breman Speaks". Timestamps stayed correct. The foreign
+//      central-bank filter below discards that class of garbage.
+//   2. Coverage truncates. Nine slots x five floats caps the feed at 45 events
+//      per day across ALL currencies while ForexFactory runs 40-60 globally, so
+//      minor US entries drop. Every Tier 1 release survived the audit; the
+//      casualties were all Fed-speaker noise. This is not a complete calendar.
+//   3. The forward horizon is the REST OF THIS WEEK, not a rolling week. The
+//      feed rolls weekly, so by Thursday there is little left ahead.
+
+//@version=6
+import toodegrees/forex_factory_utility/16 as ffUtil
+import toodegrees/forex_factory_decoding/41 as ffDec
+
+indicator(title = "Event Horizon", shorttitle = "🗓️ Events", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// Shared immutable values used by the indicator, including the Nord palette.
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord Theme Color
+// Polar Night
+const color NORD0  = #2E3440
+const color NORD1  = #3B4252
+const color NORD2  = #434C5E
+const color NORD3  = #4C566A
+// Snow Storm
+const color NORD4  = #D8DEE9
+const color NORD5  = #E5E9F0
+const color NORD6  = #ECEFF4
+// Frost
+const color NORD7  = #8FBCBB
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+const color NORD10 = #5E81AC
+// Aurora
+const color NORD11 = #BF616A
+const color NORD12 = #D08770
+const color NORD13 = #EBCB8B
+const color NORD14 = #A3BE8C
+const color NORD15 = #B48EAD
+
+// Drawing pool size. Every signpost is allocated once on the first bar and only
+// ever mutated with set_* afterwards - never deleted and recreated. Intrabar a
+// .delete commits while a .new rolls back, so a delete-and-redraw engine tears
+// itself apart on realtime ticks.
+const int EVENT_POOL = 120
+
+const int MS_MINUTE = 60000
+const int MS_DAY = 86400000
+const string TZ_ET = "America/New_York"
+
+// The tier glyph used in the panel. A font circle rather than an emoji so it
+// takes the tier colour.
+const string TIER_GLYPH = "●"
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚙️ INPUTS
+// ═════════════════════════════════════════════════════════════════════════════
+const string GROUP_TIERS = "🎚️ Event Tiers"
+const string GROUP_WINDOW = "🪟 Window"
+const string GROUP_STYLE = "🎨 Signposts"
+const string GROUP_BAND = "⛔ No-Trade Band"
+const string GROUP_PANEL = "📋 Panel"
+const string GROUP_MANUAL = "✍️ Manual Events"
+
+bool showTier1 = input.bool(defval = true, title = "Tier 1 — market movers", group = GROUP_TIERS, inline = "t1", tooltip = "FOMC rate decision, statement, projections and press conference, CPI, Non-Farm Payrolls, unemployment rate, average hourly earnings, PCE, GDP, PPI. These reprice the whole index in seconds.")
+color tier1Color = input.color(defval = NORD11, title = "", group = GROUP_TIERS, inline = "t1")
+bool showTier2 = input.bool(defval = false, title = "Tier 2 — worth respecting", group = GROUP_TIERS, inline = "t2", tooltip = "FOMC minutes and Fed speakers, retail sales, ISM, jobless claims, ADP, JOLTS, confidence surveys, durable goods, crude inventories, long-bond auctions.")
+color tier2Color = input.color(defval = NORD13, title = "", group = GROUP_TIERS, inline = "t2")
+bool showTier3 = input.bool(defval = false, title = "Tier 3 — everything else USD", group = GROUP_TIERS, inline = "t3", tooltip = "The remaining US entries in the feed. They rarely move the index and they clutter the chart.")
+color tier3Color = input.color(defval = NORD3, title = "", group = GROUP_TIERS, inline = "t3")
+
+bool showHistory = input.bool(defval = false, title = "Reach back further", group = GROUP_WINDOW, tooltip = "A week either side of today is always drawn. This only extends the window BEYOND that week, for studying older reactions.")
+int daysBack = input.int(defval = 30, title = "Days Back", minval = 7, maxval = 90, group = GROUP_WINDOW, inline = "win", tooltip = "Only applies with the extension on, and never narrows below the standing week. The feed's forward horizon is the rest of the current calendar week rather than a rolling seven days, so the forward side thins out as the week runs down — that is the feed, not the setting.")
+int daysForward = input.int(defval = 14, title = "Forward", minval = 7, maxval = 30, group = GROUP_WINDOW, inline = "win")
+
+string lineStyleChoice = input.string(defval = "Dotted", title = "Line", options = ["Solid", "Dashed", "Dotted"], group = GROUP_STYLE, inline = "line")
+int lineWidth = input.int(defval = 1, title = "Width", minval = 1, maxval = 4, group = GROUP_STYLE, inline = "line")
+string markerSymbol = input.string(defval = "● Circle", title = "Marker", options = ["● Circle", "■ Square", "◆ Diamond", "▲ Triangle up", "▼ Triangle down", "★ Star", "✚ Cross", "▬ Bar"], group = GROUP_STYLE, inline = "marker", tooltip = "The mark sitting on the line, in the tier's colour.\n\nIt is also the only thing on the chart you can hover: in Pine a tooltip belongs to a label and nothing else — not a line, not a background shade — and a label has to render something visible to have a hit box at all. Remove the mark and the tooltip goes with it.")
+int markerSize = input.int(defval = 24, title = "", minval = 4, maxval = 60, group = GROUP_STYLE, inline = "marker", tooltip = "Point size. Pine v6 takes a real number here rather than the old five-step tiny-to-huge scale.")
+string markerCustom = input.string(defval = "⚲", title = "Paste your own", group = GROUP_STYLE, inline = "custom", tooltip = "Anything typed here replaces the preset — a glyph, an emoji, a short word. Clear the box to fall back to the dropdown.")
+int markerDrop = input.int(defval = 10, title = "Drop From Top %", minval = 0, maxval = 100, step = 1, group = GROUP_STYLE, inline = "custom", tooltip = "How far DOWN from the top of the chart window the mark sits. 0 pins it to the ceiling, 10 hangs it just below, 50 is mid-screen, 100 is the floor.\n\nPine cannot read the viewport directly, but reading chart.left_visible_bar_time and chart.right_visible_bar_time gives the script the property of recalculating whenever the visible range changes — so the high and low of the bars actually on screen are known, and that is the window this measures against. It re-solves as you scroll or zoom.\n\nTradingView keeps a margin above the data, so 0 sits just inside the true top edge rather than on it.")
+
+bool showBand = input.bool(defval = true, title = "Shade the no-trade band", group = GROUP_BAND, tooltip = "Full-height shading either side of every drawn release, in that tier's own colour. The line says when; the band says do not be in here.\n\nThe defaults are not guesses. Liquidity is pulled from the book about two minutes before a scheduled release, is thinnest at the release itself, and takes roughly nine minutes to come back. On the other side, an 08:30 print does its price discovery and IV crush inside the first 15 to 30 minutes.")
+int bandOpacity = input.int(defval = 5, title = "Shade Opacity %", minval = 1, maxval = 40, group = GROUP_BAND)
+int band1Before = input.int(defval = 3, title = "Tier 1  before / after", minval = 0, maxval = 120, group = GROUP_BAND, inline = "b1", tooltip = "CPI and payrolls reprice in the first minutes and finish crushing inside half an hour. An FOMC day chains two Tier 1 signposts — the 14:00 statement and the 14:30 press conference — so their bands join into one run from just before 14:00 to 15:00, which is where the press conference does its damage.")
+int band1After = input.int(defval = 30, title = "", minval = 0, maxval = 240, group = GROUP_BAND, inline = "b1")
+int band2Before = input.int(defval = 2, title = "Tier 2  before / after", minval = 0, maxval = 120, group = GROUP_BAND, inline = "b2", tooltip = "Claims, ISM, retail sales. Smaller surprise, faster decay — the book is back to normal about nine minutes out.")
+int band2After = input.int(defval = 15, title = "", minval = 0, maxval = 240, group = GROUP_BAND, inline = "b2")
+int band3Before = input.int(defval = 1, title = "Tier 3  before / after", minval = 0, maxval = 120, group = GROUP_BAND, inline = "b3", tooltip = "Minor prints. Mostly a marker rather than a hazard.")
+int band3After = input.int(defval = 5, title = "", minval = 0, maxval = 240, group = GROUP_BAND, inline = "b3")
+
+bool showPanel = input.bool(defval = false, title = "Show next-event panel", group = GROUP_PANEL, tooltip = "Lists what is coming with a countdown. The only layer that still works when the next release is off-screen to the right.")
+string panelPosition = input.string(defval = "Top Right", title = "Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group = GROUP_PANEL)
+int panelRows = input.int(defval = 6, title = "Rows", minval = 1, maxval = 20, group = GROUP_PANEL)
+
+string manualText = input.text_area(defval = "", title = "Optional — leave empty", group = GROUP_MANUAL, tooltip = "Nothing here is required and nothing needs maintaining. The calendar feed is automatic.\n\nThis is for dates the feed cannot know — monthly OPEX, a specific earnings print, an outage you want blacked out.\n\nOne event per line:\n\nYYYYMMDD,HHMM,TIER,TITLE\n\n20260904,0830,1,Non-Farm Employment Change\n20261017,1600,1,Monthly OPEX\n\nTime is Eastern. Tier is 1, 2 or 3. Anything here merges with the feed exactly like a decoded event, and a line sharing a timestamp with a feed event joins that same signpost.\n\nThis exists because the feed truncates: nine slots hold 45 events a day across every currency, so minor US entries — and on 2026-09-04 the Non-Farm Payrolls headline itself — get dropped. It is also the only way to mark what the feed will never carry, such as OPEX or a specific earnings print.")
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🇺🇸 CLASSIFICATION
+// Tiers are assigned by title, not by the feed's own impact rating. The feed
+// rates events for a currency trader; these tiers rate them for someone trading
+// the index. FOMC and CPI outrank the German PMI the feed also calls high
+// impact, and jobless claims matter here in a way its medium rating understates.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// A foreign central bank tagged USD is a decode error, not an event. Seen live
+// on 2026-09-22: an ADP release that resolved to "RBNZ Gov Breman Speaks".
+f_isForeignMisTag(string lowerTitle) =>
+    str.contains(source = lowerTitle, str = "rbnz") or str.contains(source = lowerTitle, str = "rba ") or str.contains(source = lowerTitle, str = "boe ") or str.contains(source = lowerTitle, str = "boj ") or str.contains(source = lowerTitle, str = "ecb") or str.contains(source = lowerTitle, str = "snb") or str.contains(source = lowerTitle, str = "boc ") or str.contains(source = lowerTitle, str = "german") or str.contains(source = lowerTitle, str = "french") or str.contains(source = lowerTitle, str = "italian") or str.contains(source = lowerTitle, str = "spanish")
+
+f_eventTier(string rawTitle) =>
+    string title = str.lower(source = rawTitle)
+    // ADP is a private payroll estimate, not the BLS print. Without this it
+    // matches the Tier 1 "non-farm employment" test and draws as a mover.
+    bool isAdp = str.contains(source = title, str = "adp")
+    bool isTier1 = not isAdp and (str.contains(source = title, str = "fomc statement") or str.contains(source = title, str = "federal funds rate") or str.contains(source = title, str = "fomc press conference") or str.contains(source = title, str = "fomc economic projections") or str.contains(source = title, str = "cpi") or str.contains(source = title, str = "non-farm employment") or str.contains(source = title, str = "unemployment rate") or str.contains(source = title, str = "average hourly earnings") or str.contains(source = title, str = "pce price index") or str.contains(source = title, str = "gdp") or str.contains(source = title, str = "ppi"))
+    bool isTier2 = str.contains(source = title, str = "fomc meeting minutes") or str.contains(source = title, str = "speaks") or str.contains(source = title, str = "testi") or str.contains(source = title, str = "retail sales") or str.contains(source = title, str = "ism ") or str.contains(source = title, str = "unemployment claims") or str.contains(source = title, str = "adp") or str.contains(source = title, str = "jolts") or str.contains(source = title, str = "consumer confidence") or str.contains(source = title, str = "consumer sentiment") or str.contains(source = title, str = "durable goods") or str.contains(source = title, str = "flash manufacturing") or str.contains(source = title, str = "flash services") or str.contains(source = title, str = "crude oil inventories") or str.contains(source = title, str = "bond auction")
+    isTier1 ? 1 : isTier2 ? 2 : 3
+
+f_tierEnabled(int tier) =>
+    tier == 1 ? showTier1 : tier == 2 ? showTier2 : showTier3
+
+f_tierColor(int tier) =>
+    tier == 1 ? tier1Color : tier == 2 ? tier2Color : tier3Color
+
+f_bandBefore(int tier) =>
+    tier == 1 ? band1Before : tier == 2 ? band2Before : band3Before
+
+f_bandAfter(int tier) =>
+    tier == 1 ? band1After : tier == 2 ? band2After : band3After
+
+// An emoji for the kind of news, so a tooltip is recognisable before it is read.
+// Speakers are tested first: "FOMC Member Williams Speaks" would otherwise be
+// caught by the FOMC test and dressed up as a policy decision.
+f_eventEmoji(string lowerTitles) =>
+    str.contains(source = lowerTitles, str = "speaks") or str.contains(source = lowerTitles, str = "testi") ? "🗣️" : str.contains(source = lowerTitles, str = "fomc") or str.contains(source = lowerTitles, str = "federal funds") ? "🏛️" : str.contains(source = lowerTitles, str = "cpi") or str.contains(source = lowerTitles, str = "ppi") or str.contains(source = lowerTitles, str = "pce") ? "🔥" : str.contains(source = lowerTitles, str = "non-farm") or str.contains(source = lowerTitles, str = "unemployment") or str.contains(source = lowerTitles, str = "claims") or str.contains(source = lowerTitles, str = "adp") or str.contains(source = lowerTitles, str = "jolts") or str.contains(source = lowerTitles, str = "hourly earnings") ? "👷" : str.contains(source = lowerTitles, str = "gdp") ? "📈" : str.contains(source = lowerTitles, str = "retail sales") ? "🛒" : str.contains(source = lowerTitles, str = "ism") or str.contains(source = lowerTitles, str = "pmi") or str.contains(source = lowerTitles, str = "manufacturing") or str.contains(source = lowerTitles, str = "industrial") or str.contains(source = lowerTitles, str = "durable") ? "🏭" : str.contains(source = lowerTitles, str = "crude oil") or str.contains(source = lowerTitles, str = "natural gas") ? "🛢️" : str.contains(source = lowerTitles, str = "auction") or str.contains(source = lowerTitles, str = "treasury") or str.contains(source = lowerTitles, str = "budget") ? "💵" : str.contains(source = lowerTitles, str = "home") or str.contains(source = lowerTitles, str = "housing") or str.contains(source = lowerTitles, str = "building permits") ? "🏠" : str.contains(source = lowerTitles, str = "confidence") or str.contains(source = lowerTitles, str = "sentiment") ? "🧭" : "📌"
+
+f_tierName(int tier) =>
+    tier == 1 ? "Tier 1 · market mover" : tier == 2 ? "Tier 2 · worth respecting" : "Tier 3 · minor"
+
+// US releases arrive as bundles sharing one timestamp, and the feed sometimes
+// drops a member - on 2026-09-04 it dropped the Non-Farm Payrolls headline while
+// keeping Unemployment Rate and Average Hourly Earnings. Naming the signpost from
+// the bundle rather than from whichever member survived closes that gap with no
+// input: the minute was always marked, it just was not always named.
+f_clusterName(string lowerTitles) =>
+    str.contains(source = lowerTitles, str = "fomc statement") or str.contains(source = lowerTitles, str = "federal funds rate") ? "FOMC Decision" : str.contains(source = lowerTitles, str = "fomc press conference") ? "FOMC Press Conference" : (str.contains(source = lowerTitles, str = "unemployment rate") and str.contains(source = lowerTitles, str = "average hourly earnings")) ? "Employment Situation (NFP)" : str.contains(source = lowerTitles, str = "cpi") ? "CPI Report" : str.contains(source = lowerTitles, str = "ppi") ? "PPI Report" : str.contains(source = lowerTitles, str = "pce price index") ? "PCE Report" : str.contains(source = lowerTitles, str = "gdp") ? "GDP Report" : str.contains(source = lowerTitles, str = "retail sales") ? "Retail Sales" : str.contains(source = lowerTitles, str = "durable goods") ? "Durable Goods" : ""
+
+// Merges one candidate into the signpost arrays: joins an existing entry when a
+// release already occupies that minute, otherwise inserts in time order. Shared
+// by the feed and the manual list so a hand-written line behaves identically.
+f_mergeCandidate(array<int> stamps, array<int> tiers, array<string> titles, array<string> leads, array<int> counts, int stamp, int tier, string title) =>
+    // One pass finds either the entry for this minute or the insertion point -
+    // the list is already ordered, so an equal stamp precedes any greater one.
+    int existingAt = -1
+    int insertAt = array.size(id = stamps)
+    if array.size(id = stamps) > 0
+        for scanIndex = 0 to array.size(id = stamps) - 1
+            int scanStamp = array.get(id = stamps, index = scanIndex)
+            if scanStamp == stamp
+                existingAt := scanIndex
+                break
+            if scanStamp > stamp
+                insertAt := scanIndex
+                break
+
+    if existingAt >= 0
+        array.set(id = titles, index = existingAt, value = array.get(id = titles, index = existingAt) + "\n• " + title)
+        // The loudest release on the minute sets the signpost tier.
+        array.set(id = tiers, index = existingAt, value = math.min(array.get(id = tiers, index = existingAt), tier))
+        array.set(id = counts, index = existingAt, value = array.get(id = counts, index = existingAt) + 1)
+    else
+        // No cap here. This list is the whole calendar, built once at decode and
+        // ordered oldest-first; capping it at the POOL size filled it with the
+        // earliest events and starved the window the render actually draws.
+        // The pool limit belongs in the render, which is where it now lives.
+        array.insert(id = stamps, index = insertAt, value = stamp)
+        array.insert(id = tiers, index = insertAt, value = tier)
+        array.insert(id = titles, index = insertAt, value = "• " + title)
+        array.insert(id = leads, index = insertAt, value = title)
+        array.insert(id = counts, index = insertAt, value = 1)
+    array.size(id = stamps)
+
+// A week either side is always drawn; the extension only widens it. Computed
+// here, at global scope, because the bands are built during the historical pass
+// while the lines are placed on the last bar - both must read the same window or
+// a shade outlives the line it belongs to.
+int backDays = showHistory ? math.max(daysBack, 7) : 7
+int forwardDays = showHistory ? math.max(daysForward, 7) : 7
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📡 FEED
+// Nine Pine Seeds slot symbols carry the calendar. Each daily seed bar packs up
+// to five events into its OHLCV floats, so the intraday release time survives as
+// payload rather than as bar time.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// A tuple destructures only from a FUNCTION CALL, never from a bare [ ... ]
+// literal. The payload expressions stay inline because request.seed evaluates
+// them in the SEED symbol's context, not the chart's.
+f_requestSlots() =>
+    [request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_1", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_2", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_3", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_4", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_5", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_6", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_7", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_8", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume)),
+     request.seed("seed_toodegrees_toogit", "TOODEGREES_FOREX_FACTORY_SLOT_9", str.tostring(open) + "," + str.tostring(high) + "," + str.tostring(low) + "," + str.tostring(close) + "," + str.tostring(volume))]
+
+[slot1, slot2, slot3, slot4, slot5, slot6, slot7, slot8, slot9] = f_requestSlots()
+
+// The seed is DAILY data, so its value repeats across every intraday bar of a
+// day and returns na on most of them - measured: 44 bars out of 40,388 carry a
+// payload. Gating on a day change threw those away whenever the day's first bar
+// was one of the empty ones. Gating on the payload itself catches every one and
+// decodes each distinct payload exactly once.
+f_naSafe(string slotText) =>
+    na(slotText) ? "" : slotText
+
+// Cheap na tests first: only 44 bars in 40,388 carry a payload, so the nine-way
+// concat below is skipped on essentially every bar.
+bool anySlotData = not na(slot1) or not na(slot2) or not na(slot3) or not na(slot4) or not na(slot5) or not na(slot6) or not na(slot7) or not na(slot8) or not na(slot9)
+string slotSignature = anySlotData ? f_naSafe(slot1) + "|" + f_naSafe(slot2) + "|" + f_naSafe(slot3) + "|" + f_naSafe(slot4) + "|" + f_naSafe(slot5) + "|" + f_naSafe(slot6) + "|" + f_naSafe(slot7) + "|" + f_naSafe(slot8) + "|" + f_naSafe(slot9) : ""
+
+var string lastSignature = ""
+var map<string, bool> seenEventKeys = map.new<string, bool>()
+
+// Band edges live in their own flat arrays, built here during the historical
+// pass rather than in the render. bgcolor is evaluated per bar, so the bands
+// have to already exist by the time each bar executes.
+// The merged signpost list. Built once, during the historical pass, as events
+// decode - NOT rebuilt on the last bar. Merging is an O(n squared) insertion
+// scan over ~950 events plus array.insert shifts; running that per realtime tick
+// to reproduce a list that only changes 44 times in the whole chart history was
+// burning about half this script's runtime.
+var array<int> allStamps = array.new<int>()
+var array<int> allTiers = array.new<int>()
+var array<string> allTitles = array.new<string>()
+var array<string> allLeads = array.new<string>()
+var array<int> allCounts = array.new<int>()
+
+var array<int> bandStarts = array.new<int>()
+var array<int> bandEnds = array.new<int>()
+var array<color> bandColors = array.new<color>()
+// One shade per minute, not one per release: the jobs report would otherwise
+// stack three identical bands on 08:30.
+var map<int, bool> bandedStamps = map.new<int, bool>()
+
+f_addBand(int stamp, int tier) =>
+    bool inWindow = stamp >= timenow - backDays * MS_DAY and stamp <= timenow + forwardDays * MS_DAY
+    if showBand and f_tierEnabled(tier) and inWindow and not map.contains(id = bandedStamps, key = stamp)
+        map.put(id = bandedStamps, key = stamp, value = true)
+        array.push(id = bandStarts, value = stamp - f_bandBefore(tier) * MS_MINUTE)
+        array.push(id = bandEnds, value = stamp + f_bandAfter(tier) * MS_MINUTE)
+        array.push(id = bandColors, value = color.new(color = f_tierColor(tier), transp = 100 - bandOpacity))
+    array.size(id = bandStarts)
+
+bool shouldDecode = anySlotData and slotSignature != lastSignature
+
+if shouldDecode
+    lastSignature := slotSignature
+
+    array<ffUtil.News> dayNews = array.new<ffUtil.News>()
+    ffDec.readNews(dayNews, slot1)
+    ffDec.readNews(dayNews, slot2)
+    ffDec.readNews(dayNews, slot3)
+    ffDec.readNews(dayNews, slot4)
+    ffDec.readNews(dayNews, slot5)
+    ffDec.readNews(dayNews, slot6)
+    ffDec.readNews(dayNews, slot7)
+    ffDec.readNews(dayNews, slot8)
+    ffDec.readNews(dayNews, slot9)
+
+    // Dedupe on insert through a map - O(1) per event. The quadratic sweep this
+    // replaced blew the 500ms loop budget past a few hundred entries.
+    if array.size(id = dayNews) > 0
+        for eventIndex = 0 to array.size(id = dayNews) - 1
+            ffUtil.News candidate = array.get(id = dayNews, index = eventIndex)
+            string lowerTitle = str.lower(source = candidate.ttl)
+            if str.upper(source = candidate.cur) == "USD" and not na(candidate.tmst) and candidate.tmst > 0 and not f_isForeignMisTag(lowerTitle)
+                string eventKey = str.tostring(candidate.tmst) + "|" + candidate.ttl
+                if not map.contains(id = seenEventKeys, key = eventKey)
+                    map.put(id = seenEventKeys, key = eventKey, value = true)
+                    int tier = f_eventTier(candidate.ttl)
+
+                    if f_tierEnabled(tier)
+                        f_mergeCandidate(allStamps, allTiers, allTitles, allLeads, allCounts, candidate.tmst, tier, candidate.ttl)
+                    f_addBand(candidate.tmst, tier)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ✍️ MANUAL EVENTS
+// Parsed once per change, into the same flat shape the render consumes, so a
+// hand-written line is indistinguishable from a decoded one downstream.
+// ═════════════════════════════════════════════════════════════════════════════
+
+var array<int> manualStamps = array.new<int>()
+var array<int> manualTiers = array.new<int>()
+var array<string> manualTitles = array.new<string>()
+var string lastManualText = ""
+
+f_digits(string digitsText, int fromPos, int toPos) =>
+    float parsed = str.tonumber(string = str.substring(source = digitsText, begin_pos = fromPos, end_pos = toPos))
+    na(parsed) ? 0 : int(math.round(number = parsed))
+
+if barstate.isfirst or manualText != lastManualText
+    lastManualText := manualText
+    array.clear(id = manualStamps)
+    array.clear(id = manualTiers)
+    array.clear(id = manualTitles)
+
+    array<string> manualLines = str.split(string = manualText, separator = "\n")
+    if array.size(id = manualLines) > 0
+        for lineIndex = 0 to array.size(id = manualLines) - 1
+            string rawLine = str.trim(source = array.get(id = manualLines, index = lineIndex))
+            if str.length(string = rawLine) > 0
+                array<string> tokens = str.split(string = rawLine, separator = ",")
+                if array.size(id = tokens) >= 4
+                    string dateText = str.trim(source = array.get(id = tokens, index = 0))
+                    string timeText = str.trim(source = array.get(id = tokens, index = 1))
+                    int tier = f_digits(str.trim(source = array.get(id = tokens, index = 2)), 0, 1)
+
+                    // The title is everything past the third comma, rejoined, so
+                    // a comma inside a release name survives the split.
+                    string title = str.trim(source = array.get(id = tokens, index = 3))
+                    if array.size(id = tokens) > 4
+                        for tokenIndex = 4 to array.size(id = tokens) - 1
+                            title := title + "," + array.get(id = tokens, index = tokenIndex)
+
+                    int stamp = timestamp(timezone = TZ_ET, year = f_digits(dateText, 0, 4), month = f_digits(dateText, 4, 6), day = f_digits(dateText, 6, 8), hour = f_digits(timeText, 0, 2), minute = f_digits(timeText, 2, 4), second = 0)
+                    if not na(stamp) and str.length(string = dateText) == 8 and tier >= 1 and tier <= 3
+                        array.push(id = manualStamps, value = stamp)
+                        array.push(id = manualTiers, value = tier)
+                        array.push(id = manualTitles, value = title)
+
+                        if f_tierEnabled(tier)
+                            f_mergeCandidate(allStamps, allTiers, allTitles, allLeads, allCounts, stamp, tier, title)
+                        // A manual line earns a band the same as a decoded one.
+                        f_addBand(stamp, tier)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⛔ NO-TRADE BAND
+// bgcolor rather than boxes: it spans the full pane height for free and never
+// drags the price scale the way a box with invented top and bottom prices does.
+// ═════════════════════════════════════════════════════════════════════════════
+
+int barSpanMs = timeframe.in_seconds(timeframe = timeframe.period) * 1000
+
+color bandPaint = na
+if showBand and array.size(id = bandStarts) > 0 and time > timenow - (backDays + 2) * MS_DAY
+    for bandIndex = 0 to array.size(id = bandStarts) - 1
+        if time + barSpanMs > array.get(id = bandStarts, index = bandIndex) and time < array.get(id = bandEnds, index = bandIndex)
+            bandPaint := array.get(id = bandColors, index = bandIndex)
+            break
+
+bgcolor(color = bandPaint, title = "No-Trade Band")
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🖌️ DRAWING POOL
+// Allocated once on the first bar, a committed historical bar. From then on the
+// render only ever calls set_*, so nothing is created or destroyed intrabar.
+// ═════════════════════════════════════════════════════════════════════════════
+
+var array<line> poolLines = array.new<line>()
+var array<label> poolMarkers = array.new<label>()
+
+if barstate.isfirst
+    for poolIndex = 0 to EVENT_POOL - 1
+        array.push(id = poolLines, value = line.new(x1 = 0, y1 = 0.0, x2 = 0, y2 = 1.0, xloc = xloc.bar_time, extend = extend.both, color = color.new(color = NORD0, transp = 100), width = 1))
+        array.push(id = poolMarkers, value = label.new(x = 0, y = 0.0, xloc = xloc.bar_time, yloc = yloc.price, style = label.style_none, text = "", textcolor = color.new(color = NORD0, transp = 100), color = color.new(color = NORD0, transp = 100), size = 24, textalign = text.align_center))
+
+f_lineStyle() =>
+    lineStyleChoice == "Solid" ? line.style_solid : lineStyleChoice == "Dotted" ? line.style_dotted : line.style_dashed
+
+// A pasted symbol wins outright; otherwise take the glyph off the front of the
+// dropdown label. The mark must render something visible - a label with no
+// rendered text has no hit box, so an invisible mark means no tooltip.
+f_markerGlyph() =>
+    str.length(string = str.trim(source = markerCustom)) > 0 ? str.trim(source = markerCustom) : str.substring(source = markerSymbol, begin_pos = 0, end_pos = str.pos(source = markerSymbol, str = " "))
+
+f_panelPosition() =>
+    panelPosition == "Top Left" ? position.top_left : panelPosition == "Bottom Right" ? position.bottom_right : panelPosition == "Bottom Left" ? position.bottom_left : panelPosition == "Middle Right" ? position.middle_right : position.top_right
+
+// The visible window, not a fixed lookback. Reading either chart.*_visible_bar_time
+// gives the script the property of recalculating whenever the visible range
+// changes, so scrolling or zooming re-solves these from scratch. Accumulated one
+// bar at a time, which is O(1) per bar rather than a scan.
+int visibleLeftTime = chart.left_visible_bar_time
+int visibleRightTime = chart.right_visible_bar_time
+
+var float windowHigh = na
+var float windowLow = na
+bool windowKnown = not na(visibleLeftTime) and not na(visibleRightTime)
+if windowKnown and time >= visibleLeftTime and time <= visibleRightTime
+    windowHigh := na(windowHigh) ? high : math.max(windowHigh, high)
+    windowLow := na(windowLow) ? low : math.min(windowLow, low)
+
+// Fallback for the tick before a visible range is known. Computed unconditionally:
+// a ta.* call inside a ternary only runs on some bars and its series drifts.
+float fallbackHigh = ta.highest(source = high, length = 300)
+float fallbackLow = ta.lowest(source = low, length = 300)
+float rangeHigh = na(windowHigh) ? fallbackHigh : windowHigh
+float rangeLow = na(windowLow) ? fallbackLow : windowLow
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🗓️ RENDER
+// Everything visual repaints on every last-bar tick, and that is not optional: a
+// drawing write ROLLS BACK on an uncommitted tick and has to re-run until the
+// bar confirms, so any gate that latches leaves the pool parked and transparent -
+// the plots appear once, then vanish a tick later. Tables rewind the same way.
+//
+// What makes repainting cheap is that no WORK happens here. The signpost list
+// was merged and sorted once during the historical pass; this block only walks
+// it, stops at the far edge of the window, and writes set_* into a fixed pool.
+// Merging here instead cost roughly half the script's runtime, rebuilding a list
+// that changes 44 times in the chart's whole history on every single tick.
+// ═════════════════════════════════════════════════════════════════════════════
+
+if barstate.islast
+    int windowStart = timenow - backDays * MS_DAY
+    int windowEnd = timenow + forwardDays * MS_DAY
+    int signpostCount = array.size(id = allStamps)
+    // Measured down from the ceiling, so 0 means the top of the window.
+    float markerPrice = rangeHigh - (rangeHigh - rangeLow) * markerDrop / 100.0
+    string markerGlyph = f_markerGlyph()
+
+    int drawnCount = 0
+    if signpostCount > 0
+        for signpostIndex = 0 to signpostCount - 1
+            int eventStamp = array.get(id = allStamps, index = signpostIndex)
+            // The list is sorted, so the far edge ends the walk.
+            if eventStamp > windowEnd or drawnCount >= EVENT_POOL
+                break
+            if eventStamp >= windowStart
+                int tier = array.get(id = allTiers, index = signpostIndex)
+                color tierColor = f_tierColor(tier)
+                string titles = array.get(id = allTitles, index = signpostIndex)
+                string lowerTitles = str.lower(source = titles)
+                string clusterName = f_clusterName(lowerTitles)
+                string leadName = clusterName != "" ? clusterName : array.get(id = allLeads, index = signpostIndex)
+
+                string bandOpens = str.format_time(time = eventStamp - f_bandBefore(tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
+                string bandCloses = str.format_time(time = eventStamp + f_bandAfter(tier) * MS_MINUTE, format = "HH:mm", timezone = TZ_ET)
+                string tooltipText = f_eventEmoji(lowerTitles) + "  " + leadName + "\n" + str.format_time(time = eventStamp, format = "EEEE d MMMM · HH:mm", timezone = TZ_ET) + " ET\n" + f_tierName(tier) + (showBand ? "\n⛔  Stand aside " + bandOpens + " → " + bandCloses : "") + "\n\nOn this minute:\n" + titles
+
+                line poolLine = array.get(id = poolLines, index = drawnCount)
+                line.set_xy1(id = poolLine, x = eventStamp, y = 0.0)
+                line.set_xy2(id = poolLine, x = eventStamp, y = 1.0)
+                line.set_color(id = poolLine, color = tierColor)
+                line.set_width(id = poolLine, width = lineWidth)
+                line.set_style(id = poolLine, style = f_lineStyle())
+
+                label poolMarker = array.get(id = poolMarkers, index = drawnCount)
+                label.set_xy(id = poolMarker, x = eventStamp, y = markerPrice)
+                label.set_text(id = poolMarker, text = markerGlyph)
+                label.set_textcolor(id = poolMarker, textcolor = tierColor)
+                label.set_size(id = poolMarker, size = markerSize)
+                label.set_tooltip(id = poolMarker, tooltip = tooltipText)
+
+                drawnCount += 1
+
+    // Park whatever the window did not need. Never delete a pool member - a
+    // delete commits intrabar while a new rolls back, leaving the pool short.
+    // Guarded: a full pool makes this `for POOL to POOL - 1`, which in Pine
+    // counts DOWNWARD and writes past the end instead of skipping.
+    if drawnCount < EVENT_POOL
+        for poolIndex = drawnCount to EVENT_POOL - 1
+            line.set_color(id = array.get(id = poolLines, index = poolIndex), color = color.new(color = NORD0, transp = 100))
+            label parkedMarker = array.get(id = poolMarkers, index = poolIndex)
+            label.set_text(id = parkedMarker, text = "")
+            label.set_tooltip(id = parkedMarker, tooltip = "")
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // 📋 NEXT UP
+    // Tables roll back on uncommitted ticks, so this repaints every tick too.
+    // ═════════════════════════════════════════════════════════════════════════
+    if showPanel
+        table panel = table.new(position = f_panelPosition(), columns = 4, rows = panelRows + 1, bgcolor = NORD0, frame_color = NORD3, frame_width = 1, border_color = NORD1, border_width = 1)
+
+        int newestStamp = signpostCount > 0 ? array.get(id = allStamps, index = signpostCount - 1) : 0
+        string feedState = signpostCount == 0 ? "NO FEED" : newestStamp > timenow ? "LIVE" : "STALE"
+        color feedStateColor = signpostCount == 0 ? NORD11 : newestStamp > timenow ? NORD14 : NORD13
+        table.cell(table_id = panel, column = 0, row = 0, text = TIER_GLYPH, text_color = NORD3, bgcolor = NORD2, text_size = size.tiny)
+        table.cell(table_id = panel, column = 1, row = 0, text = "NEXT UP", text_color = NORD6, bgcolor = NORD2, text_size = size.small, text_halign = text.align_left)
+        table.cell(table_id = panel, column = 2, row = 0, text = "", bgcolor = NORD2)
+        table.cell(table_id = panel, column = 3, row = 0, text = feedState, text_color = feedStateColor, bgcolor = NORD2, text_size = size.tiny)
+
+        int panelRow = 1
+        if signpostCount > 0
+            for signpostIndex = 0 to signpostCount - 1
+                if panelRow > panelRows
+                    break
+                int eventStamp = array.get(id = allStamps, index = signpostIndex)
+                if eventStamp >= timenow and eventStamp <= windowEnd
+                    int tier = array.get(id = allTiers, index = signpostIndex)
+                    string titles = array.get(id = allTitles, index = signpostIndex)
+                    string clusterName = f_clusterName(str.lower(source = titles))
+                    string leadName = clusterName != "" ? clusterName : array.get(id = allLeads, index = signpostIndex)
+                    int alsoCount = array.get(id = allCounts, index = signpostIndex) - 1
+
+                    int minutesOut = math.round(number = (eventStamp - timenow) / MS_MINUTE)
+                    string countdownText = minutesOut < 60 ? str.tostring(minutesOut) + "m" : minutesOut < 1440 ? str.tostring(math.floor(number = minutesOut / 60)) + "h" + str.tostring(minutesOut % 60) + "m" : str.tostring(math.floor(number = minutesOut / 1440)) + "d"
+                    // The imminent one burns; everything behind it stays quiet.
+                    color rowColor = minutesOut <= 30 ? NORD11 : minutesOut <= 120 ? NORD13 : NORD4
+
+                    table.cell(table_id = panel, column = 0, row = panelRow, text = TIER_GLYPH, text_color = f_tierColor(tier), text_size = size.tiny)
+                    table.cell(table_id = panel, column = 1, row = panelRow, text = str.format_time(time = eventStamp, format = "EEE HH:mm", timezone = TZ_ET), text_color = NORD9, text_size = size.tiny)
+                    table.cell(table_id = panel, column = 2, row = panelRow, text = f_eventEmoji(str.lower(source = titles)) + " " + leadName + (alsoCount > 0 ? "  +" + str.tostring(alsoCount) : ""), text_color = rowColor, text_size = size.tiny, text_halign = text.align_left)
+                    table.cell(table_id = panel, column = 3, row = panelRow, text = countdownText, text_color = rowColor, text_size = size.tiny)
+                    panelRow += 1
+
+        if panelRow == 1
+            table.cell(table_id = panel, column = 0, row = 1, text = TIER_GLYPH, text_color = NORD3, text_size = size.tiny)
+            table.cell(table_id = panel, column = 1, row = 1, text = "clear", text_color = NORD3, text_size = size.tiny, text_halign = text.align_left)
+            table.cell(table_id = panel, column = 2, row = 1, text = "", text_size = size.tiny)
+            table.cell(table_id = panel, column = 3, row = 1, text = "", text_size = size.tiny)

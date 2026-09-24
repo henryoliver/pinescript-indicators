@@ -303,8 +303,13 @@ bool fibHasAnchors = fibonacciIsActive and fibHasPreviousPivot and fibHasLastPiv
 float fibAnchorHigh = fibHasAnchors ? fibPreviousPivotIsHigh ? fibPreviousPivotPrice : fibLastPivotPrice : na
 float fibAnchorLow = fibHasAnchors ? fibPreviousPivotIsHigh ? fibLastPivotPrice : fibPreviousPivotPrice : na
 bool fibDownSwing = fibHasAnchors ? not fibLastPivotIsHigh : true
-float fibLevelZero = fibHasAnchors ? fibDownSwing ? fibAnchorHigh : fibAnchorLow : na
-float fibLevelHundred = fibHasAnchors ? fibDownSwing ? fibAnchorLow : fibAnchorHigh : na
+// 0% sits on the leg's END (the most recent extreme) and 100% on its ORIGIN —
+// TradingView's own convention for the Fib Retracement tool, so the 38.2% line
+// is where price has handed back 38.2% of the impulse. Levels above 100% are
+// external retracements past the origin; NEGATIVE levels are the extension
+// targets beyond the end. Kept identical to fibonacci.pine.
+float fibLevelZero = fibHasAnchors ? fibDownSwing ? fibAnchorLow : fibAnchorHigh : na
+float fibLevelHundred = fibHasAnchors ? fibDownSwing ? fibAnchorHigh : fibAnchorLow : na
 int fibAnchorBar = fibHasAnchors ? math.max(fibPreviousPivotBar, fibLastPivotBar) : na
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1493,9 +1498,9 @@ if shouldRefreshRender
             float fibPercent = array.get(id = fibClusterPercents, index = fibIndex)
             float fibPrice = fibLevelZero + (fibLevelHundred - fibLevelZero) * fibPercent * 0.01
             int fibWeight = 1
-            if fibPercent == 38.2 or fibPercent == 50.0 or fibPercent == 61.8 or fibPercent == 100.0 or fibPercent == 161.8
+            if fibPercent == 38.2 or fibPercent == 50.0 or fibPercent == 61.8 or fibPercent == 0.0 or fibPercent == -61.8
                 fibWeight := 3
-            else if fibPercent == 23.6 or fibPercent == 76.4 or fibPercent == 123.6 or fibPercent == 176.4
+            else if fibPercent == 23.6 or fibPercent == 76.4 or fibPercent == -23.6 or fibPercent == -76.4
                 fibWeight := 2
             string fibStyle = fibWeight >= 3 ? "Solid" : fibWeight == 2 ? "Dashed" : "Dotted"
             f_pushLevel(levels = levels, levelPrice = fibPrice, levelWeight = fibWeight, indicatorId = 2, levelName = str.tostring(value = fibPercent, format = "#.##") + "%", levelColor = overallLevelColor, lineStyle = fibStyle, levelStartBar = fibAnchorBar)
