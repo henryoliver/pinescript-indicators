@@ -480,10 +480,13 @@ request.financial(symbol = syminfo.tickerid, financial_id = "RETURN_ON_EQUITY", 
 **The complete list of positional-argument exceptions** (everything else is
 keyword — this list is exhaustive, do not extend it ad hoc):
 
-1. **Variadic built-ins** — `math.max()`, `math.min()`, and the format
-   arguments of `str.format()`, `log.info()`, `log.warning()`, `log.error()`.
-   Pine rejects keywords on variadic parameters (`CE10119`). The format STRING
-   itself and any non-variadic parameters stay keyworded where Pine allows it.
+1. **Variadic built-ins** — `math.max()`, `math.min()`, `array.from()`, and the
+   format arguments of `str.format()`, `log.info()`, `log.warning()`,
+   `log.error()`. Pine rejects keywords on variadic parameters (`CE10119`). The
+   format STRING itself and any non-variadic parameters stay keyworded where
+   Pine allows it. (`array.from()` was missing from this list until 2026-09-25
+   while five files used it positionally — the list is meant to be exhaustive,
+   so add to it here rather than letting call sites diverge from the doc.)
 2. **`color.t()`** — positional single argument (established repo-wide form).
 3. **Type casts** — `int(x)`, `float(x)` (established repo-wide form).
 4. **`max_bars_back()`** — the first parameter cannot be keyworded (`var` is a
@@ -638,6 +641,25 @@ float myPrice = na       // na alone is ambiguous — type required
 int myBar = na           // same: must declare when initializing to na
 var float persistedVal = na
 ```
+
+#### UDT field assignment uses `:=`, never `=`
+
+Writing to a field of an existing object is an ASSIGNMENT, not a declaration:
+
+```pine
+// ✅ CORRECT
+QwReading copied = original.copy()
+copied.pctChange := newValue
+
+// ❌ WRONG — three errors at once
+copied.pctChange = newValue
+```
+
+A plain `=` makes Pine read `copied.pctChange` as the NAME of a new variable,
+so it fires `CE10089` ("use := instead of ="), `CE10090` ("identifiers should
+not contain '.'") and `CE10095` ("already defined") together. The three-error
+signature is the tell. Only `Type.new(...)` and the initial `Type x = ...`
+declaration use `=`.
 
 #### Important `bool` rule
 - Do not initialize `bool` variables with `na`.
@@ -1008,6 +1030,29 @@ enum TrendDir
 - Keeps code DRY and maintainable
 - Makes styling consistent across cells
 
+### 8b. Never Derive a Session Edge From the Full-Session Window
+
+`inSession and not inSession[1]` does NOT detect a new session when the chart
+is RTH-only: every bar is inside `"0930-1600"`, so the edge fires once on the
+first loaded bar and never again. Daily reseeds, snapshots and counters built
+on it silently stop after day one — and they keep rendering, so nothing looks
+broken.
+
+```pine
+// ❌ WRONG — fires once, ever, on an RTH-only chart
+bool inRth = not na(time(timeframe.period, "0930-1600:23456", "America/New_York"))
+bool sessionOpened = inRth and not inRth[1]
+
+// ✅ CORRECT — pin the edge to a few minutes at the open
+const string SESSION_RTH_OPEN = "0930-0935:23456"
+bool inOpenWindow = not na(time(timeframe.period, SESSION_RTH_OPEN, "America/New_York"))
+bool sessionOpened = inOpenWindow and not inOpenWindow[1]
+```
+
+This repo has hit it three times (`composite-breadth` daily reseeds,
+`quote-window` colour-rotation snapshot and its log layer). Keep the
+full-session window for "am I in RTH" tests only.
+
 ### 8. Never Forward-Reference Variables or Functions
 - Pine Script v6 has no hoisting — all identifiers must be declared above their
   first use
@@ -1100,23 +1145,38 @@ enum TrendDir
 ### Current Indicators
 
 1. **`composite-breadth.pine`**
-   - Intraday market-breadth composite (VOLD, ADD, PCTABOVEVWAP, CUMTICK)
-   - Line = smooth weighted stance; consensus (hysteresis sign votes with a
-     deadband) renders as line opacity + badge dissent readout, not as a
-     line multiplier; TICK-extreme and VOLD session-extreme context layers;
-     session-anchored state resets
-   - Context layers (each in its own input group, all independent of the
-     engine): zero-line persistence (dwell/persistent-flip), early-shift
-     warning (CUMTICK dissent vs established stance), PCCE options-sentiment
-     layer (equity-only put/call stretch + divergence; gated dynamic
-     request — zero cost when disabled), Lowry 90% Days capitulation state
-     machine (Desmond dual-leg arm/fire/veto on gated UPVOL/DNVOL requests),
-     last-hour continuation gate (Gao intraday momentum, expansion-regime
-     gated, no extra feeds), adaptive 30-day extended levels (computation
-     gated on toggle), opening-volume regime classifier, first-hour
-     trend-day tell, session status badge (table on `barstate.islast`),
-     configurable session-divider lines
-   - Uses `request.security()` against the USI breadth feeds
+   - Intraday market-breadth composite in its own pane (VOLD, ADD,
+     PCTABOVEVWAP, CUMTICK), per-component universe routing across the six
+     dotted USI families; `request.security()` against the USI breadth feeds
+   - Line = smooth weighted stance. Hue is the SIDE OF ZERO only (Bullish
+     above / Bearish below); OPACITY carries everything else — consensus
+     (hysteresis sign votes with a deadband) dims by disagreement, the slope
+     splits impulse from retrace, the session regime caps it, and the render
+     transparency glides through a short EMA so the step functions don't
+     chop. The composite's VALUE is never modified; consensus has not
+     multiplied the line since 2026-07-13
+   - CUMTICK ships at weight 0 — deactivated by a 135-session cross-regime
+     log study (negative IC in all three chunks). Weights 40/30/30/0 are
+     near-1/N and deliberately un-tuned; don't re-optimize without an
+     out-of-sample sweep
+   - Two collaborator layers only: 🧭 LINE TRUST (opening volume + opening
+     volatility vs ~10-session baselines → expansion/neutral/quiet, which
+     sets the line's vividness ceiling, unlocks the trusted max-vivid step,
+     and flags quiet-tape pushes with a ▲ marker; Trust Readout table on
+     `barstate.islast`) and 🎯 PRICE CONFIRMATION (Dow non-confirmation ◆ at
+     session price extremes — the ONLY early/leading read in the file that
+     survived out-of-sample testing)
+   - NINE LAYERS WERE DELETED 2026-07-28/29 and must not be re-added without
+     new evidence — TICK extremes, zero-line persistence, early-shift dissent,
+     trend-day tell, Gao last-hour gate, PCCE put/call, Lowry 90% days, VOLD
+     extremes, adaptive levels, status badge. Every leading/divergence
+     construct among them was built, measured, and failed; the 🧪 CSV log
+     layer that measured them is in git history, not in the file
+   - NO `alertcondition()` — deliberate (2026-09-25): the pane is read, not
+     subscribed to. Do not add alerts back
+   - Uses AI.md's sanctioned global-inputs exception (inputs front-loaded
+     because the settings dialog orders by first `input()` appearance); the
+     constraint is documented in the file header as required
 
 2. **`fundamental-view-indicator.pine`**
    - Displays comprehensive fundamental data table
@@ -1198,18 +1258,93 @@ enum TrendDir
       `input.text_area()`; the chart serves the most recent row the current bar
       has reached, so bar replay walks the session forward
     - STATIC BY DESIGN: nothing changes until a new row is served. Every
-      change-gate (`gexLastDrawnBar`, `gexNeedsRefresh`, `gexActiveIndex`, the
+      change-gate (`opmLastDrawnBar`, `opmNeedsRefresh`, `opmActiveIndex`, the
       level scalars, the tooltip strings) is `varip` — a plain `var` gate rolls
-      back per realtime tick and re-runs the whole pipeline. `gexLastDataText`
+      back per realtime tick and re-runs the whole pipeline. `opmLastDataText`
       is deliberately NOT varip: the parse writes UDT fields, which roll back
       anyway, so it must re-run until it lands on a confirmed execution
     - Drawing pool is minted once, blank, on `barstate.islastconfirmedhistory`;
       the render is `set_*` only
-    - Known debt: eight slot-keyed parallel arrays + 29 index constants where
-      one `array<GexSlot>` belongs
+    - Every drawing lives on the TIME axis (`xloc.bar_time`), not on bar
+      indices, so the map can be clamped to a minute on the clock: two shared
+      edges (`opmMapLeft`/`opmMapRight`) feed every line, label and box. The
+      right edge stops at the feed's own `EXPTIME` and pins there once passed —
+      levels run to the expiration line, freeze, and stay dimmed through the
+      post-market, the overnight and the next pre-market until a row with a
+      LATER expiry is served. `opmAfterExpiry` is an absolute timestamp test;
+      a minute-of-day test un-dims a spent map at midnight
+    - No `plot()` / `alertcondition()`, so it is NOT Pine Screener eligible —
+      correctly, a paste-driven map has nothing to screen on
+    - Carries the repo's UDT-over-parallel-arrays pattern: one
+      `array<OpmSlot>` (code, note, hoverText, price, visible, ownsStrike,
+      padChars, cluster) replaced eight slot-keyed parallel arrays
+    - Section prefix is `opm`, not `gex` (renamed 2026-09-25). Gamma is one
+      LAYER of this map, beside delta, vega, open interest, volume, max pain
+      and the expected move — naming the whole file after it mislabelled six
+      of the seven. The letters `gex` now appear only where gamma exposure is
+      genuinely meant: `opmTotalGex` and `opmAbsGex1-3`. Three names were wrong
+      past the prefix and were fixed with it: `gexCall1`→`opmCallWall1` (a wall,
+      not a call), `gexAbs1`→`opmAbsGex1` ("abs" of what?), and
+      `gexRange*`→`opmExpMove*` (its own input group says Expected Move).
+      Feed-facing strings were deliberately NOT renamed — the parser still
+      matches the row's own keys `"GEX"`, `"GEXNET"`, `"DEX1"`, `"VEX1"`
+    - `opmExtendBars` (📏 Structure) sets the right overhang in bars. It
+      lengthens the run past the last bar and nothing else: the expiration
+      clamp still wins, so no level can be pushed past its contract's last
+      trading minute however large the input is set
 
 11. **`quote-window.pine`**
-    - Table-based quote panel with regime/bifurcation/delta readouts
+    - Intermarket day-type panel: 4 cash indexes, 4 e-mini futures, the 11
+      sector ETFs, each row a net % change, sorted descending. Two requests per
+      symbol (38 total, plus a daily ATR): `[close[1], open]` daily under
+      `lookahead_on` (neither leaks — both are settled before the bar exists,
+      and lookahead is REQUIRED there or `close[1]` is two days stale), and the
+      current price at the CHART timeframe under `lookahead_off`. Replay-,
+      history- and live-accurate; nothing repaints
+    - Every request goes through `ticker.modify(session = session.regular)`.
+      Plain symbols inherit the CHART's session, so with Extended Hours on a
+      daily `open` becomes the 04:00 print and `close[1]` the 20:00 one — the
+      two baselines silently changed meaning per user. Caveat: "regular
+      session" for CME futures is exchange-defined, not 09:30-16:00
+    - Baseline modes: vs prior close (default), vs today's open, Both, and
+      `vs SPY (relative)` which rebases every row to `row% − SPY%` on UDT
+      `.copy()`s so the verdict engine still reads untouched originals
+    - TWO independently-toggled day-type rows, **both OFF by default**, either
+      of which can render alone as a corner banner:
+      · **Regime Verdict** — COMMITTED / MILD / LOW CONV / BIFURCATED /
+        DATA GAP. Severity is asymmetric and must stay that way: INDEXES are a
+        hard veto (any mix of red and green), SECTORS are GRADED (>25% minority
+        caps the verdict below COMMITTED; only a near-50/50 split vetoes).
+        Commodity sectors are discounted ONLY when on the minority side. Tiers
+        0.2 noise (inclusive, so colour counts are strict >) / 0.5 serious /
+        1.0 committed
+      · **📐 Opening Range** — the chart symbol's first-N-minute range ÷ daily
+        ATR against its own trailing EMA baseline → WIDE / NORMAL / NARROW.
+        Self-calibrating because fixed cutoffs mis-bucket across symbols.
+        Scales TARGETS, never position size
+    - **MEASURED, 2026-09-27, SPY + QQQ, 1,041 sessions each — read this before
+      "improving" the verdict.** It has ZERO directional content (with- vs
+      against-verdict excursion ratio 1.02/1.01). As a SIZE forecast the
+      eleven sectors are beaten by the chart's own opening range: opening-range
+      width alone R²=0.074/0.048, sector magnitude + agreement together 0.015,
+      and the sectors add +0.001 on top. Sector AGREEMENT alone scores 0.0003.
+      The cash↔futures pair check fires 0 times in 434 RTH sessions (SPY/ES
+      r=0.9845) because ETF and future are arbitraged to basis points, and
+      inverts outside RTH where cash does not tick. The verdict is kept for
+      fidelity, not because it contributes
+    - Futures continuous contracts are not back-adjusted, so `close[1]` spans
+      the quarterly roll. The roll window is COMPUTED (second Thursday of
+      Mar/Jun/Sep/Dec, derived from the bar's own day-of-week/day-of-month,
+      exact 2024-2030) and suppression is gated on a clean sweep of every
+      comparable pair
+    - The `🧪` CSV log layer that produced those measurements was STRIPPED
+      2026-09-27 after the study closed (same doctrine as macd-waves' debug
+      layer). Restore it from git history before any re-tuning pass rather
+      than rebuilding it — it logged one row per session with every symbol's
+      raw percentage on BOTH baselines, which is what made verdict variants
+      rebuildable offline without a re-export
+    - Uses AI.md's sanctioned global-inputs exception; the constraint is
+      documented in the file header
 
 12. **`ticker-tape.pine`**
     - Realtime time-and-sales tape + block-trade engine on
@@ -1295,8 +1430,13 @@ Before submitting any code changes, verify:
       documented exceptions: variadics, `color.t`, casts, `max_bars_back`)
 - [ ] ALL variables have meaningful names (no single letters except standard abbreviations)
 - [ ] Helper functions prefixed with `f_`
-- [ ] EVERY input has `group = GROUP_*` AND `tooltip =` (an inline pair may
-      share one tooltip on the pair)
+- [ ] EVERY input has `group = GROUP_*`, and a `tooltip =` wherever the
+      tooltip says something the title does not (an inline pair may share one
+      tooltip on the pair). NO PURE-RESTATEMENT TOOLTIPS (Henry, 2026-07-31):
+      a Show/Color/Width/Style quartet inside a `➖ Zero Line` group needs no
+      "Show the zero baseline." — the group name already said it. Titles must
+      not repeat their group name either. Missing tooltips on that class of
+      input are correct, not debt
 - [ ] Tables created once with `var`, populated in `barstate.islastconfirmedhistory`
       or `barstate.islast`; per-event drawings minted ONLY on confirmed ticks
 - [ ] No `var`-guarded `alert()`/`log.*` on realtime paths (rollback re-fires
@@ -1384,5 +1524,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-08-28
+**Last Updated**: 2026-09-24
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`
