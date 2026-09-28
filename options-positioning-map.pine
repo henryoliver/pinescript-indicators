@@ -76,6 +76,8 @@ type OpmSnapshot
     float vix
     float totalGex
     float netOverGross
+    float chainGex
+    float zeroDteShare
     float vanna
     float charm
     float pocketUpLow
@@ -84,6 +86,7 @@ type OpmSnapshot
     float pocketDownHigh
     string expiry
     string expiryTime
+    string oiSource
     string regime
 
 // One drawable level. These eight fields were eight parallel arrays indexed by
@@ -132,18 +135,14 @@ const string OPM_TIP_VEX = "🌊 V1-V3 — VEGA EXPOSURE\nStrikes whose hedging 
 const string OPM_TIP_DEX = "🧭 D1-D3 — DELTA EXPOSURE\nWhere directional exposure sits right now.\n\n👀 A filter, not a trigger: it shows where the book stands, gamma shows how it reacts.\n🚫 Never a bull/bear signal on its own."
 const string OPM_TIP_HP = "👑 HP — HEDGING PEAK\nThe single strike carrying the most dealer gamma anywhere.\n\n🧲 The day's likeliest pin, strongest into the close.\n💪 Conviction is highest when HP, MP and a wall line up.\n🚫 Weak when an air pocket sits between price and it."
 const string OPM_TIP_MP = "📌 MP — MAX PAIN\nThe strike where the most option value expires worthless.\n\n🧲 A pin reference into expiry, not a level to trade on its own.\n💪 Build the day around it only when it agrees with HP and a wall."
-const string OPM_TIP_OI = "🏦 OI LEVELS\nWhere contracts are HELD — positioning carried overnight.\n\n👀 Slow-moving structure, updated once a day by OCC.\n🚫 Not today's flow: read with the volume levels."
+const string OPM_TIP_OI = "🏦 OI LEVELS\nWhere contracts are HELD — positioning carried overnight.\n\n👀 Slow-moving structure, updated once a day by the clearing house.\n🚫 Not today's flow: read with the volume levels."
 const string OPM_TIP_VOL = "⚡ VOLUME LEVELS\nWhere contracts are CHANGING HANDS today.\n\n👀 Fresh intent versus OI's inherited positioning.\n💪 Volume landing on an OI level is the strongest confirmation on the map."
 const string OPM_TIP_EXPMOVE = "📐 EXPECTED MOVE\nThe 1σ band options are pricing into the mapped expiry's close.\n\n✅ Positive gamma: trading inside the band fits the regime.\n⚠️ A wall inside the band is reachable today; one outside it is not.\n🚫 Not a ceiling — price closes outside it roughly 1 day in 5."
 
 string opmDataText = input.text_area(defval = "", title = "Options Data", group = GROUP_OPM_DATA, tooltip = "📋 Paste one LADDER row, or a whole session — the watcher's log pastes as-is.\n\n⏪ Each bar is served the newest row it has reached, so replay walks the session forward.\n💡 `make copy` carries the last two sessions: overnight map + today.")
 
-bool opmShowPreMarket = input.bool(defval = true, title = "Show Levels Before The Bell", group = GROUP_OPM_SESSION, tooltip = "🌗 Before the bell the map is built from last night's open interest with nothing traded against it yet.\n\n✅ A real read of the board the day opens into.\n🚫 Not a measurement of today's flow — no 0DTE volume exists until the open.")
-bool opmShowMapPanel = input.bool(defval = true, title = "Dealer Map Panel Before The Bell", group = GROUP_OPM_SESSION, tooltip = "📊 The morning read in four lines: ① regime ② flip ③ walls ④ book — the order each reading depends on the one above it.\n\n⚠️ Built from the last pull before the open, not from yesterday's close.\n\n⏰ Disappears at the bell — after that the levels are the map.")
-color opmPanelBgColor = input.color(defval = color.new(color = NORD0, transp = 8), title = "Panel Fill / Border", group = GROUP_OPM_SESSION, inline = "panel_style")
-color opmPanelBorderColor = input.color(defval = color.new(color = NORD3, transp = 0), title = "", group = GROUP_OPM_SESSION, inline = "panel_style")
-int opmPanelTextSize = input.int(defval = 16, title = "Panel Text Size", options = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24], group = GROUP_OPM_SESSION, inline = "panel_style", tooltip = "The card's fill, its frame colour, and its text size. Pine draws table corners square — there is no rounded-corner option — so the card reads as a panel, not a pill.")
-int opmDimPct = input.int(defval = 55, title = "Dim Outside The Session (%)", minval = 0, maxval = 90, group = GROUP_OPM_SESSION, tooltip = "🌗 How far to fade every level before the bell and after the mapped expiry stops trading.\n\n👀 Dimmed, not hidden: inherited or spent levels are still worth seeing.\n⏸️ A spent map stays frozen at the expiration line and dimmed — through the post-market, the overnight and the next pre-market — until a newer expiry is pasted.\n0 = no fading.")
+bool opmShowPreMarket = input.bool(defval = true, title = "Show Levels Before The Bell", group = GROUP_OPM_SESSION, tooltip = "🌗 The board the day opens into, drawn at full strength — the morning map is the day's best map, not a provisional one.\n\n✅ The pre-market 0DTE chain is fully quoted and already trading; verified against Cboe's own greeks, every level reproduces.\n⚠️ Needs EXTENDED HOURS on the chart. With them off there are no pre-market bars, so a row stamped this morning is never reached and the map draws EMPTY until 09:30.")
+int opmDimPct = input.int(defval = 55, title = "Dim After Expiry (%)", minval = 0, maxval = 90, group = GROUP_OPM_SESSION, tooltip = "🌗 How far to fade every level once the mapped expiry stops trading.\n\n👀 Dimmed, not hidden: a spent map is still worth seeing.\n⏸️ It stays frozen at the expiration line and dimmed — through the post-market, the overnight and the next pre-market — until a row carrying a newer expiry is pasted.\n\n🚫 The PRE-MARKET map is never dimmed: it is a live reading of today's board, not an inherited one.\n0 = no fading.")
 bool opmShowExpiryLine = input.bool(defval = true, title = "Expiration Line", group = GROUP_OPM_STRUCTURE, tooltip = "⏰ A vertical line at the minute the mapped expiry stops trading, read from the feed — 16:15 ET for QQQ/SPY/IWM, 16:00 for most equity options. Carries the regime colour.\n\n⏸️ Every level runs up to this line and stops there: past it the map is frozen and dimmed, not extended.\n\n⚠️ 0DTE-dominated structure dissolves here; monthly-backed structure persists for days.")
 int opmExtendBars = input.int(defval = 22, title = "Extend Levels Right (Bars)", minval = 0, maxval = 500, group = GROUP_OPM_STRUCTURE, tooltip = "↔️ How far every line and box runs past the last bar, measured in bars so it holds at any zoom and on any timeframe.\n\n⏰ The expiration line still wins: a level never draws past the minute its contract stops trading, however large this is set. Raising it lengthens the overhang up to that line and nothing more.\n\n0 stops every level exactly at the last bar.")
 bool opmShowCallWalls = input.bool(defval = true, title = "Call Walls (C1-C3)", group = GROUP_OPM_STRUCTURE, inline = "calls")
@@ -254,7 +253,6 @@ var label opmRegimeLabel = na
 var box opmExpMoveBox = na
 var box opmPocketUpBox = na
 var box opmPocketDownBox = na
-var table opmMapPanel = table.new(position = position.top_right, columns = 1, rows = 7, bgcolor = opmPanelBgColor, border_width = 0, frame_width = 1, frame_color = opmPanelBorderColor)
 var box opmFlipBox = na
 var line opmExpiryLine = na
 var array<OpmSnapshot> opmSnapshots = array.new<OpmSnapshot>()
@@ -317,6 +315,8 @@ varip float opmHV30 = na
 varip float opmVIX = na
 varip float opmTotalGex = na
 varip float opmNetOverGross = na
+varip float opmChainGex = na
+varip float opmZeroDteShare = na
 varip float opmVanna = na
 varip float opmCharm = na
 varip float opmPocketUpLow = na
@@ -341,6 +341,7 @@ varip float opmExpMoveLow = na
 varip float opmExpMoveHigh = na
 varip string opmExpiry = ""
 varip string opmExpiryTime = ""
+varip string opmOISource = ""
 varip string opmRegime = ""
 
 f_opmSafeFloat(string rawText) =>
@@ -393,7 +394,7 @@ if opmShouldParse
         int rowHour = 0
         int rowMinute = 0
 
-        OpmSnapshot snapshot = OpmSnapshot.new(stamp = 0, callWall1 = na, callWall2 = na, callWall3 = na, flip = na, flipLow = na, flipHigh = na, putWall1 = na, putWall2 = na, putWall3 = na, absGex1 = na, absGex2 = na, absGex3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, maxPain = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, expMoveLow = na, expMoveHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, totalGex = na, netOverGross = na, vanna = na, charm = na, pocketUpLow = na, pocketUpHigh = na, pocketDownLow = na, pocketDownHigh = na, expiry = "", expiryTime = "", regime = "")
+        OpmSnapshot snapshot = OpmSnapshot.new(stamp = 0, callWall1 = na, callWall2 = na, callWall3 = na, flip = na, flipLow = na, flipHigh = na, putWall1 = na, putWall2 = na, putWall3 = na, absGex1 = na, absGex2 = na, absGex3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, maxPain = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, expMoveLow = na, expMoveHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, totalGex = na, netOverGross = na, chainGex = na, zeroDteShare = na, vanna = na, charm = na, pocketUpLow = na, pocketUpHigh = na, pocketDownLow = na, pocketDownHigh = na, expiry = "", expiryTime = "", oiSource = "", regime = "")
 
         for tokenIndex = 3 to array.size(id = lineTokens) - 1
             array<string> keyValueParts = str.split(string = str.trim(source = array.get(id = lineTokens, index = tokenIndex)), separator = ":")
@@ -461,6 +462,10 @@ if opmShouldParse
                 snapshot.totalGex := fieldValue
             else if fieldKey == "GEXNET"
                 snapshot.netOverGross := fieldValue
+            else if fieldKey == "GEXCHAIN"
+                snapshot.chainGex := fieldValue
+            else if fieldKey == "DTE0"
+                snapshot.zeroDteShare := fieldValue
             else if fieldKey == "VANNA"
                 snapshot.vanna := fieldValue
             else if fieldKey == "CHARM"
@@ -499,6 +504,8 @@ if opmShouldParse
                 snapshot.expiry := fieldText
             else if fieldKey == "EXPTIME"
                 snapshot.expiryTime := fieldText
+            else if fieldKey == "OISRC"
+                snapshot.oiSource := fieldText
             else if fieldKey == "REGIME"
                 snapshot.regime := fieldText
 
@@ -575,6 +582,8 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmVIX := na
             opmTotalGex := na
             opmNetOverGross := na
+            opmChainGex := na
+            opmZeroDteShare := na
             opmVanna := na
             opmCharm := na
             opmPocketUpLow := na
@@ -596,6 +605,7 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmExpMoveHigh := na
             opmExpiry := ""
             opmExpiryTime := ""
+            opmOISource := ""
             opmRegime := ""
         else
             OpmSnapshot active = array.get(id = opmSnapshots, index = opmSelectedIndex)
@@ -624,6 +634,8 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmVIX := active.vix
             opmTotalGex := active.totalGex
             opmNetOverGross := active.netOverGross
+            opmChainGex := active.chainGex
+            opmZeroDteShare := active.zeroDteShare
             opmVanna := active.vanna
             opmCharm := active.charm
             opmPocketUpLow := active.pocketUpLow
@@ -645,6 +657,7 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmExpMoveHigh := active.expMoveHigh
             opmExpiry := active.expiry
             opmExpiryTime := active.expiryTime
+            opmOISource := active.oiSource
             opmRegime := active.regime
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -671,21 +684,29 @@ string opmExpiryClock = str.length(string = opmExpiryTime) == 4 ? opmExpiryTime 
 int opmExpiryStamp = str.length(string = opmExpiry) == 8 ? timestamp(timezone = OPM_DATA_TIMEZONE, year = int(f_opmSafeFloat(rawText = str.substring(source = opmExpiryDate, begin_pos = 0, end_pos = 4))), month = int(f_opmSafeFloat(rawText = str.substring(source = opmExpiryDate, begin_pos = 4, end_pos = 6))), day = int(f_opmSafeFloat(rawText = str.substring(source = opmExpiryDate, begin_pos = 6, end_pos = 8))), hour = int(f_opmSafeFloat(rawText = str.substring(source = opmExpiryClock, begin_pos = 0, end_pos = 2))), minute = int(f_opmSafeFloat(rawText = str.substring(source = opmExpiryClock, begin_pos = 2, end_pos = 4))), second = 0) : na
 // Before the bell means the bar sits in THIS symbol's own pre-market, read from
 // the chart's session — never a hardcoded 09:30 ET, which silently defines the
-// morning by US equity hours for every other symbol the map is loaded on. The
-// close end stays feed-driven (the option's own EXPTIME) because the contract
-// expires on ET regardless of what the chart is showing.
-// With extended hours off there are no pre-market bars, so this is simply never
-// true and the pre-bell layer stays out of the way.
+// morning by US equity hours for every other symbol the map is loaded on.
+// ⚠️ It also gates whether pre-market rows are SERVED at all: a row is matched
+// to a bar by time, so on a chart with extended hours OFF the last bar before
+// 09:30 is the PREVIOUS session's close and a row stamped this morning is still
+// in the future — nothing is selected and the map draws empty, not dimmed.
+// Extended hours must be on to see a pre-bell map.
 bool opmBeforeBell = session.ispremarket
 // The minute of the day is the fallback for a row that names no expiry DATE at
 // all: a map with no end is still better read as spent after the close.
 bool opmAfterExpiry = na(opmExpiryStamp) ? opmBarMinutes >= opmExpiryMinutes : time >= opmExpiryStamp
-bool opmOutsideSession = opmBeforeBell or opmAfterExpiry
 
-// Fade rather than hide: outside the session these levels are inherited or
-// spent, and the distinction is worth showing rather than blanking.
+// Fade marks a map as SPENT, and only a map past its own expiry is spent.
+//
+// The pre-bell map used to fade too, on the theory that overnight open interest
+// with nothing traded against it is a weaker reading. Measured against Cboe's
+// published greeks on 2026-09-28 that theory was wrong: the pre-market 0DTE
+// chain is fully two-sided and already trading (88/88 QQQ legs within ±3% of
+// spot, ATM 1.48/1.50 on 49k contracts), and every level in the row reproduced
+// Cboe's own numbers — flip to three decimals, max pain and put-wall ranking
+// exactly. The morning map is the day's best map, not a provisional one, so it
+// now draws at full strength and only the post-expiry map is dimmed.
 f_opmFade(color source) =>
-    na(source) or not opmOutsideSession or opmDimPct == 0 ? source : color.new(color = source, transp = math.min(100, color.t(source) + opmDimPct))
+    na(source) or not opmAfterExpiry or opmDimPct == 0 ? source : color.new(color = source, transp = math.min(100, color.t(source) + opmDimPct))
 
 // One left edge and one right edge for every line, label and box on the map,
 // both in TIME: the expiry is a minute on the clock and a bar index cannot be
@@ -738,11 +759,6 @@ f_opmArm(int slotIndex, float levelPrice, bool isVisible, color tone, int lineWi
     slot.width := lineWidth
     slot.lineStyle := lineStyle
     slot.drawsLine := drawsLine
-
-f_opmPanelRow(int rowIndex, string rowText, color rowTone) =>
-    // Padded with spaces because a Pine table cell has no padding property and
-    // the frame would otherwise sit flush against the text.
-    table.cell(table_id = opmMapPanel, column = 0, row = rowIndex, text = rowText == "" ? "" : "  " + rowText + "  ", text_color = rowTone, text_size = opmPanelTextSize, text_halign = text.align_left, bgcolor = OPM_HIDDEN)
 
 // Everything this needs is already on the slot — price, name, queue position,
 // tooltip and pen — so it takes the index alone and the draw pass becomes one
@@ -859,7 +875,25 @@ if opmShouldRedraw
         string forceLine = na(opmNetOverGross) ? "" : "\nOne-sidedness " + str.tostring(value = opmNetOverGross, format = "#.##") + " of gross" + (math.abs(number = opmNetOverGross) < 0.15 ? " — BALANCED: the regime has little force behind it and is one small move from flipping. Size down and stop selling premium." : " — the regime has real weight behind it.")
         string vannaLine = na(opmVanna) ? "" : "\nVanna " + str.tostring(value = opmVanna, format = "#.##") + "bn per vol point — " + (opmVanna >= 0 ? "falling IV tends to add dealer BUYING, an IV spike tends to add selling." : "falling IV tends to add dealer SELLING.")
         string charmLine = na(opmCharm) ? "" : "\nCharm " + str.tostring(value = opmCharm, format = "#.##") + "bn per day — " + (opmCharm < 0 ? "a late-day BUY lean builds into the close." : "a late-day SELL lean builds into the close.") + " Strongest in the last 90 minutes, gone after the OPEX roll."
-        opmNote := opmNote + "\n\n📐 BOOK STRUCTURE\nNet dealer gamma " + str.tostring(value = opmTotalGex, format = "#.###") + "bn per 1% move — " + bookSide + priceSide + "." + agreement + forceLine + vannaLine + charmLine + "\n\n⚠️ Vanna and charm are sensitivities of an assumed book, not measured flows."
+        // What this map COVERS, stated in numbers. Every level here is the 0DTE
+        // book; a whole-chain dashboard maps a different, larger book and will
+        // name different walls for the same symbol on the same morning — on
+        // 2026-09-28 ours read QQQ ceiling 750 / floor 738 off 15% of a 30.1bn
+        // chain while a whole-chain read gave 760 / 730. Neither is wrong, and
+        // the only way to know that from the chart is to print the share.
+        string scopeLine = (na(opmZeroDteShare) or na(opmChainGex)) ? "" : "\nScope: this map is the 0DTE book — " + str.tostring(value = opmZeroDteShare, format = "#") + "% of a " + str.tostring(value = opmChainGex, format = "#.#") + "bn gross chain." + (opmZeroDteShare >= 20 ? " 0DTE dominates today: these levels carry the day." : " Most of the chain's gamma sits in LATER expiries, so a whole-chain map will name walls further out — expect its ceiling above C1 and its floor below P1.")
+        opmNote := opmNote + "\n\n📐 BOOK STRUCTURE\nNet dealer gamma " + str.tostring(value = opmTotalGex, format = "#.###") + "bn per 1% move — " + bookSide + priceSide + "." + agreement + forceLine + scopeLine + vannaLine + charmLine + "\n\n⚠️ Vanna and charm are sensitivities of an assumed book, not measured flows."
+
+    // Where the open interest came from. The feed names it only when it is NOT
+    // the live broker book, so an empty string is the normal case and any value
+    // at all is the exception worth printing. Cboe's chain in particular is the
+    // PREVIOUS session's open interest, which on a 0DTE expiry is the one
+    // number that moves most — a map built on it is describing yesterday's
+    // board. The tooltip used to assert "updated once a day by OCC" whatever
+    // the row said; now it reports what the row actually carries.
+    string opmOILine = opmOISource == "" ? "" : (str.contains(source = str.upper(source = opmOISource), str = "CBOE") ? "\n\n⚠️ Source: " + opmOISource + " — this is the PREVIOUS session's open interest, not last night's. On a 0DTE expiry that is the number that moves most: treat every OI level as provisional." : "\n\n👀 Source: " + opmOISource + " — cleared open interest, fixed overnight.")
+    for oiSlot = OPM_SLOT_NCOI to OPM_SLOT_ABOI
+        f_opmSetNote(slotIndex = oiSlot, noteText = OPM_TIP_OI + opmOILine)
 
     opmVexTooltip := OPM_TIP_VEX + opmNote
     opmFlipTooltip := OPM_TIP_FLIP + opmNote
@@ -1087,68 +1121,5 @@ if barstate.islast
     color opmServedRegimeColor = opmRegime == "POSITIVE" ? NORD8 : opmRegime == "NEGATIVE" ? NORD11 : NORD4
     color opmLiveRegimeColor = na(opmFlip) ? opmServedRegimeColor : math.abs(number = close - opmFlip) <= opmFlipBand ? NORD4 : close > opmFlip ? NORD8 : NORD11
     color opmRegimeColor = f_opmFade(source = opmSymbolVisible ? opmLiveRegimeColor : opmServedRegimeColor)
-    // ── Dealer map, before the bell ────────────────────────────────────────
-    // The morning board, read out in words. Repainted on every islast tick
-    // rather than on redraw: a table cell rolls back on an uncommitted tick, so
-    // anything gated on "the data changed" blanks itself mid-bar.
-    bool opmPanelOn = opmShowMapPanel and opmBeforeBell and not na(opmFlip)
-    // The table object exists whether or not it has anything to say, and a
-    // table with a frame draws that frame around an empty grid. Blanking the
-    // rows is not enough — the CHROME has to go with them, or the morning panel
-    // leaves an empty box in the corner for the rest of the session. Set on
-    // every islast tick, like the rows, and for the same rollback reason.
-    table.set_bgcolor(table_id = opmMapPanel, bgcolor = opmPanelOn ? opmPanelBgColor : OPM_HIDDEN)
-    table.set_frame_color(table_id = opmMapPanel, frame_color = opmPanelOn ? opmPanelBorderColor : OPM_HIDDEN)
-    for panelRow = 0 to 6
-        f_opmPanelRow(rowIndex = panelRow, rowText = "", rowTone = OPM_HIDDEN)
-
-    if opmPanelOn
-        // Read order is REGIME -> FLIP -> WALLS -> BOOK, top to bottom, because
-        // that is the order the readings depend on each other in: the regime
-        // says which playbook applies, the flip is the line that decides the
-        // regime, and the walls are only tradable once you know which side of
-        // it you are on. Each row names the mechanism before the action —
-        // "dealers add to moves" earns "trade the break" in a way the bare
-        // instruction does not.
-        bool opmLongGamma = opmRegime == "POSITIVE" or (opmRegime == "" and not na(opmTotalGex) and opmTotalGex >= 0)
-        color opmPanelTone = opmRegime == "NEUTRAL" ? NORD4 : opmLongGamma ? NORD8 : NORD11
-        string opmRegimeName = opmRegime == "NEUTRAL" ? "ON THE FLIP" : opmLongGamma ? "POSITIVE GAMMA" : "NEGATIVE GAMMA"
-        string opmRegimeRead = opmRegime == "NEUTRAL" ? "no edge either way → stand aside" : opmLongGamma ? "dealers damp moves → fade the edges" : "dealers add to moves → trade the break"
-
-        string opmCeil = na(opmCallWall1) ? "—" : str.tostring(value = opmCallWall1, format = "#")
-        string opmFloor = na(opmPutWall1) ? "—" : str.tostring(value = opmPutWall1, format = "#")
-
-        // Which side of the flip price sits on IS the regime, so say it rather
-        // than leaving the reader to compare two numbers.
-        string opmFlipSide = close > opmFlip ? "price above → calm holds while it does" : close < opmFlip ? "price below → expect follow-through" : "price on it → the coin is in the air"
-
-        // Does the day's implied move even reach the walls? A wall outside the
-        // band needs a bigger move than options are pricing — so it is context,
-        // not a target.
-        string opmReach = ""
-        if not na(opmExpMoveLow) and not na(opmExpMoveHigh)
-            bool ceilInside = not na(opmCallWall1) and opmCallWall1 <= opmExpMoveHigh
-            bool floorInside = not na(opmPutWall1) and opmPutWall1 >= opmExpMoveLow
-            opmReach := ceilInside and floorInside ? "both in reach today" : ceilInside ? "ceiling in reach, floor is not" : floorInside ? "floor in reach, ceiling is not" : "neither in reach — expect the middle"
-
-        // Where price sits between the walls, as a percentage of the span. A
-        // number beats "near the floor": 32% and 8% are both "near" and mean
-        // very different things.
-        string opmPerch = ""
-        if not na(opmCallWall1) and not na(opmPutWall1) and opmCallWall1 > opmPutWall1
-            float opmSpan = (close - opmPutWall1) / (opmCallWall1 - opmPutWall1) * 100
-            opmPerch := str.tostring(value = math.max(0, math.min(100, opmSpan)), format = "#") + "% up the floor-to-ceiling range"
-
-        string opmBookLine = na(opmTotalGex) ? "" : "net gamma " + str.tostring(value = opmTotalGex, format = "#.##") + "bn"
-        string opmBookRow = opmBookLine == "" ? opmPerch : opmPerch == "" ? opmBookLine : opmBookLine + "  ·  " + opmPerch
-
-        f_opmPanelRow(rowIndex = 0, rowText = syminfo.ticker + " · PRE-MARKET DEALER MAP", rowTone = NORD6)
-        f_opmPanelRow(rowIndex = 1, rowText = "① REGIME  " + opmRegimeName + " — " + opmRegimeRead, rowTone = opmPanelTone)
-        f_opmPanelRow(rowIndex = 2, rowText = "② FLIP    " + str.tostring(value = opmFlip, format = "#.##") + " — " + opmFlipSide, rowTone = NORD4)
-        f_opmPanelRow(rowIndex = 3, rowText = "③ WALLS   " + opmCeil + " ceiling  ·  " + opmFloor + " floor" + (opmReach == "" ? "" : " — " + opmReach), rowTone = NORD4)
-        f_opmPanelRow(rowIndex = 4, rowText = opmBookRow == "" ? "" : "④ BOOK    " + opmBookRow, rowTone = NORD4)
-        f_opmPanelRow(rowIndex = 5, rowText = "", rowTone = OPM_HIDDEN)
-        f_opmPanelRow(rowIndex = 6, rowText = "last pull before the bell · levels take over at the open", rowTone = color.new(color = NORD4, transp = 45))
-
     label.set_textcolor(id = opmRegimeLabel, textcolor = opmSymbolVisible and (opmShowPreMarket or not opmBeforeBell) ? opmRegimeColor : OPM_HIDDEN)
     line.set_color(id = opmExpiryLine, color = opmExpiryVisible ? opmRegimeColor : OPM_HIDDEN)

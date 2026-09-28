@@ -1,0 +1,682 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © henry_oliver
+//
+// KRONOS — clone of TachEon WARP (backtothefuturetrading.com).
+//
+// THE ENGINE, whole:
+//   for each offset d in Source Days:            // CALENDAR days, e.g. {7, 14}
+//       for each swing pivot on calendar day (target − d):
+//           DISCARD THE PRICE, keep (clock minute, LOW→buy | HIGH→sell)
+//   vote over the offsets, alternate buy/sell, project onto the target session
+//
+// Non-repainting by construction: every source day is closed before it is read, and a
+// day's minute list is built once at the rollover and never touched again.
+//
+// ── WHAT IS ESTABLISHED (docs/back-to-the-future/) ──────────────────────────────────────────
+//   Against their PUBLISHED-FOUR-DAYS-AHEAD ES 3m forecast for 2026-08-20, this reproduces
+//   10 of 25 marks TO THE EXACT MINUTE. Empirical shift-null z = +6.9.
+//   · Source days are REAL and identified: 7,14 scores 10 where every non-weekday-aligned
+//     set, and the 8,10 placebo, score 1 against a 0.92 background.
+//   · Their bar stamp is +1 BAR vs TradingView (NinjaTrader stamps the bar CLOSE).
+//   · Swing strength does NOT discriminate — flat 8–11 recall across 4→14 — so it cannot
+//     be recovered by matching marks.
+//   · STILL UNSOLVED: the selection rule. conf=1 takes every mined pivot; theirs is rarer.
+//     We reproduce 40% and invent about as many. The Histogram Guidebook does not contain
+//     it — that document teaches how to TRADE the signals, not how they are generated.
+//
+// Reproducing their output is not the same as the output being worth trading. That second
+// question is closed on QQQ in 03-reproducing-it.md §3h: ~51% ceiling vs a 49.7% baseline.
+//
+// ── THEIR TRADE RULES, from the Histogram Guidebook (V4 draft, Jan 2024) ────────────────────
+//   Signal-with-trend  120 EMA rising → take buys, falling → take sells. Enter on the close
+//                      of the signal candle, stop 1.5 × ATR(7), hold to the next opposite
+//                      signal or exit at 1.5–2.0 R.
+//   Crossover          signal starts the wrong side of the EMA and closes across it — enter
+//                      on that candle's close, stop 1–2 ticks beyond it.
+//   Puncture           price runs through a COUNTER-trend signal's stop line: the expected
+//                      behaviour did not show, so enter 1–2 ticks beyond the line, stop
+//                      beyond the puncture candle, minimum 1:1.
+//   Patterns 8 / 9     a local 4-candle inversion — 3 consecutive lower lows or lower closes
+//                      into a sell (8), 3 higher highs or higher closes into a buy (9);
+//                      trade it as a reversal rather than a continuation.
+//   None of these are implemented here. This file draws the times; the rules are the trader's.
+//
+//@version=6
+indicator(title = "Kronos", shorttitle = "⏳ Kronos", overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧱 CONSTANTS
+// ═════════════════════════════════════════════════════════════════════════════
+// Nord.
+const color NORD3  = #4C566A
+const color NORD10 = #5E81AC
+const color NORD11 = #BF616A
+const color NORD14 = #A3BE8C
+
+const int SELL = 1
+const int BUY  = 0
+
+const string GROUP_ENGINE  = "Engine"
+const string GROUP_DISPLAY = "Display"
+const string GROUP_REF     = "Reference — diff against the vendor"
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎛️ INPUTS
+// ═════════════════════════════════════════════════════════════════════════════
+int swingStrength = input.int(defval = 8, title = "Swing Strength", options = [4,5,6,7,8,9,10,11,12,13,14], group = GROUP_ENGINE, tooltip = "Bars of containment required on EACH SIDE for a pivot to count — the vendor's own first input, and the one thing that sets how many marks a session gets.\n\nHis stated values: 5 on NQ 1-minute, 8 on ES 1-minute, and the TradingView port's status line reads 11 on QQQ 5-minute. Counted in BARS, so a 5-minute chart at 11 is a 55-minute window and produces marks roughly every 40 minutes — which is exactly the spacing observed on his QQQ screens.")
+string sourceDaysRaw = input.string(defval = "7,14", title = "Source Days", group = GROUP_ENGINE, tooltip = "CALENDAR-day offsets, comma separated. Not bar counts, not session counts — calendar days, which is what makes the whole thing legible: 7,14 on a Monday is 'the last two Mondays'.\n\nHis presets, spoken as digit strings: 714 = 7,14 (the default, works on everything) · 123 = 1,2,3 (his NQ setting) · 9 (his ES setting) · 369 = 3,6,9 (rare).\n\nONLY MULTIPLES OF 7 ARE WEEKDAY-COMPLETE. 1,2,3 lands in the weekend on Mondays and Tuesdays, so at confluence 2 those days can never fire — see the KRONOS|REACH line.")
+string calTzIn = input.string(defval = "America/New_York", title = "Calendar Timezone", options = ["Exchange", "America/Chicago", "America/New_York", "UTC"], group = GROUP_ENGINE, tooltip = "The timezone whose MIDNIGHT cuts one calendar day from the next. This is the engine's day boundary, not a display setting.\n\nIt has to match the platform the vendor ran, because a pivot in the hour before their midnight belongs to a different source day than it does to ours. Michael runs NinjaTrader on EASTERN; ES and NQ on TradingView are Chicago instruments, so on those set America/New_York to match him and leave Exchange to match Paul.\n\nOnly the hour straddling midnight can disagree, but on a 24-hour future that hour is live trading.")
+int minAgree = input.int(defval = 1, title = "Min Source Days Agreeing", minval = 1, maxval = 10, group = GROUP_ENGINE, tooltip = "How many DISTINCT source days must show a pivot of the same type at the same clock minute before it is marked. Their unstated 'head and shoulders above everything' threshold.\n\nThis is the selectivity knob and selectivity is the only thing that ever improved the numbers (§3g): 4 marks a session beat 33, which beat 68.")
+int clockTolBars = input.int(defval = 1, title = "Clock Tolerance (bars)", minval = 0, maxval = 15, group = GROUP_ENGINE, tooltip = "How far apart two source pivots can be and still count as the same clock minute.\n\nRead KRONOS|COVER before trusting a large value. At ±2 with four source sessions, a THIRD of every session's minutes clear the bar on coincidence alone; at ±10 it is 96% and the indicator is simply always on.")
+int mergeWinBars = input.int(defval = 0, title = "Merge Window (bars)", minval = 0, maxval = 30, group = GROUP_ENGINE, tooltip = "Two marks of the SAME side closer together than this collapse to the earlier one.\n\nMust stay small — effectively they do not merge at all, and alternation does the thinning. Their 2026-08-20 ES 1-minute list runs 14:16 sell · 14:17 buy · 14:18 sell, so same-side marks come 2 minutes apart and anything above 1 cannot reproduce it. (The 2026-09-28 NQ list had already forced it below 4; the earlier draft's 15 was wrong.)")
+bool alternate = input.bool(defval = true, title = "Enforce Alternation", group = GROUP_ENGINE, tooltip = "Force the sequence to run sell, buy, sell, buy.\n\nNot a guess: all 22 marks on his 2026-09-28 NQ 1-minute chart alternate strictly, with no exception. Either his merge step enforces it or the marks are a swing SEQUENCE rather than a set of mined minutes. Turn it off to see the raw voted minutes.")
+int forecastDays = input.int(defval = 1, title = "Forecast Days Ahead", minval = 0, maxval = 7, group = GROUP_ENGINE, tooltip = "Extra calendar days to project past today. The hard ceiling is min(Source Days) — to compute day T you need day T−d closed — which is why 7,14 is advertised as 'up to one week in advance' and 1,2,3 can only ever see tomorrow.")
+string displayTz = input.string(defval = "America/New_York", title = "Display Timezone", options = ["America/Chicago", "America/New_York", "America/Los_Angeles", "Europe/London", "Exchange"], group = GROUP_DISPLAY, tooltip = "The timezone the mark LABELS are written in. His screens are Central — set America/Chicago to read the same numbers he does, America/New_York to read them as Henry trades them. The engine itself always works in exchange time; this only changes the text.")
+bool showEma = input.bool(defval = true, title = "120 EMA", inline = "ema", group = GROUP_DISPLAY, tooltip = "His trend gate, stated at 6:48: above it take only buy signals, below it take only sell signals. It is the only lagging series in this file.")
+int emaLen = input.int(defval = 120, title = "", inline = "ema", minval = 2, group = GROUP_DISPLAY)
+bool showAtr = input.bool(defval = true, title = "ATR Stop Line", inline = "atr", group = GROUP_DISPLAY, tooltip = "The dashed line off each mark: 1.5 × ATR(7) from the OPEN of the bar the mark fired on. It is a STOP, not a target — 'the software is not based on price' (8:37). Price closing clean through it is his 'puncture trade'; a wick that only pierces it is not.")
+int atrLen = input.int(defval = 7, title = "", inline = "atr", minval = 1, group = GROUP_DISPLAY)
+float atrMult = input.float(defval = 1.5, title = "", inline = "atr", minval = 0.1, step = 0.1, group = GROUP_DISPLAY)
+bool emitLogs = input.bool(defval = true, title = "Emit Pine Logs", group = GROUP_REF, tooltip = "Writes the KRONOS| lines to the Pine editor's Pine Logs tab, once, on the last confirmed historical bar. Every line is pipe-delimited so the whole block pastes back into the notes verbatim.")
+string refDate = input.string(defval = "2026-08-20", title = "Reference Date (YYYY-MM-DD)", group = GROUP_REF, tooltip = "The session the reference lists below belong to. Leave empty to diff against whatever day the chart's last bar is on.")
+string refSellsRaw = input.string(defval = "02:27,03:09,04:54,06:30,07:39,08:42,10:27,11:27,13:12,14:18,15:12,16:06", title = "Reference Sells (HH:MM)", group = GROUP_REF, tooltip = "The vendor's blue marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n06:53,07:06,07:25,07:46,08:11,08:34,08:50,09:02,09:11,09:36,09:47")
+string refBuysRaw = input.string(defval = "02:12,02:51,04:06,05:15,07:18,08:21,09:33,10:51,12:09,13:39,14:45,15:51,16:33", title = "Reference Buys (HH:MM)", group = GROUP_REF, tooltip = "The vendor's white marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n07:03,07:07,07:37,08:04,08:25,08:38,08:58,09:08,09:27,09:43,09:56")
+string refTz = input.string(defval = "America/New_York", title = "Reference Timezone", options = ["America/Chicago", "America/New_York", "Exchange"], group = GROUP_REF, tooltip = "The timezone the reference times are written in. His screens are Central and he states it on the call, so this stays America/Chicago unless you transcribed a converted list.")
+int refTolBars = input.int(defval = 0, title = "Match Tolerance (bars)", minval = 0, maxval = 15, group = GROUP_REF, tooltip = "How close one of our marks must land to one of his to count as reproduced. Raising it inflates the match rate and the chance baseline together — which is the point of printing both.")
+int refShiftBars = input.int(defval = 1, title = "Reference Offset (bars)", minval = -10, maxval = 10, group = GROUP_REF, tooltip = "Added to OUR marks before scoring, to absorb a bar-timestamp convention difference rather than counting it as a miss.\n\nNinjaTrader stamps a bar by its CLOSE, TradingView by its OPEN, so a reference transcribed from his NinjaTrader screens runs one minute later than ours on a 1-minute chart. Set +1 for those. KRONOS|ALIGN prints the histogram that tells you the right value, and KRONOS|STAMP warns when a spike is sitting off zero.")
+bool doSwingSweep = input.bool(defval = true, title = "Sweep Swing Strength", group = GROUP_REF, tooltip = "Scores every swing strength 4..14 against the reference in ONE run. Pivots for all eleven are captured on the same pass, so this costs a little time on the last bar and saves eleven separate runs.\n\nThe row with the highest recall is the vendor's setting for that instrument and interval.")
+bool doSweep = input.bool(defval = true, title = "Sweep Source-Day Sets", group = GROUP_REF, tooltip = "Rebuilds the day's marks once per set below and logs matched / invented / chance for each, so one run fills a whole row of the comparison table. Costs one extra pass per set; leave off for normal charting.")
+string sweepSets = input.string(defval = "7,14 | 7,14,21 | 7,14,21,28 | 1,2,3 | 3,6,9 | 9 | 8,10 | 5,11", title = "Sweep Sets", group = GROUP_REF, tooltip = "Pipe-separated source-day sets. 5,11 is the PLACEBO — neither weekday-aligned nor recent. If it matches his output as well as 7,14 does, the calendar structure contributes nothing.")
+int pastMarks = input.int(defval = 25, title = "Past Marks Shown", minval = 0, maxval = 200, group = GROUP_DISPLAY, tooltip = "How many already-fired marks to keep on the chart, counting back from now. Drawn identically to the future ones — a mark does not change its appearance when it fires, only its level stops moving.")
+int maxFuture = input.int(defval = 5, title = "Future Marks Shown", minval = 1, maxval = 40, group = GROUP_DISPLAY, tooltip = "Their TradingView port shows the next five, rolling. Raise it to see the full projection.")
+int rayBars = input.int(defval = 12, title = "Stop Line Length (bars)", minval = 1, maxval = 200, group = GROUP_DISPLAY)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🧮 HELPERS
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Julian day number — a calendar-exact day counter, immune to DST and to the
+// exchange's UTC offset. Two dates are `d` calendar days apart iff their JDNs are.
+f_jdn(int y, int m, int d) =>
+    int a  = int(math.floor((14 - m) / 12))
+    int yy = y + 4800 - a
+    int mm = m + 12 * a - 3
+    d + int(math.floor((153 * mm + 2) / 5)) + 365 * yy + int(math.floor(yy / 4)) - int(math.floor(yy / 100)) + int(math.floor(yy / 400)) - 32045
+
+f_parseInts(string s) =>
+    array<int> out = array.new<int>(0)
+    string c = str.replace_all(s, " ", "")
+    if str.length(c) > 0
+        array<string> parts = str.split(c, ",")
+        for p in parts
+            if str.length(p) > 0
+                float v = str.tonumber(p)
+                if not na(v)
+                    array.push(out, int(v))
+    out
+
+// "09:35,11:15" → minutes-of-day. Anything unparseable is dropped silently; the
+// count is logged so a typo shows up as a short list rather than as a bad score.
+f_parseTimes(string s) =>
+    array<int> out = array.new<int>(0)
+    string c = str.replace_all(s, " ", "")
+    if str.length(c) > 0
+        array<string> parts = str.split(c, ",")
+        for p in parts
+            array<string> hm = str.split(p, ":")
+            if array.size(hm) == 2
+                float h  = str.tonumber(array.get(hm, 0))
+                float mi = str.tonumber(array.get(hm, 1))
+                if not na(h) and not na(mi)
+                    array.push(out, int(h) * 60 + int(mi))
+    out
+
+f_pad(int v) => (v < 10 ? "0" : "") + str.tostring(v)
+
+f_hhmm(int mins) => f_pad(int(mins / 60)) + ":" + f_pad(mins % 60)
+
+// "2026-08-20" → Julian day number, 0 if unparseable. Lets the diff target a
+// session that is nowhere near the end of the chart.
+f_parseDate(string s) =>
+    int out = 0
+    string c = str.replace_all(s, " ", "")
+    if str.length(c) >= 8
+        array<string> p = str.split(c, "-")
+        if array.size(p) == 3
+            float y = str.tonumber(array.get(p, 0))
+            float m = str.tonumber(array.get(p, 1))
+            float d = str.tonumber(array.get(p, 2))
+            if not na(y) and not na(m) and not na(d)
+                out := f_jdn(int(y), int(m), int(d))
+    out
+
+f_join(array<int> a) =>
+    string s = ""
+    if array.size(a) > 0
+        for [i, v] in a
+            s := s + (i > 0 ? "," : "") + f_hhmm(v)
+    s == "" ? "-" : s
+
+f_tz(string t) => t == "Exchange" ? syminfo.timezone : t
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📍 PIVOT CAPTURE
+// The only market reading in the file. A pivot is confirmed `Swing Strength`
+// bars after it happened, so nothing here can repaint. Its PRICE is kept only to
+// draw with — the engine never reads it.
+// ═════════════════════════════════════════════════════════════════════════════
+var array<int> pvSw  = array.new<int>(0)
+var array<int> pvDay = array.new<int>(0)
+var array<int> pvMin = array.new<int>(0)
+var array<int> pvTyp = array.new<int>(0)
+
+string calTz = f_tz(calTzIn)
+int  calY    = year(time, calTz)
+int  calM    = month(time, calTz)
+int  calD    = dayofmonth(time, calTz)
+int  today   = f_jdn(calY, calM, calD)
+int  curMin  = hour(time, calTz) * 60 + minute(time, calTz)
+int  tfMin   = math.max(1, int(timeframe.in_seconds(timeframe.period) / 60))
+// Every time-axis distance is declared in BARS and converted here. Declaring them in
+// minutes was wrong and silently so: on a 3-minute chart both lists sit on a 3-minute
+// grid, so a ±2-MINUTE match tolerance can only ever match exactly and can never absorb
+// a one-bar error. The 2026-08-20 ES run scored 0/25 for exactly that reason, while the
+// same marks at a one-bar offset scored 11/25 with z=+7.4.
+int  clockTol = clockTolBars * tfMin
+int  mergeWin = mergeWinBars * tfMin
+int  refTol   = refTolBars * tfMin
+int  refShift = refShiftBars * tfMin
+bool isNewDay = today != nz(today[1], today)
+
+// Pivots are captured at EVERY swing strength 4..14 on the same pass, each tagged
+// with the strength that found it. Pine needs the pivot half-window as a literal, so
+// the detectors are written out — but it buys the whole swing sweep in ONE run
+// instead of eleven, which is the difference between a morning and a minute.
+f_push(int sw, float phv, float plv) =>
+    if not na(phv)
+        int t = time[sw]
+        array.push(pvSw,  sw)
+        array.push(pvDay, f_jdn(year(t, calTz), month(t, calTz), dayofmonth(t, calTz)))
+        array.push(pvMin, hour(t, calTz) * 60 + minute(t, calTz))
+        array.push(pvTyp, SELL)
+    if not na(plv)
+        int t = time[sw]
+        array.push(pvSw,  sw)
+        array.push(pvDay, f_jdn(year(t, calTz), month(t, calTz), dayofmonth(t, calTz)))
+        array.push(pvMin, hour(t, calTz) * 60 + minute(t, calTz))
+        array.push(pvTyp, BUY)
+    0
+
+int _p4  = f_push(4,  ta.pivothigh(high, 4, 4),   ta.pivotlow(low, 4, 4))
+int _p5  = f_push(5,  ta.pivothigh(high, 5, 5),   ta.pivotlow(low, 5, 5))
+int _p6  = f_push(6,  ta.pivothigh(high, 6, 6),   ta.pivotlow(low, 6, 6))
+int _p7  = f_push(7,  ta.pivothigh(high, 7, 7),   ta.pivotlow(low, 7, 7))
+int _p8  = f_push(8,  ta.pivothigh(high, 8, 8),   ta.pivotlow(low, 8, 8))
+int _p9  = f_push(9,  ta.pivothigh(high, 9, 9),   ta.pivotlow(low, 9, 9))
+int _p10 = f_push(10, ta.pivothigh(high, 10, 10), ta.pivotlow(low, 10, 10))
+int _p11 = f_push(11, ta.pivothigh(high, 11, 11), ta.pivotlow(low, 11, 11))
+int _p12 = f_push(12, ta.pivothigh(high, 12, 12), ta.pivotlow(low, 12, 12))
+int _p13 = f_push(13, ta.pivothigh(high, 13, 13), ta.pivotlow(low, 13, 13))
+int _p14 = f_push(14, ta.pivothigh(high, 14, 14), ta.pivotlow(low, 14, 14))
+
+// Prune anything older than the deepest offset any configured set could ask for —
+// INCLUDING the sweep sets, and including what a past Reference Date needs. Getting
+// this wrong is silent: the diff just reports a miss because the source session was
+// thrown away before it could be read.
+int refJdn = f_parseDate(refDate)
+if isNewDay and array.size(pvDay) > 0
+    int maxNeed = 21
+    array<int> mainOff = f_parseInts(sourceDaysRaw)
+    if array.size(mainOff) > 0
+        maxNeed := math.max(maxNeed, array.max(mainOff))
+    array<string> sweepList = str.split(str.replace_all(sweepSets, " ", ""), "|")
+    for sset in sweepList
+        array<int> so = f_parseInts(sset)
+        if array.size(so) > 0
+            maxNeed := math.max(maxNeed, array.max(so))
+    int keepFrom = today - maxNeed - 10
+    if refJdn > 0
+        keepFrom := math.min(keepFrom, refJdn - maxNeed - 2)
+    while array.size(pvDay) > 0 and array.get(pvDay, 0) < keepFrom
+        array.shift(pvSw)
+        array.shift(pvDay)
+        array.shift(pvMin)
+        array.shift(pvTyp)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ⚙️ THE ENGINE
+// Given a target day and a set of calendar offsets, return the marks for it.
+// ═════════════════════════════════════════════════════════════════════════════
+f_build(int targetDay, int sw, array<int> offs, int tol, int conf, int merge, bool alt) =>
+    array<int> sMin = array.new<int>(0)
+    array<int> sTyp = array.new<int>(0)
+    array<int> sOff = array.new<int>(0)
+
+    // 1. collect every pivot that sits on one of the source days
+    int nPv = array.size(pvDay)
+    if nPv > 0 and array.size(offs) > 0
+        for i = 0 to nPv - 1
+            int d = targetDay - array.get(pvDay, i)
+            if d > 0 and array.get(pvSw, i) == sw and array.includes(offs, d)
+                array.push(sMin, array.get(pvMin, i))
+                array.push(sTyp, array.get(pvTyp, i))
+                array.push(sOff, d)
+
+    // 2. vote — how many DISTINCT source days show this minute and this side
+    array<int> kMin = array.new<int>(0)
+    array<int> kTyp = array.new<int>(0)
+    array<int> kVot = array.new<int>(0)
+    int nS = array.size(sMin)
+    if nS > 0
+        for i = 0 to nS - 1
+            int mi = array.get(sMin, i)
+            int ty = array.get(sTyp, i)
+            array<int> seen = array.new<int>(0)
+            for j = 0 to nS - 1
+                if array.get(sTyp, j) == ty and math.abs(array.get(sMin, j) - mi) <= tol
+                    int od = array.get(sOff, j)
+                    if not array.includes(seen, od)
+                        array.push(seen, od)
+            int v = array.size(seen)
+            if v >= conf
+                bool dup = false
+                int nk = array.size(kMin)
+                if nk > 0
+                    for k = 0 to nk - 1
+                        if array.get(kTyp, k) == ty and math.abs(array.get(kMin, k) - mi) <= tol
+                            dup := true
+                            if v > array.get(kVot, k)
+                                array.set(kMin, k, mi)
+                                array.set(kVot, k, v)
+                            break
+                if not dup
+                    array.push(kMin, mi)
+                    array.push(kTyp, ty)
+                    array.push(kVot, v)
+
+    // 3. order by clock, then merge same-side neighbours and alternate
+    array<int> oMin = array.new<int>(0)
+    array<int> oTyp = array.new<int>(0)
+    array<int> oVot = array.new<int>(0)
+    int nK = array.size(kMin)
+    if nK > 0
+        array<float> key = array.new<float>(0)
+        for i = 0 to nK - 1
+            array.push(key, array.get(kMin, i) + i * 0.000001)
+        array<int> idx = array.sort_indices(key, order.ascending)
+        int lastSell = -9999
+        int lastBuy  = -9999
+        for p = 0 to nK - 1
+            int ix = array.get(idx, p)
+            int mi = array.get(kMin, ix)
+            int ty = array.get(kTyp, ix)
+            int v  = array.get(kVot, ix)
+            bool skip = ty == SELL ? mi - lastSell <= merge : mi - lastBuy <= merge
+            if not skip and alt and array.size(oMin) > 0
+                int last = array.size(oMin) - 1
+                if array.get(oTyp, last) == ty
+                    skip := true
+                    if v > array.get(oVot, last)
+                        array.set(oMin, last, mi)
+                        array.set(oVot, last, v)
+                        if ty == SELL
+                            lastSell := mi
+                        else
+                            lastBuy := mi
+            if not skip
+                array.push(oMin, mi)
+                array.push(oTyp, ty)
+                array.push(oVot, v)
+                if ty == SELL
+                    lastSell := mi
+                else
+                    lastBuy := mi
+    [oMin, oTyp, oVot]
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 📅 THE DAY'S MARKS
+// Rebuilt once, at the rollover, for today and for each forecast day. A forecast
+// day k can only use offsets deeper than k — its shallower source days have not
+// closed yet — which is the arithmetic behind the advertised horizon.
+// ═════════════════════════════════════════════════════════════════════════════
+array<int> offsets = f_parseInts(sourceDaysRaw)
+int minOffset = array.size(offsets) > 0 ? array.min(offsets) : 0
+
+var array<int>   mkDay = array.new<int>(0)
+var array<int>   mkMin = array.new<int>(0)
+var array<int>   mkTyp = array.new<int>(0)
+var array<int>   mkVot = array.new<int>(0)
+var array<float> mkPrc = array.new<float>(0)
+
+if isNewDay or barstate.isfirst
+    array.clear(mkDay)
+    array.clear(mkMin)
+    array.clear(mkTyp)
+    array.clear(mkVot)
+    array.clear(mkPrc)
+    for k = 0 to forecastDays
+        array<int> usable = array.new<int>(0)
+        if array.size(offsets) > 0
+            for d in offsets
+                if d > k
+                    array.push(usable, d)
+        if array.size(usable) > 0
+            [dm, dt, dv] = f_build(today + k, swingStrength, usable, clockTol, minAgree, mergeWin, alternate)
+            if array.size(dm) > 0
+                for [i, m] in dm
+                    array.push(mkDay, k)
+                    array.push(mkMin, m)
+                    array.push(mkTyp, array.get(dt, i))
+                    array.push(mkVot, array.get(dv, i))
+                    array.push(mkPrc, na)
+
+// Capture the 1.5-ATR stop level as each of today's marks actually fires.
+float atrNow = ta.atr(atrLen)
+if array.size(mkMin) > 0
+    for i = 0 to array.size(mkMin) - 1
+        if array.get(mkDay, i) == 0 and na(array.get(mkPrc, i))
+            int m = array.get(mkMin, i)
+            if m >= curMin and m < curMin + tfMin
+                array.set(mkPrc, i, array.get(mkTyp, i) == SELL ? open + atrMult * atrNow : open - atrMult * atrNow)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎨 DRAWING
+// ═════════════════════════════════════════════════════════════════════════════
+// A mark is a triangle at its 1.5 × ATR(7) stop level and a dashed line running right
+// from it. Nothing else — no vertical rules, no clock labels, no captions, no shading.
+// Past and future marks are drawn identically; the only difference is that a fired mark's
+// level is frozen at the open of the bar it fired on, while a future one tracks price.
+f_markTime(int dayOff, int mins) =>
+    timestamp(calTz, calY, calM, calD + dayOff, 0, 0) + mins * 60000
+
+float emaVal = ta.ema(close, emaLen)
+plot(showEma ? emaVal : na, title = "Trend EMA", color = color.new(NORD10, 35), linewidth = 1)
+
+var array<line>  drawnLines  = array.new<line>(0)
+var array<label> drawnLabels = array.new<label>(0)
+
+if barstate.islast
+    for l in drawnLines
+        line.delete(l)
+    for b in drawnLabels
+        label.delete(b)
+    array.clear(drawnLines)
+    array.clear(drawnLabels)
+
+    int tfMs   = tfMin * 60000
+    int nFuture = 0
+    int nPast   = 0
+
+    if array.size(mkMin) > 0
+        // newest-first over the past, earliest-first over the future
+        for idx = 0 to array.size(mkMin) - 1
+            int i2 = array.size(mkMin) - 1 - idx
+            int k  = array.get(mkDay, i2)
+            int m  = array.get(mkMin, i2)
+            if k == 0 and m <= curMin
+                float prc = array.get(mkPrc, i2)
+                if not na(prc) and nPast < pastMarks
+                    nPast += 1
+                    int   ty = array.get(mkTyp, i2)
+                    color c  = ty == SELL ? NORD11 : NORD14
+                    int   t  = f_markTime(0, m)
+                    array.push(drawnLabels, label.new(x = t, y = prc, text = "", xloc = xloc.bar_time, style = ty == SELL ? label.style_triangledown : label.style_triangleup, color = c, size = size.tiny))
+                    if showAtr
+                        array.push(drawnLines, line.new(x1 = t, y1 = prc, x2 = t + rayBars * tfMs, y2 = prc, xloc = xloc.bar_time, color = color.new(c, 55), style = line.style_dashed, width = 1))
+
+        for i2 = 0 to array.size(mkMin) - 1
+            int k = array.get(mkDay, i2)
+            int m = array.get(mkMin, i2)
+            if (k > 0 or m > curMin) and nFuture < maxFuture
+                nFuture += 1
+                int   ty = array.get(mkTyp, i2)
+                color c  = ty == SELL ? NORD11 : NORD14
+                int   t  = f_markTime(k, m)
+                float y  = ty == SELL ? close + atrMult * atrNow : close - atrMult * atrNow
+                array.push(drawnLabels, label.new(x = t, y = y, text = "", xloc = xloc.bar_time, style = ty == SELL ? label.style_triangledown : label.style_triangleup, color = c, size = size.tiny))
+                if showAtr
+                    array.push(drawnLines, line.new(x1 = t, y1 = y, x2 = t + rayBars * tfMs, y2 = y, xloc = xloc.bar_time, color = color.new(c, 55), style = line.style_dashed, width = 1))
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🪵 LOGS
+// Pipe-delimited, prefixed KRONOS|, emitted once on the last confirmed bar.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Marks of `side` for day offset 0, rendered as minutes in `tz`, for diffing.
+f_dayMinutesIn(array<int> dm, array<int> dt, int side, string tz, int dayOff) =>
+    array<int> out = array.new<int>(0)
+    if array.size(dm) > 0
+        for [i, m] in dm
+            if array.get(dt, i) == side
+                int t = f_markTime(dayOff, m)
+                array.push(out, int(str.tonumber(str.format_time(t, "HH", tz))) * 60 + int(str.tonumber(str.format_time(t, "mm", tz))))
+    out
+
+// Our list runs the whole session; a reference transcribed from screenshots covers
+// only the window those screenshots caught. Scoring outside it counts UNOBSERVED
+// marks as inventions and inflates the chance baseline to nonsense — the 2026-09-28
+// run reported 86 "invented" sells and z = −3.71 for what was in fact a match.
+// So: shift, clip to the reference's own span, then score.
+f_window(array<int> a, int lo, int hi, int shift) =>
+    array<int> out = array.new<int>(0)
+    if array.size(a) > 0
+        for v in a
+            int s = v + shift
+            if s >= lo and s <= hi
+                array.push(out, s)
+    out
+
+// recall = theirs we reproduce (the number that matters). precision = ours with a
+// partner. Chance is the recall two unrelated lists of these densities would give.
+f_score(array<int> ours, array<int> theirs, int tol, int shift, int barMin) =>
+    int nT = array.size(theirs)
+    int lo = nT > 0 ? array.min(theirs) : 0
+    int hi = nT > 0 ? array.max(theirs) : 0
+    array<int> oin = f_window(ours, lo, hi, shift)
+    int nO = array.size(oin)
+    int rec = 0
+    int prc = 0
+    if nT > 0 and nO > 0
+        for r in theirs
+            for m in oin
+                if math.abs(m - r) <= tol
+                    rec += 1
+                    break
+        for m in oin
+            for r in theirs
+                if math.abs(m - r) <= tol
+                    prc += 1
+                    break
+    // Both lists live on the chart's bar grid, so the null has to count SLOTS, not
+    // minutes. Counting minutes on a 3-minute chart understated the chance rate
+    // threefold and printed z=10.7 where the honest figure was ~5.8.
+    float slots = math.max((hi - lo) / barMin + 1.0, 1.0)
+    float reach = (2.0 * tol) / barMin + 1.0
+    float p     = nO > 0 ? 1.0 - math.pow(math.max(1.0 - reach / slots, 0.0), nO) : 0.0
+    float expR = nT * p
+    float sd   = math.sqrt(math.max(nT * p * (1.0 - p), 0.000001))
+    [rec, prc, nO, expR, (rec - expR) / sd]
+
+// THE diagnostic. For each of their marks, the signed gap to our nearest one. A
+// spike at a single non-zero offset is a bar-timestamp convention difference, not
+// a miss — NinjaTrader stamps a bar by its CLOSE, TradingView by its OPEN, so an
+// engine that agrees perfectly still reads one bar early here.
+f_align(array<int> ours, array<int> theirs, int barMin) =>
+    array<int> counts = array.new<int>(21, 0)
+    int n = 0
+    if array.size(ours) > 0 and array.size(theirs) > 0
+        for r in theirs
+            int best = 9999
+            for m in ours
+                if math.abs(m - r) < math.abs(best)
+                    best := m - r
+            int bestBars = int(math.round(best / barMin))
+            if math.abs(bestBars) <= 10
+                array.set(counts, bestBars + 10, array.get(counts, bestBars + 10) + 1)
+                n += 1
+    [counts, n]
+
+f_recallAt(array<int> ours, array<int> theirs, int tol, int shiftMin) =>
+    int n = 0
+    if array.size(ours) > 0 and array.size(theirs) > 0
+        for r in theirs
+            for m in ours
+                if math.abs(m + shiftMin - r) <= tol
+                    n += 1
+                    break
+    n
+
+f_alignStr(array<int> counts) =>
+    string s = ""
+    int mode = 0
+    int modeN = 0
+    for i = 0 to 20
+        int c = array.get(counts, i)
+        if c > 0
+            s := s + (s == "" ? "" : " ") + str.tostring(i - 10) + ":" + str.tostring(c)
+            if c > modeN
+                modeN := c
+                mode := i - 10
+    [s == "" ? "-" : s, mode, modeN]
+
+if emitLogs and barstate.islastconfirmedhistory
+    string tz  = f_tz(displayTz)
+    string rtz = f_tz(refTz)
+    string dstr = str.format_time(time, "yyyy-MM-dd", tz)
+
+    // WHICH SESSION IS BEING SCORED. A Reference Date in the past is rebuilt on
+    // demand, so a forecast from weeks ago can be diffed without Bar Replay and
+    // without scrolling the chart back. Empty Reference Date = the chart's last day.
+    int targetJdn = refJdn > 0 ? refJdn : today
+    int targetOff = targetJdn - today
+    string tstr = str.format_time(f_markTime(targetOff, 0), "yyyy-MM-dd", tz)
+
+    // Scoring a FUTURE session is the strongest test there is — their forecast is
+    // published, ours is derivable, neither has seen the tape. But it only works while
+    // every source day has already closed: target − d must be strictly before today.
+    if array.size(offsets) > 0
+        int notClosed = 0
+        for d in offsets
+            if targetJdn - d >= today
+                notClosed += 1
+        if notClosed > 0
+            log.warning("KRONOS|UNCLOSED|" + str.tostring(notClosed) + " of " + str.tostring(array.size(offsets)) + " source days for " + tstr + " have not closed yet (target − offset lands on today or later). Those offsets contribute nothing and the mark list is short. Use offsets larger than the forecast distance.")
+
+    array<int> todayMin = array.new<int>(0)
+    array<int> todayTyp = array.new<int>(0)
+    if targetOff == 0
+        // reuse the marks already built for today, dropping the forecast days
+        if array.size(mkMin) > 0
+            for i = 0 to array.size(mkMin) - 1
+                if array.get(mkDay, i) == 0
+                    array.push(todayMin, array.get(mkMin, i))
+                    array.push(todayTyp, array.get(mkTyp, i))
+    else
+        [bm, bt, bv] = f_build(targetJdn, swingStrength, offsets, clockTol, minAgree, mergeWin, alternate)
+        todayMin := bm
+        todayTyp := bt
+
+    array<int> ourSellTz = f_dayMinutesIn(todayMin, todayTyp, SELL, rtz, targetOff)
+    array<int> ourBuyTz  = f_dayMinutesIn(todayMin, todayTyp, BUY, rtz, targetOff)
+    int nPiv = array.size(pvDay)
+
+    log.info("KRONOS|HEAD|" + syminfo.ticker + "|" + timeframe.period + "|chartLastDay=" + dstr + "|scoring=" + tstr + "|days=" + sourceDaysRaw + "|swing=" + str.tostring(swingStrength) + "|conf=" + str.tostring(minAgree) + "|tolBars=" + str.tostring(clockTolBars) + "|mergeBars=" + str.tostring(mergeWinBars) + "|alt=" + str.tostring(alternate) + "|labelTz=" + tz + "|calendarTz=" + calTz)
+    log.info("KRONOS|DATA|bars=" + str.tostring(bar_index + 1) + "|pivots=" + str.tostring(nPiv) + "|marksOnScoredDay=" + str.tostring(array.size(todayMin)) + "|horizonDays=" + str.tostring(minOffset))
+    log.info("KRONOS|MARKS|tz=" + rtz + "|sell=" + f_join(ourSellTz))
+    log.info("KRONOS|MARKS|tz=" + rtz + "|buy=" + f_join(ourBuyTz))
+
+    if nPiv == 0
+        log.warning("KRONOS|EMPTY|no pivots retained — load more history than max(Source Days), or lower Swing Strength")
+    else if array.size(mkMin) == 0
+        log.warning("KRONOS|NOSIG|pivots exist but no clock minute cleared conf=" + str.tostring(minAgree) + " at ±" + str.tostring(clockTol) + " — raise tolerance or the calendar alignment is wrong for this symbol")
+
+    // Weekday reachability — the structural blind spot in every non-multiple-of-7 set.
+    if array.size(offsets) > 0
+        int wd = dayofweek(time, calTz)
+        int reach = 0
+        for d in offsets
+            int srcWd = ((wd - 1 - d) % 7 + 7) % 7 + 1
+            if srcWd != dayofweek.saturday and srcWd != dayofweek.sunday
+                reach += 1
+        log.info("KRONOS|REACH|weekday=" + str.tostring(wd) + "|offsetsLandingOnATradingDay=" + str.tostring(reach) + " of " + str.tostring(array.size(offsets)))
+        if reach < minAgree
+            log.warning("KRONOS|BLIND|only " + str.tostring(reach) + " source days are trading days on this weekday but conf=" + str.tostring(minAgree) + " — this weekday can never fire with these offsets")
+
+    // How much of the session a mark could claim by coincidence alone.
+    int nPivSw = 0
+    if nPiv > 0
+        for i = 0 to nPiv - 1
+            if array.get(pvSw, i) == swingStrength
+                nPivSw += 1
+    float pivPerDay = nPivSw > 0 ? nPivSw / math.max(1.0, array.max(pvDay) - array.min(pvDay) + 1.0) : 0.0
+    log.info("KRONOS|COVER|swing=" + str.tostring(swingStrength) + "|pivotsPerDay=" + str.tostring(pivPerDay, "#.0") + "|note=at ±" + str.tostring(clockTol) + "min a random minute clears conf " + str.tostring(minAgree) + " far more often than the mark count suggests — read 03-reproducing-it.md §3f before trusting a wide tolerance")
+
+    // ── the diff ────────────────────────────────────────────────────────────
+    array<int> refSells = f_parseTimes(refSellsRaw)
+    array<int> refBuys  = f_parseTimes(refBuysRaw)
+    bool dateOk = str.length(str.replace_all(refDate, " ", "")) == 0 or refJdn > 0
+    if array.size(refSells) + array.size(refBuys) > 0
+        if not dateOk
+            log.warning("KRONOS|DIFF|skipped — Reference Date \"" + refDate + "\" is not YYYY-MM-DD")
+        else if array.size(todayMin) == 0
+            log.warning("KRONOS|DIFF|skipped — no marks built for " + tstr + ". The source sessions it needs are probably off the left edge: load more history, or the date is a holiday/weekend.")
+        else
+            [aS, nAS] = f_align(ourSellTz, refSells, tfMin)
+            [aB, nAB] = f_align(ourBuyTz, refBuys, tfMin)
+            array<int> aAll = array.new<int>(21, 0)
+            for i = 0 to 20
+                array.set(aAll, i, array.get(aS, i) + array.get(aB, i))
+            [aStr, aMode, aModeN] = f_alignStr(aAll)
+            log.info("KRONOS|ALIGN|nearest-gap histogram (theirs → ours, BARS)|" + aStr + "|mode=" + str.tostring(aMode) + " with " + str.tostring(aModeN) + " of " + str.tostring(nAS + nAB))
+            if aMode != 0 and aModeN >= 5 and refShiftBars == 0
+                log.warning("KRONOS|STAMP|" + str.tostring(aModeN) + " of their marks sit exactly " + str.tostring(aMode) + " BARS from one of ours — that is a bar-timestamp convention offset, not a miss. Set Reference Offset (bars) to " + str.tostring(-aMode) + " and re-run.")
+
+            [rS, pS, oS, eS, zS] = f_score(ourSellTz, refSells, refTol, refShift, tfMin)
+            [rB, pB, oB, eB, zB] = f_score(ourBuyTz, refBuys, refTol, refShift, tfMin)
+            log.info("KRONOS|DIFF|sell|theirN=" + str.tostring(array.size(refSells)) + "|oursInWindow=" + str.tostring(oS) + "|recall=" + str.tostring(rS) + "/" + str.tostring(array.size(refSells)) + "|precision=" + str.tostring(pS) + "/" + str.tostring(oS))
+            log.info("KRONOS|DIFF|buy |theirN=" + str.tostring(array.size(refBuys)) + "|oursInWindow=" + str.tostring(oB) + "|recall=" + str.tostring(rB) + "/" + str.tostring(array.size(refBuys)) + "|precision=" + str.tostring(pB) + "/" + str.tostring(oB))
+            log.info("KRONOS|CHANCE|sell expRecall=" + str.tostring(eS, "#.0") + " z=" + str.tostring(zS, "#.00") + "|buy expRecall=" + str.tostring(eB, "#.0") + " z=" + str.tostring(zB, "#.00") + "|shiftBars=" + str.tostring(refShiftBars) + " tolBars=" + str.tostring(refTolBars) + " (tfMin=" + str.tostring(tfMin) + ")")
+            // THE control. Slide our whole list along the bar grid and re-score at
+            // every offset. Density, the grid, alternation and clustering are all held
+            // fixed; only the alignment moves. If the peak does not stand clear of the
+            // background here, the match is a property of two similar-looking lists and
+            // nothing more — this is the number to quote, not CHANCE.
+            string nullStr = ""
+            array<float> bg = array.new<float>(0)
+            int peakN = 0
+            for k = -12 to 12
+                int n = f_recallAt(ourSellTz, refSells, refTol, k * tfMin) + f_recallAt(ourBuyTz, refBuys, refTol, k * tfMin)
+                nullStr := nullStr + (k == -12 ? "" : " ") + str.tostring(k) + ":" + str.tostring(n)
+                if k == refShiftBars
+                    peakN := n
+                else
+                    array.push(bg, n)
+            float bgMean = array.avg(bg)
+            float bgSd   = math.max(array.stdev(bg), 0.5)
+            log.info("KRONOS|SHIFTNULL|recall at each whole-bar shift|" + nullStr)
+            log.info("KRONOS|SHIFTNULL|applied=" + str.tostring(refShiftBars) + " bar: " + str.tostring(peakN) + "/" + str.tostring(array.size(refSells) + array.size(refBuys)) + "|background mean=" + str.tostring(bgMean, "#.00") + " sd=" + str.tostring(bgSd, "#.00") + " max=" + str.tostring(array.max(bg), "#") + "|z=" + str.tostring((peakN - bgMean) / bgSd, "#.0"))
+            log.info("KRONOS|VERDICT|" + ((zS > 2.0 and zB > 2.0) ? "both sides beat chance by >2σ — the engine is reproducing their output" : (zS > 2.0 or zB > 2.0) ? "one side beats chance by >2σ — not a reproduction yet" : "at or below chance — this configuration does NOT reproduce their output"))
+
+    // ── the sweep ───────────────────────────────────────────────────────────
+    if doSweep and array.size(refSells) + array.size(refBuys) > 0 and dateOk
+        array<string> sets = str.split(str.replace_all(sweepSets, " ", ""), "|")
+        for s in sets
+            if str.length(s) > 0
+                array<int> so = f_parseInts(s)
+                if array.size(so) > 0
+                    [sm, st, sv] = f_build(targetJdn, swingStrength, so, clockTol, minAgree, mergeWin, alternate)
+                    array<int> ss = f_dayMinutesIn(sm, st, SELL, rtz, targetOff)
+                    array<int> sb = f_dayMinutesIn(sm, st, BUY, rtz, targetOff)
+                    [r1, p1, o1, e1, z1] = f_score(ss, refSells, refTol, refShift, tfMin)
+                    [r2, p2, o2, e2, z2] = f_score(sb, refBuys, refTol, refShift, tfMin)
+                    log.info("KRONOS|SWEEP|days=" + s + "|marks=" + str.tostring(array.size(sm)) + "|sell recall " + str.tostring(r1) + "/" + str.tostring(array.size(refSells)) + " of " + str.tostring(o1) + " ours (exp " + str.tostring(e1, "#.0") + ", z " + str.tostring(z1, "#.00") + ")|buy recall " + str.tostring(r2) + "/" + str.tostring(array.size(refBuys)) + " of " + str.tostring(o2) + " ours (exp " + str.tostring(e2, "#.0") + ", z " + str.tostring(z2, "#.00") + ")")
+
+    // ── the swing sweep: one run covers every strength ──────────────────────
+    if doSwingSweep and array.size(refSells) + array.size(refBuys) > 0 and dateOk
+        for sw = 4 to 14
+            [wm, wt, wv] = f_build(targetJdn, sw, offsets, clockTol, minAgree, mergeWin, alternate)
+            array<int> wsell = f_dayMinutesIn(wm, wt, SELL, rtz, targetOff)
+            array<int> wbuy  = f_dayMinutesIn(wm, wt, BUY, rtz, targetOff)
+            [wrS, wpS, woS, weS, wzS] = f_score(wsell, refSells, refTol, refShift, tfMin)
+            [wrB, wpB, woB, weB, wzB] = f_score(wbuy, refBuys, refTol, refShift, tfMin)
+            log.info("KRONOS|SWING|sw=" + str.tostring(sw) + "|marks=" + str.tostring(array.size(wm)) + "|sell " + str.tostring(wrS) + "/" + str.tostring(array.size(refSells)) + " of " + str.tostring(woS) + " ours (z " + str.tostring(wzS, "#.00") + ")|buy " + str.tostring(wrB) + "/" + str.tostring(array.size(refBuys)) + " of " + str.tostring(woB) + " ours (z " + str.tostring(wzB, "#.00") + ")")
