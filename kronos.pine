@@ -3,6 +3,9 @@
 //
 // KRONOS — clone of TachEon WARP (backtothefuturetrading.com).
 //
+// Draws ONE thing: the mined times, as a circle at their 1.5 x ATR(7) level with a line
+// running right. No trend overlay, no oscillator, no price study. Bring your own context.
+//
 // THE ENGINE, whole:
 //   for each offset d in Source Days:            // CALENDAR days, e.g. {7, 14}
 //       for each swing pivot on calendar day (target − d):
@@ -13,13 +16,14 @@
 // day's minute list is built once at the rollover and never touched again.
 //
 // ── WHAT IS ESTABLISHED (docs/back-to-the-future/) ──────────────────────────────────────────
-//   Against their PUBLISHED-FOUR-DAYS-AHEAD ES 3m forecast for 2026-08-20, this reproduces
-//   10 of 25 marks TO THE EXACT MINUTE. Empirical shift-null z = +6.9.
+//   Against three of their PUBLISHED-AHEAD ES 3m forecasts — 2026-08-20, and 2026-09-30 and
+//   2026-10-01 scored BEFORE those sessions traded — this reproduces 37 of 87 marks TO THE
+//   EXACT MINUTE (40% / 54% / 28%). Pooled empirical shift-null z = +12.7.
 //   · Source days are REAL and identified: 7,14 scores 10 where every non-weekday-aligned
 //     set, and the 8,10 placebo, score 1 against a 0.92 background.
 //   · Their bar stamp is +1 BAR vs TradingView (NinjaTrader stamps the bar CLOSE).
-//   · Swing strength does NOT discriminate — flat 8–11 recall across 4→14 — so it cannot
-//     be recovered by matching marks.
+//   · Swing strength peaks at 6–7 pooled over three sessions (45%), falling to 20% by 14.
+//     A single session (2026-08-20) looked flat; two forward sessions did not.
 //   · STILL UNSOLVED: the selection rule. conf=1 takes every mined pivot; theirs is rarer.
 //     We reproduce 40% and invent about as many. The Histogram Guidebook does not contain
 //     it — that document teaches how to TRADE the signals, not how they are generated.
@@ -49,13 +53,25 @@ indicator(title = "Kronos", shorttitle = "⏳ Kronos", overlay = true, max_lines
 // ═════════════════════════════════════════════════════════════════════════════
 // Nord.
 const color NORD3  = #4C566A
-const color NORD10 = #5E81AC
-const color NORD11 = #BF616A
-const color NORD14 = #A3BE8C
+const color NORD8  = #88C0D0
+const color NORD9  = #81A1C1
+
+// Same up/down convention as macd-waves.pine and stochastic.pine, so a Kronos
+// mark reads the same direction as the oscillators on the chart below it.
+const color KR_UP   = NORD8
+const color KR_DOWN = NORD9
+const int   TRANSP_UP      = 20
+const int   TRANSP_DOWN    = 60
 
 const int SELL = 1
 const int BUY  = 0
 
+enum TrendSource
+    BARRY     = "Barry — 50 SMA angle"
+    TAC_SLOPE = "TachEon — 120 EMA slope"
+    TAC_PRICE = "TachEon — price vs 120 EMA"
+
+const string GROUP_TREND   = "Trend gate"
 const string GROUP_ENGINE  = "Engine"
 const string GROUP_DISPLAY = "Display"
 const string GROUP_REF     = "Reference — diff against the vendor"
@@ -63,24 +79,22 @@ const string GROUP_REF     = "Reference — diff against the vendor"
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎛️ INPUTS
 // ═════════════════════════════════════════════════════════════════════════════
-int swingStrength = input.int(defval = 8, title = "Swing Strength", options = [4,5,6,7,8,9,10,11,12,13,14], group = GROUP_ENGINE, tooltip = "Bars of containment required on EACH SIDE for a pivot to count — the vendor's own first input, and the one thing that sets how many marks a session gets.\n\nHis stated values: 5 on NQ 1-minute, 8 on ES 1-minute, and the TradingView port's status line reads 11 on QQQ 5-minute. Counted in BARS, so a 5-minute chart at 11 is a 55-minute window and produces marks roughly every 40 minutes — which is exactly the spacing observed on his QQQ screens.")
-string sourceDaysRaw = input.string(defval = "7,14", title = "Source Days", group = GROUP_ENGINE, tooltip = "CALENDAR-day offsets, comma separated. Not bar counts, not session counts — calendar days, which is what makes the whole thing legible: 7,14 on a Monday is 'the last two Mondays'.\n\nHis presets, spoken as digit strings: 714 = 7,14 (the default, works on everything) · 123 = 1,2,3 (his NQ setting) · 9 (his ES setting) · 369 = 3,6,9 (rare).\n\nONLY MULTIPLES OF 7 ARE WEEKDAY-COMPLETE. 1,2,3 lands in the weekend on Mondays and Tuesdays, so at confluence 2 those days can never fire — see the KRONOS|REACH line.")
+int swingStrength = input.int(defval = 7, title = "Swing Strength", options = [4,5,6,7,8,9,10,11,12,13,14], group = GROUP_ENGINE, tooltip = "Bars of containment required on EACH SIDE for a pivot to count — the vendor's own first input, and the one thing that sets how many marks a session gets.\n\nHis stated values: 5 on NQ 1-minute, 8 on ES 1-minute, and the TradingView port's status line reads 11 on QQQ 5-minute. Counted in BARS, so a 5-minute chart at 11 is a 55-minute window and produces marks roughly every 40 minutes — which is exactly the spacing observed on his QQQ screens.")
+string sourceDaysRaw = input.string(defval = "7,14,21", title = "Source Days", group = GROUP_ENGINE, tooltip = "CALENDAR-day offsets, comma separated. Not bar counts, not session counts — calendar days, which is what makes the whole thing legible: 7,14 on a Monday is 'the last two Mondays'.\n\nHis presets, spoken as digit strings: 714 = 7,14 (the default, works on everything) · 123 = 1,2,3 (his NQ setting) · 9 (his ES setting) · 369 = 3,6,9 (rare).\n\nONLY MULTIPLES OF 7 ARE WEEKDAY-COMPLETE. 1,2,3 lands in the weekend on Mondays and Tuesdays, so at confluence 2 those days can never fire — see the KRONOS|REACH line.")
 string calTzIn = input.string(defval = "America/New_York", title = "Calendar Timezone", options = ["Exchange", "America/Chicago", "America/New_York", "UTC"], group = GROUP_ENGINE, tooltip = "The timezone whose MIDNIGHT cuts one calendar day from the next. This is the engine's day boundary, not a display setting.\n\nIt has to match the platform the vendor ran, because a pivot in the hour before their midnight belongs to a different source day than it does to ours. Michael runs NinjaTrader on EASTERN; ES and NQ on TradingView are Chicago instruments, so on those set America/New_York to match him and leave Exchange to match Paul.\n\nOnly the hour straddling midnight can disagree, but on a 24-hour future that hour is live trading.")
-int minAgree = input.int(defval = 1, title = "Min Source Days Agreeing", minval = 1, maxval = 10, group = GROUP_ENGINE, tooltip = "How many DISTINCT source days must show a pivot of the same type at the same clock minute before it is marked. Their unstated 'head and shoulders above everything' threshold.\n\nThis is the selectivity knob and selectivity is the only thing that ever improved the numbers (§3g): 4 marks a session beat 33, which beat 68.")
+int minAgree = input.int(defval = 2, title = "Min Source Days Agreeing", minval = 1, maxval = 10, group = GROUP_ENGINE, tooltip = "How many DISTINCT source days must show a pivot of the same type at the same clock minute before it is marked. Their unstated 'head and shoulders above everything' threshold.\n\nThis is the selectivity knob, and selectivity is the only thing that ever improved the numbers (§3g): 4 marks a session beat 33, which beat 68.\n\nBUT IT NEEDS A POOL TO SELECT FROM. With only two source days, \"2 of 2\" is not a filter, it is a coincidence requirement — on QQQ 3m it yields about ONE mark a session. 2 of 3 gives ~4, 2 of 4 gives ~7, and 3 of anything gives ~0. Set Source Days first, then this.")
 int clockTolBars = input.int(defval = 1, title = "Clock Tolerance (bars)", minval = 0, maxval = 15, group = GROUP_ENGINE, tooltip = "How far apart two source pivots can be and still count as the same clock minute.\n\nRead KRONOS|COVER before trusting a large value. At ±2 with four source sessions, a THIRD of every session's minutes clear the bar on coincidence alone; at ±10 it is 96% and the indicator is simply always on.")
 int mergeWinBars = input.int(defval = 0, title = "Merge Window (bars)", minval = 0, maxval = 30, group = GROUP_ENGINE, tooltip = "Two marks of the SAME side closer together than this collapse to the earlier one.\n\nMust stay small — effectively they do not merge at all, and alternation does the thinning. Their 2026-08-20 ES 1-minute list runs 14:16 sell · 14:17 buy · 14:18 sell, so same-side marks come 2 minutes apart and anything above 1 cannot reproduce it. (The 2026-09-28 NQ list had already forced it below 4; the earlier draft's 15 was wrong.)")
 bool alternate = input.bool(defval = true, title = "Enforce Alternation", group = GROUP_ENGINE, tooltip = "Force the sequence to run sell, buy, sell, buy.\n\nNot a guess: all 22 marks on his 2026-09-28 NQ 1-minute chart alternate strictly, with no exception. Either his merge step enforces it or the marks are a swing SEQUENCE rather than a set of mined minutes. Turn it off to see the raw voted minutes.")
 int forecastDays = input.int(defval = 1, title = "Forecast Days Ahead", minval = 0, maxval = 7, group = GROUP_ENGINE, tooltip = "Extra calendar days to project past today. The hard ceiling is min(Source Days) — to compute day T you need day T−d closed — which is why 7,14 is advertised as 'up to one week in advance' and 1,2,3 can only ever see tomorrow.")
 string displayTz = input.string(defval = "America/New_York", title = "Display Timezone", options = ["America/Chicago", "America/New_York", "America/Los_Angeles", "Europe/London", "Exchange"], group = GROUP_DISPLAY, tooltip = "The timezone the mark LABELS are written in. His screens are Central — set America/Chicago to read the same numbers he does, America/New_York to read them as Henry trades them. The engine itself always works in exchange time; this only changes the text.")
-bool showEma = input.bool(defval = true, title = "120 EMA", inline = "ema", group = GROUP_DISPLAY, tooltip = "His trend gate, stated at 6:48: above it take only buy signals, below it take only sell signals. It is the only lagging series in this file.")
-int emaLen = input.int(defval = 120, title = "", inline = "ema", minval = 2, group = GROUP_DISPLAY)
 bool showAtr = input.bool(defval = true, title = "ATR Stop Line", inline = "atr", group = GROUP_DISPLAY, tooltip = "The dashed line off each mark: 1.5 × ATR(7) from the OPEN of the bar the mark fired on. It is a STOP, not a target — 'the software is not based on price' (8:37). Price closing clean through it is his 'puncture trade'; a wick that only pierces it is not.")
 int atrLen = input.int(defval = 7, title = "", inline = "atr", minval = 1, group = GROUP_DISPLAY)
 float atrMult = input.float(defval = 1.5, title = "", inline = "atr", minval = 0.1, step = 0.1, group = GROUP_DISPLAY)
 bool emitLogs = input.bool(defval = true, title = "Emit Pine Logs", group = GROUP_REF, tooltip = "Writes the KRONOS| lines to the Pine editor's Pine Logs tab, once, on the last confirmed historical bar. Every line is pipe-delimited so the whole block pastes back into the notes verbatim.")
-string refDate = input.string(defval = "2026-08-20", title = "Reference Date (YYYY-MM-DD)", group = GROUP_REF, tooltip = "The session the reference lists below belong to. Leave empty to diff against whatever day the chart's last bar is on.")
-string refSellsRaw = input.string(defval = "02:27,03:09,04:54,06:30,07:39,08:42,10:27,11:27,13:12,14:18,15:12,16:06", title = "Reference Sells (HH:MM)", group = GROUP_REF, tooltip = "The vendor's blue marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n06:53,07:06,07:25,07:46,08:11,08:34,08:50,09:02,09:11,09:36,09:47")
-string refBuysRaw = input.string(defval = "02:12,02:51,04:06,05:15,07:18,08:21,09:33,10:51,12:09,13:39,14:45,15:51,16:33", title = "Reference Buys (HH:MM)", group = GROUP_REF, tooltip = "The vendor's white marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n07:03,07:07,07:37,08:04,08:25,08:38,08:58,09:08,09:27,09:43,09:56")
+string refDate = input.string(defval = "", title = "Reference Date (YYYY-MM-DD)", group = GROUP_REF, tooltip = "The session the reference lists below belong to. Leave empty to diff against whatever day the chart's last bar is on.")
+string refSellsRaw = input.string(defval = "", title = "Reference Sells (HH:MM)", group = GROUP_REF, tooltip = "The vendor's blue marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n06:53,07:06,07:25,07:46,08:11,08:34,08:50,09:02,09:11,09:36,09:47")
+string refBuysRaw = input.string(defval = "", title = "Reference Buys (HH:MM)", group = GROUP_REF, tooltip = "The vendor's white marks, comma separated, in Reference Timezone.\n\n2026-09-28 NQ DEC26 1-minute, Central:\n07:03,07:07,07:37,08:04,08:25,08:38,08:58,09:08,09:27,09:43,09:56")
 string refTz = input.string(defval = "America/New_York", title = "Reference Timezone", options = ["America/Chicago", "America/New_York", "Exchange"], group = GROUP_REF, tooltip = "The timezone the reference times are written in. His screens are Central and he states it on the call, so this stays America/Chicago unless you transcribed a converted list.")
 int refTolBars = input.int(defval = 0, title = "Match Tolerance (bars)", minval = 0, maxval = 15, group = GROUP_REF, tooltip = "How close one of our marks must land to one of his to count as reproduced. Raising it inflates the match rate and the chance baseline together — which is the point of printing both.")
 int refShiftBars = input.int(defval = 1, title = "Reference Offset (bars)", minval = -10, maxval = 10, group = GROUP_REF, tooltip = "Added to OUR marks before scoring, to absorb a bar-timestamp convention difference rather than counting it as a miss.\n\nNinjaTrader stamps a bar by its CLOSE, TradingView by its OPEN, so a reference transcribed from his NinjaTrader screens runs one minute later than ours on a 1-minute chart. Set +1 for those. KRONOS|ALIGN prints the histogram that tells you the right value, and KRONOS|STAMP warns when a spike is sitting off zero.")
@@ -90,6 +104,17 @@ string sweepSets = input.string(defval = "7,14 | 7,14,21 | 7,14,21,28 | 1,2,3 | 
 int pastMarks = input.int(defval = 25, title = "Past Marks Shown", minval = 0, maxval = 200, group = GROUP_DISPLAY, tooltip = "How many already-fired marks to keep on the chart, counting back from now. Drawn identically to the future ones — a mark does not change its appearance when it fires, only its level stops moving.")
 int maxFuture = input.int(defval = 5, title = "Future Marks Shown", minval = 1, maxval = 40, group = GROUP_DISPLAY, tooltip = "Their TradingView port shows the next five, rolling. Raise it to see the full projection.")
 int rayBars = input.int(defval = 12, title = "Stop Line Length (bars)", minval = 1, maxval = 200, group = GROUP_DISPLAY)
+
+const string GROUP_EDGE = "Edge — did THEIR marks pay?"
+TrendSource trendMode = input.enum(defval = TrendSource.TAC_SLOPE, title = "Trend Source", group = GROUP_TREND, tooltip = "Which trend decides a mark is WITH the move. Nothing is hidden on the chart — every mark draws the same. The trend only SORTS the accuracy log into with-trend and counter-trend buckets.\n\nBARRY reads the 50 SMA's ANGLE — sign of the one-bar slope, holding the last state on a zero slope. That is the definition in ma-waves.pine and it is Barry's, not TachEon's.\n\nTACHEON is their own gate, and their two sources disagree with each other: the Histogram Guidebook says EMA slope, Paul says price vs the line. Both are here.\n\nMixing Barry's trend with TachEon's timing is a BLEND of two systems, which the project rules warn against. It is offered as an input precisely so it can be MEASURED — run the edge scorer on each and let the numbers say whether the 50 SMA gate beats their 120 EMA, instead of assuming.")
+int trendLen = input.int(defval = 50, title = "Barry SMA Length", minval = 2, group = GROUP_TREND, tooltip = "Barry's 50 MA — the trend and the line in the sand.")
+int emaLen = input.int(defval = 120, title = "TachEon EMA Length", minval = 2, group = GROUP_TREND, tooltip = "Their 120 EMA. Used only when Trend Source is a TachEon option.")
+float trendFlatFrac = input.float(defval = 0.0, title = "Flat ATR Fraction", minval = 0.0, step = 0.05, group = GROUP_TREND, tooltip = "A flat regime: if the trend line's NET move over the window below is within this fraction of ATR(14), direction reads FLAT and every mark in it counts as counter-trend.\n\n0 disables it, which is ma-waves.pine's default — direction is then strictly up or down. Raise it to drop the chop.")
+int trendFlatWin = input.int(defval = 10, title = "Flat Window (bars)", minval = 2, group = GROUP_TREND, tooltip = "Bars over which the flat test measures the trend line's net movement. A one-bar slope never reads flat on a sideways MA; this window is what catches the neutral stretch.")
+
+bool doMulti = input.bool(defval = true, title = "Score EVERY Session", group = GROUP_EDGE, tooltip = "Walks every completed session on the chart, builds that session's marks, and scores them — instead of scoring only the last day.\n\nThis is the difference between n=2 and n=200. One session cannot tell you whether a signal works; it can only tell you what happened that day. Turn it off only if the script times out, and then load less history rather than trusting a single day.\n\nNOTE: pivot pruning is disabled while this is on, so the script holds every pivot on the chart.")
+bool doEdge = input.bool(defval = true, title = "Score the Reference Marks", group = GROUP_EDGE, tooltip = "Runs the vendor's own published times through the vendor's own published rules on the session they were published for, and scores the result against the one control that matters: the same rules on the same marks slid along the bar grid.\n\nThis asks whether THEIR forecast made money, which is a different question from whether our clone reproduces it. Needs the reference session to have actually traded.")
+int edgeHorizon = input.int(defval = 10, title = "Directional Horizon (bars)", minval = 1, maxval = 100, group = GROUP_EDGE, tooltip = "Bars held for the direction-only test, which ignores their stop and exit entirely and just asks whether price went the way the mark pointed.")
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧮 HELPERS
@@ -224,7 +249,7 @@ int _p14 = f_push(14, ta.pivothigh(high, 14, 14), ta.pivotlow(low, 14, 14))
 // this wrong is silent: the diff just reports a miss because the source session was
 // thrown away before it could be read.
 int refJdn = f_parseDate(refDate)
-if isNewDay and array.size(pvDay) > 0
+if isNewDay and not doMulti and array.size(pvDay) > 0
     int maxNeed = 21
     array<int> mainOff = f_parseInts(sourceDaysRaw)
     if array.size(mainOff) > 0
@@ -347,6 +372,7 @@ var array<int>   mkMin = array.new<int>(0)
 var array<int>   mkTyp = array.new<int>(0)
 var array<int>   mkVot = array.new<int>(0)
 var array<float> mkPrc = array.new<float>(0)
+var array<int>   mkTrn = array.new<int>(0)
 
 if isNewDay or barstate.isfirst
     array.clear(mkDay)
@@ -354,6 +380,7 @@ if isNewDay or barstate.isfirst
     array.clear(mkTyp)
     array.clear(mkVot)
     array.clear(mkPrc)
+    array.clear(mkTrn)
     for k = 0 to forecastDays
         array<int> usable = array.new<int>(0)
         if array.size(offsets) > 0
@@ -369,28 +396,64 @@ if isNewDay or barstate.isfirst
                     array.push(mkTyp, array.get(dt, i))
                     array.push(mkVot, array.get(dv, i))
                     array.push(mkPrc, na)
+                    array.push(mkTrn, 0)
 
 // Capture the 1.5-ATR stop level as each of today's marks actually fires.
 float atrNow = ta.atr(atrLen)
+// Trend state. Barry: sign of the 50 SMA's one-bar slope, last state held on a
+// zero slope, optional flat regime — the definition in ma-waves.pine.
+float trendLine = trendMode == TrendSource.BARRY ? ta.sma(close, trendLen) : ta.ema(close, emaLen)
+float trendChg  = ta.change(trendLine, trendFlatWin)
+float atr14     = ta.atr(14)
+bool  isFlat    = trendFlatFrac > 0 and not na(trendChg) and not na(atr14) and math.abs(trendChg) <= trendFlatFrac * atr14
+var int trendState = 0
+if trendMode == TrendSource.TAC_PRICE
+    trendState := close > trendLine ? 1 : close < trendLine ? -1 : trendState
+else
+    float trSlope = trendLine - trendLine[1]
+    trendState := isFlat ? 0 : trSlope > 0 ? 1 : trSlope < 0 ? -1 : trendState
+
+// The scored session's bars, kept so every evaluation below — and every shifted
+// control — can be run in one pass on the last bar instead of re-walking history.
+var array<int>   sdDay = array.new<int>(0)
+var array<int>   sdMin = array.new<int>(0)
+var array<float> sdH = array.new<float>(0)
+var array<float> sdL = array.new<float>(0)
+var array<float> sdC = array.new<float>(0)
+var array<float> sdE = array.new<float>(0)   // trend state per bar: +1 / 0 / -1
+var array<float> sdA = array.new<float>(0)
+// Every bar on the chart is captured and tagged with its session, so the scorer can
+// walk EVERY session in one pass instead of the last one. One session gives n=2 and
+// no answer; 100 sessions give an answer.
+if doEdge
+    array.push(sdDay, today)
+    array.push(sdMin, curMin)
+    array.push(sdH, high)
+    array.push(sdL, low)
+    array.push(sdC, close)
+    array.push(sdE, float(trendState))
+    array.push(sdA, atrNow)
 if array.size(mkMin) > 0
     for i = 0 to array.size(mkMin) - 1
         if array.get(mkDay, i) == 0 and na(array.get(mkPrc, i))
             int m = array.get(mkMin, i)
             if m >= curMin and m < curMin + tfMin
                 array.set(mkPrc, i, array.get(mkTyp, i) == SELL ? open + atrMult * atrNow : open - atrMult * atrNow)
+                array.set(mkTrn, i, trendState)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 DRAWING
 // ═════════════════════════════════════════════════════════════════════════════
-// A mark is a triangle at its 1.5 × ATR(7) stop level and a dashed line running right
+// A mark is a circle at its 1.5 × ATR(7) stop level and a dashed line running right.
+// EVERY mark draws the same — the trend is not used to hide anything, only to SORT
+// the results in the log. Same up/down colors as
+// macd-waves.pine and stochastic.pine so the three read as one system.
 // from it. Nothing else — no vertical rules, no clock labels, no captions, no shading.
 // Past and future marks are drawn identically; the only difference is that a fired mark's
 // level is frozen at the open of the bar it fired on, while a future one tracks price.
 f_markTime(int dayOff, int mins) =>
     timestamp(calTz, calY, calM, calD + dayOff, 0, 0) + mins * 60000
 
-float emaVal = ta.ema(close, emaLen)
-plot(showEma ? emaVal : na, title = "Trend EMA", color = color.new(NORD10, 35), linewidth = 1)
 
 var array<line>  drawnLines  = array.new<line>(0)
 var array<label> drawnLabels = array.new<label>(0)
@@ -417,25 +480,134 @@ if barstate.islast
                 float prc = array.get(mkPrc, i2)
                 if not na(prc) and nPast < pastMarks
                     nPast += 1
-                    int   ty = array.get(mkTyp, i2)
-                    color c  = ty == SELL ? NORD11 : NORD14
-                    int   t  = f_markTime(0, m)
-                    array.push(drawnLabels, label.new(x = t, y = prc, text = "", xloc = xloc.bar_time, style = ty == SELL ? label.style_triangledown : label.style_triangleup, color = c, size = size.tiny))
+                    int   ty   = array.get(mkTyp, i2)
+                    color base = ty == SELL ? KR_DOWN : KR_UP
+                    color c    = color.new(base, ty == SELL ? TRANSP_DOWN : TRANSP_UP)
+                    int   t    = f_markTime(0, m)
+                    array.push(drawnLabels, label.new(x = t, y = prc, text = "", xloc = xloc.bar_time, style = label.style_circle, color = c, size = size.tiny))
                     if showAtr
-                        array.push(drawnLines, line.new(x1 = t, y1 = prc, x2 = t + rayBars * tfMs, y2 = prc, xloc = xloc.bar_time, color = color.new(c, 55), style = line.style_dashed, width = 1))
+                        array.push(drawnLines, line.new(x1 = t, y1 = prc, x2 = t + rayBars * tfMs, y2 = prc, xloc = xloc.bar_time, color = color.new(base, 70), style = line.style_dashed, width = 1))
 
         for i2 = 0 to array.size(mkMin) - 1
             int k = array.get(mkDay, i2)
             int m = array.get(mkMin, i2)
             if (k > 0 or m > curMin) and nFuture < maxFuture
                 nFuture += 1
-                int   ty = array.get(mkTyp, i2)
-                color c  = ty == SELL ? NORD11 : NORD14
-                int   t  = f_markTime(k, m)
-                float y  = ty == SELL ? close + atrMult * atrNow : close - atrMult * atrNow
-                array.push(drawnLabels, label.new(x = t, y = y, text = "", xloc = xloc.bar_time, style = ty == SELL ? label.style_triangledown : label.style_triangleup, color = c, size = size.tiny))
+                int   ty   = array.get(mkTyp, i2)
+                color base = ty == SELL ? KR_DOWN : KR_UP
+                color c    = color.new(base, ty == SELL ? TRANSP_DOWN : TRANSP_UP)
+                int   t    = f_markTime(k, m)
+                float y    = ty == SELL ? close + atrMult * atrNow : close - atrMult * atrNow
+                array.push(drawnLabels, label.new(x = t, y = y, text = "", xloc = xloc.bar_time, style = label.style_circle, color = c, size = size.tiny))
                 if showAtr
-                    array.push(drawnLines, line.new(x1 = t, y1 = y, x2 = t + rayBars * tfMs, y2 = y, xloc = xloc.bar_time, color = color.new(c, 55), style = line.style_dashed, width = 1))
+                    array.push(drawnLines, line.new(x1 = t, y1 = y, x2 = t + rayBars * tfMs, y2 = y, xloc = xloc.bar_time, color = color.new(base, 70), style = line.style_dashed, width = 1))
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 💰 EDGE — did THEIR marks pay?
+// A different question from "do we reproduce them". Runs the vendor's published
+// times through the vendor's published rules, and scores both against the same
+// control used everywhere else: slide the whole list along the bar grid and
+// re-run. Their forecast has to beat its own shadow, not zero.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// reference clock → the calendar timezone the captured bars are indexed by
+f_refToCal(int refMin, int offMin) => ((refMin - offMin) % 1440 + 1440) % 1440
+
+// first captured bar at or after this minute; bisection, because this runs
+// 25 shifts × every mark and a linear scan would time the script out
+f_barAt(int mins, int lo0, int hi0) =>
+    int lo = lo0
+    int hi = hi0
+    int r  = -1
+    if hi >= 0 and array.get(sdMin, hi) >= mins
+        while lo < hi
+            int mid = int((lo + hi) / 2)
+            if array.get(sdMin, mid) < mins
+                lo := mid + 1
+            else
+                hi := mid
+        r := lo
+    r
+
+// direction only: ignore their stop and exit, just ask whether price went the
+// way the mark pointed over a fixed horizon
+// Direction AND magnitude, sorted by trend alignment.
+// trendWant: +1 = with-trend only, -1 = counter-trend only, 0 = everything.
+// MFE is the point of this: "a move up is very short in a downtrend" is a claim about
+// SIZE, not direction, so a counter-trend mark can be right and still worth nothing.
+// Reporting hit% alone would hide exactly that.
+f_dirEval(array<int> mk, array<int> ty, int horizon, int shiftMin, int trendWant, int lo, int hi) =>
+    int n = 0
+    int wins = 0
+    float sum = 0.0
+    float mfe = 0.0
+    if array.size(mk) > 0 and hi > lo
+        for [i, m] in mk
+            int b = f_barAt(m + shiftMin, lo, hi)
+            if b >= 0 and b + horizon <= hi
+                int   side = array.get(ty, i)
+                float tg   = array.get(sdE, b)
+                bool  with = side == SELL ? tg < 0 : tg > 0
+                bool  take = trendWant == 0 ? true : trendWant > 0 ? with : (tg != 0 and not with)
+                if take
+                    float dir   = side == SELL ? -1.0 : 1.0
+                    float entry = array.get(sdC, b)
+                    float mv    = (array.get(sdC, b + horizon) - entry) * dir
+                    float best  = 0.0
+                    for k2 = b + 1 to b + horizon
+                        float ex = side == SELL ? (entry - array.get(sdL, k2)) : (array.get(sdH, k2) - entry)
+                        best := math.max(best, ex)
+                    n += 1
+                    wins += mv > 0 ? 1 : 0
+                    sum += mv
+                    mfe += best
+    [n, wins, sum, mfe]
+
+// their rules, as written in the Histogram Guidebook: trade only with the 120
+// EMA, enter on the signal candle's close, stop 1.5 × ATR(7), hold to the next
+// opposite signal. Result in R multiples.
+f_ruleEval(array<int> mk, array<int> ty, int shiftMin, int trendWant, int lo, int hi) =>
+    int n = 0, wins = 0
+    float totR = 0.0, gw = 0.0, gl = 0.0
+    int cnt = array.size(mk)
+    int sz  = array.size(sdC)
+    bool ok = hi > lo + 2 and array.size(sdE) == sz and array.size(sdA) == sz and array.size(sdH) == sz and array.size(sdL) == sz
+    if cnt > 0 and ok
+        for i = 0 to cnt - 1
+            int b = f_barAt(array.get(mk, i) + shiftMin, lo, hi)
+            if b > lo and b < hi
+                int  side = array.get(ty, i)
+                float tr = array.get(sdE, b)
+                bool  wth = side == SELL ? tr < 0 : tr > 0
+                if trendWant == 0 ? tr != 0 : trendWant > 0 ? wth : (tr != 0 and not wth)
+                    float entry = array.get(sdC, b)
+                    float risk  = atrMult * array.get(sdA, b)
+                    if risk > 0
+                        float dir  = side == SELL ? -1.0 : 1.0
+                        float stop = entry - dir * risk
+                        int   ex   = hi
+                        if i + 1 <= cnt - 1
+                            for j = i + 1 to cnt - 1
+                                if array.get(ty, j) != side
+                                    int bb = f_barAt(array.get(mk, j) + shiftMin, lo, hi)
+                                    if bb > b
+                                        ex := bb
+                                    break
+                        float r = na
+                        if b + 1 <= ex
+                            for k2 = b + 1 to ex
+                                if side == BUY ? array.get(sdL, k2) <= stop : array.get(sdH, k2) >= stop
+                                    r := -1.0
+                                    break
+                        if na(r)
+                            r := (array.get(sdC, ex) - entry) * dir / risk
+                        n += 1
+                        wins += r > 0 ? 1 : 0
+                        totR += r
+                        gw += r > 0 ? r : 0.0
+                        gl += r > 0 ? 0.0 : -r
+    [n, wins, totR, gw, gl]
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🪵 LOGS
@@ -609,6 +781,7 @@ if emitLogs and barstate.islastconfirmedhistory
             if array.get(pvSw, i) == swingStrength
                 nPivSw += 1
     float pivPerDay = nPivSw > 0 ? nPivSw / math.max(1.0, array.max(pvDay) - array.min(pvDay) + 1.0) : 0.0
+    log.info("KRONOS|DENSITY|marksOnScoredDay=" + str.tostring(array.size(todayMin)) + "|target 4-10 for a schedule you can actually watch — raise Swing Strength or Min Source Days Agreeing if higher, add source days if lower")
     log.info("KRONOS|COVER|swing=" + str.tostring(swingStrength) + "|pivotsPerDay=" + str.tostring(pivPerDay, "#.0") + "|note=at ±" + str.tostring(clockTol) + "min a random minute clears conf " + str.tostring(minAgree) + " far more often than the mark count suggests — read 03-reproducing-it.md §3f before trusting a wide tolerance")
 
     // ── the diff ────────────────────────────────────────────────────────────
@@ -656,6 +829,176 @@ if emitLogs and barstate.islastconfirmedhistory
             log.info("KRONOS|SHIFTNULL|recall at each whole-bar shift|" + nullStr)
             log.info("KRONOS|SHIFTNULL|applied=" + str.tostring(refShiftBars) + " bar: " + str.tostring(peakN) + "/" + str.tostring(array.size(refSells) + array.size(refBuys)) + "|background mean=" + str.tostring(bgMean, "#.00") + " sd=" + str.tostring(bgSd, "#.00") + " max=" + str.tostring(array.max(bg), "#") + "|z=" + str.tostring((peakN - bgMean) / bgSd, "#.0"))
             log.info("KRONOS|VERDICT|" + ((zS > 2.0 and zB > 2.0) ? "both sides beat chance by >2σ — the engine is reproducing their output" : (zS > 2.0 or zB > 2.0) ? "one side beats chance by >2σ — not a reproduction yet" : "at or below chance — this configuration does NOT reproduce their output"))
+
+    // ── did THEIR marks pay? ────────────────────────────────────────────────
+    if doEdge and array.size(refSells) + array.size(refBuys) > 0
+        // locate the scored session inside the captured bars BEFORE deciding whether
+        // there is enough of it to score
+        int elo = -1
+        int ehi = -1
+        if array.size(sdDay) > 0
+            for bi = 0 to array.size(sdDay) - 1
+                if array.get(sdDay, bi) == targetJdn
+                    if elo < 0
+                        elo := bi
+                    ehi := bi
+        if elo < 0 or ehi - elo < 20
+            log.warning("KRONOS|EDGE|skipped — " + tstr + " is not on this chart, or has only " + str.tostring(elo < 0 ? 0 : ehi - elo + 1) + " bars. A future session has not traded yet; a past one needs enough history loaded.")
+        else
+            int refOffMin = int(str.tonumber(str.format_time(f_markTime(targetOff, 0), "HH", rtz))) * 60 + int(str.tonumber(str.format_time(f_markTime(targetOff, 0), "mm", rtz)))
+            array<int> emRaw = array.new<int>(0)
+            array<int> etRaw = array.new<int>(0)
+            for m in refSells
+                array.push(emRaw, f_refToCal(m, refOffMin))
+                array.push(etRaw, SELL)
+            for m in refBuys
+                array.push(emRaw, f_refToCal(m, refOffMin))
+                array.push(etRaw, BUY)
+            array<float> ekey = array.new<float>(0)
+            for [i, m] in emRaw
+                array.push(ekey, m + i * 0.000001)
+            array<int> eord = array.sort_indices(ekey, order.ascending)
+            array<int> evMin = array.new<int>(0)
+            array<int> evTyp = array.new<int>(0)
+            for ii in eord
+                array.push(evMin, array.get(emRaw, ii))
+                array.push(evTyp, array.get(etRaw, ii))
+
+            log.info("KRONOS|EDGE|session=" + tstr + "|barsCaptured=" + str.tostring(array.size(sdC)) + "|refMarks=" + str.tostring(array.size(evMin)) + "|trendGate=" + str.tostring(trendMode))
+
+            [dn, dw, dsum, dmfe] = f_dirEval(evMin, evTyp, edgeHorizon, 0, 0, elo, ehi)
+            float tick = syminfo.mintick
+            log.info("KRONOS|EDGE|direction-only over " + str.tostring(edgeHorizon) + " bars|n=" + str.tostring(dn) + "|hit=" + str.tostring(dn > 0 ? 100.0 * dw / dn : 0.0, "#.0") + "%|avgMove=" + str.tostring(dn > 0 ? dsum / dn / tick : 0.0, "#.0") + " ticks")
+
+            [rn, rw, rtot, rgw, rgl] = f_ruleEval(evMin, evTyp, 0, 1, elo, ehi)
+            log.info("KRONOS|EDGE|their rules (120 EMA gate, 1.5xATR7 stop, exit next opposite)|trades=" + str.tostring(rn) + "|win=" + str.tostring(rn > 0 ? 100.0 * rw / rn : 0.0, "#.0") + "%|totalR=" + str.tostring(rtot, "#.00") + "|avgR=" + str.tostring(rn > 0 ? rtot / rn : 0.0, "#.000") + "|PF=" + str.tostring(rgl > 0 ? rgw / rgl : 0.0, "#.00"))
+
+            // the control: the same marks, slid along the grid
+            string dNull = "", rNull = ""
+            array<float> dbg = array.new<float>(0)
+            array<float> rbg = array.new<float>(0)
+            float dPeak = 0.0, rPeak = 0.0
+            for k = -12 to 12
+                [xn, xw, xs, xf] = f_dirEval(evMin, evTyp, edgeHorizon, k * tfMin, 0, elo, ehi)
+                [yn, yw, yt, ygw, ygl] = f_ruleEval(evMin, evTyp, k * tfMin, 1, elo, ehi)
+                float dh = xn > 0 ? 100.0 * xw / xn : 0.0
+                dNull := dNull + (k == -12 ? "" : " ") + str.tostring(k) + ":" + str.tostring(dh, "#")
+                rNull := rNull + (k == -12 ? "" : " ") + str.tostring(k) + ":" + str.tostring(yt, "#.0")
+                if k == 0
+                    dPeak := dh
+                    rPeak := yt
+                else
+                    array.push(dbg, dh)
+                    array.push(rbg, yt)
+            float dm = array.avg(dbg), dsd = math.max(array.stdev(dbg), 0.01)
+            float rm = array.avg(rbg), rsd = math.max(array.stdev(rbg), 0.01)
+            log.info("KRONOS|EDGENULL|hit% at each shift|" + dNull)
+            log.info("KRONOS|EDGENULL|totalR at each shift|" + rNull)
+            log.info("KRONOS|EDGENULL|UNSHIFTED hit=" + str.tostring(dPeak, "#.0") + "% vs background " + str.tostring(dm, "#.0") + "±" + str.tostring(dsd, "#.0") + " → z=" + str.tostring((dPeak - dm) / dsd, "#.0") + "  |  UNSHIFTED totalR=" + str.tostring(rPeak, "#.00") + " vs background " + str.tostring(rm, "#.00") + "±" + str.tostring(rsd, "#.00") + " → z=" + str.tostring((rPeak - rm) / rsd, "#.0"))
+            log.info("KRONOS|EDGEVERDICT|" + (rn < 5 ? "NO VERDICT — only " + str.tostring(rn) + " trades cleared the trend gate." : rPeak - rm > 2.0 * rsd ? "their published times beat their own shifted shadow — the times carry something" : "their published times sit inside their own shifted shadow — the RULES may still work, but the TIMES add nothing"))
+
+    // ── how accurate are OUR marks, across EVERY session? ───────────────────
+    if doEdge and doMulti and array.size(sdDay) > 100
+        // session boundaries, one pass
+        array<int> dNum = array.new<int>(0)
+        array<int> dLo = array.new<int>(0)
+        array<int> dHi = array.new<int>(0)
+        int nb = array.size(sdDay)
+        int curD = array.get(sdDay, 0)
+        int stI = 0
+        for i2 = 1 to nb - 1
+            if array.get(sdDay, i2) != curD
+                array.push(dNum, curD)
+                array.push(dLo, stI)
+                array.push(dHi, i2 - 1)
+                curD := array.get(sdDay, i2)
+                stI := i2
+        array.push(dNum, curD)
+        array.push(dLo, stI)
+        array.push(dHi, nb - 1)
+
+        // nine shift buckets rather than twenty-five: the control stays honest and
+        // the script stays inside Pine's execution budget over ~100 sessions
+        array<float> accR = array.new<float>(9, 0.0)
+        array<float> accN = array.new<float>(9, 0.0)
+        array<float> accW = array.new<float>(9, 0.0)
+        float gw = 0.0
+        float gl = 0.0
+        int wN = 0
+        int wW = 0
+        float wSum = 0.0
+        float wMfe = 0.0
+        int cN = 0
+        int cW = 0
+        float cSum = 0.0
+        float cMfe = 0.0
+        int crN = 0
+        int crW = 0
+        float crR = 0.0
+        int sessions = 0
+        int marksTot = 0
+
+        // the last session may be partial, so it is left out
+        int lastD = array.size(dNum) - 2
+        if lastD >= 0
+            for d = 0 to lastD
+                int lo = array.get(dLo, d)
+                int hi = array.get(dHi, d)
+                if hi - lo > 30
+                    [qm, qt, qv] = f_build(array.get(dNum, d), swingStrength, offsets, clockTol, minAgree, mergeWin, alternate)
+                    if array.size(qm) > 0
+                        sessions += 1
+                        marksTot += array.size(qm)
+                        [an, aw, asum, amfe] = f_dirEval(qm, qt, edgeHorizon, 0, 1, lo, hi)
+                        wN += an
+                        wW += aw
+                        wSum += asum
+                        wMfe += amfe
+                        [bn, bw, bsum, bmfe] = f_dirEval(qm, qt, edgeHorizon, 0, -1, lo, hi)
+                        cN += bn
+                        cW += bw
+                        cSum += bsum
+                        cMfe += bmfe
+                        [pn, pw, pr, pgw, pgl] = f_ruleEval(qm, qt, 0, -1, lo, hi)
+                        crN += pn
+                        crW += pw
+                        crR += pr
+                        for si = 0 to 8
+                            int kb = (si - 4) * 3
+                            [yn, yw, yt, ygw, ygl] = f_ruleEval(qm, qt, kb * tfMin, 1, lo, hi)
+                            array.set(accR, si, array.get(accR, si) + yt)
+                            array.set(accN, si, array.get(accN, si) + yn)
+                            array.set(accW, si, array.get(accW, si) + yw)
+                            if si == 4
+                                gw += ygw
+                                gl += ygl
+
+        float n0 = array.get(accN, 4)
+        float r0 = array.get(accR, 4)
+        float w0 = array.get(accW, 4)
+        string shiftStr = ""
+        array<float> bgR = array.new<float>(0)
+        for si = 0 to 8
+            float nn = array.get(accN, si)
+            shiftStr := shiftStr + (si == 0 ? "" : " ") + str.tostring((si - 4) * 3) + ":" + str.tostring(nn > 0 ? array.get(accR, si) / nn : 0.0, "#.000")
+            if si != 4
+                array.push(bgR, nn > 0 ? array.get(accR, si) / nn : 0.0)
+        float bgm = array.avg(bgR)
+        float bgsd = math.max(array.stdev(bgR), 0.001)
+        float avgR0 = n0 > 0 ? r0 / n0 : 0.0
+
+        log.info("KRONOS|MULTI|sessions=" + str.tostring(sessions) + "|marks=" + str.tostring(marksTot) + "|marksPerSession=" + str.tostring(sessions > 0 ? marksTot / float(sessions) : 0.0, "#.0") + "|trendGate=" + str.tostring(trendMode))
+        float tk = syminfo.mintick
+        log.info("KRONOS|MULTI|WITH-trend    |n=" + str.tostring(wN) + "|hit=" + str.tostring(wN > 0 ? 100.0 * wW / wN : 0.0, "#.0") + "%|avgMove=" + str.tostring(wN > 0 ? wSum / wN / tk : 0.0, "#.1") + "t|avgMFE=" + str.tostring(wN > 0 ? wMfe / wN / tk : 0.0, "#.1") + "t")
+        log.info("KRONOS|MULTI|COUNTER-trend |n=" + str.tostring(cN) + "|hit=" + str.tostring(cN > 0 ? 100.0 * cW / cN : 0.0, "#.0") + "%|avgMove=" + str.tostring(cN > 0 ? cSum / cN / tk : 0.0, "#.1") + "t|avgMFE=" + str.tostring(cN > 0 ? cMfe / cN / tk : 0.0, "#.1") + "t")
+        float wm = wN > 0 ? wMfe / wN : 0.0
+        float cm = cN > 0 ? cMfe / cN : 0.0
+        log.info("KRONOS|MULTI|counter-trend RUN LENGTH vs with-trend = " + str.tostring(wm > 0 ? cm / wm : 0.0, "#.00") + "x  (their claim: a move against the trend is very short, so this should be WELL BELOW 1.00)")
+        log.info("KRONOS|MULTI|counter-trend under full rules|trades=" + str.tostring(crN) + "|win=" + str.tostring(crN > 0 ? 100.0 * crW / crN : 0.0, "#.0") + "%|avgR=" + str.tostring(crN > 0 ? crR / crN : 0.0, "#.000"))
+        log.info("KRONOS|MULTI|full rules|trades=" + str.tostring(n0, "#") + "|win=" + str.tostring(n0 > 0 ? 100.0 * w0 / n0 : 0.0, "#.0") + "%|totalR=" + str.tostring(r0, "#.0") + "|avgR=" + str.tostring(avgR0, "#.000") + "|PF=" + str.tostring(gl > 0 ? gw / gl : 0.0, "#.00"))
+        log.info("KRONOS|MULTINULL|avgR at each shift (bars)|" + shiftStr)
+        log.info("KRONOS|MULTINULL|UNSHIFTED avgR=" + str.tostring(avgR0, "#.000") + " vs background " + str.tostring(bgm, "#.000") + "±" + str.tostring(bgsd, "#.000") + " → z=" + str.tostring((avgR0 - bgm) / bgsd, "#.0"))
+        log.info("KRONOS|MULTIVERDICT|" + (n0 < 30 ? "NO VERDICT — only " + str.tostring(n0, "#") + " trades across " + str.tostring(sessions) + " sessions. Load more history or loosen the engine." : avgR0 - bgm > 2.0 * bgsd ? "the mined times beat their own shifted shadow across " + str.tostring(sessions) + " sessions" : "the mined times sit inside their own shifted shadow — the TIMES add nothing over the trend gate"))
 
     // ── the sweep ───────────────────────────────────────────────────────────
     if doSweep and array.size(refSells) + array.size(refBuys) > 0 and dateOk
