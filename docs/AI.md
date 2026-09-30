@@ -1096,6 +1096,21 @@ full-session window for "am I in RTH" tests only.
   `varip`-sticky and document the reload caveat: intrabar-only state does not
   reproduce on replay, because historical bars run a single closing tick.
 
+### 12. Never Put a History Reference Inside a Conditionally-Called Helper
+- `and` / `or` / `?:` short-circuit, so `cond and f_helper(...)` skips the call
+  on bars where `cond` is false. If `f_helper` reads history — a `[]` offset, or
+  any `ta.*` built-in — its history buffer is then built from an irregular
+  subset of bars and its results are inconsistent. The compiler warns: "The
+  `f_x()` call inside the conditional expression might not execute on every
+  bar, which can cause inconsistent calculations."
+- Two fixes; prefer the second. Assign the call to a global and use that global
+  in the conditional, OR hoist the history read out of the helper and pass the
+  already-read value in. The second removes the history dependency instead of
+  routing around it, so the helper cannot regress the next time a caller adds a
+  guard (cvd.pine's `divergenceAnchorStartAtPivot` does this).
+- This fires the moment a previously history-free helper gains one `[]`, which
+  is easy to miss in review: the offending line is the CALL SITE, not the edit.
+
 ---
 
 ## 🎯 AI Workflow for Code Changes
@@ -1245,8 +1260,44 @@ full-session window for "am I in RTH" tests only.
      medium/major swing structure, with a Left/Middle/Right label anchor
    - `pivots.pine` (was `floor-pivots.pine`) holds three independent engines —
      classic floor pivots + CPR, the Camarilla equation, and previous day —
-     each with its own resolution, history depth, styling and label placement,
-     sharing one higher-timeframe request when their resolutions match
+     each with its own history depth, styling and label placement, all reading
+     ONE shared source period (⚙️ General → Resolution)
+   - ⚠️ `pivots.pine` floor ladder was TradingView's **Classic** (R3 = P+2(H−L))
+     while calling itself "classic floor-trader pivots" — colloquial "classic"
+     is NOT TradingView's Classic type. Traditional (R3 = 2P+(H−2L)) is the
+     default everyone else's chart shows; the two diverge by exactly (H−P) at
+     rung 3 and widen outward (+26.7 / +53.3 pts on a 60-pt ES day). Now a
+     `PivotFormula` input, Traditional default, R5/S5 added (Traditional-only,
+     na on Classic). Verified against TradingView's published formulas for
+     Traditional, Classic and Camarilla — Camarilla H1–H5/L1–L5 already matched
+     exactly; H6/L6 are our extension beyond TradingView's set
+   - `pivots.pine` requests with `settlement_as_close.on` as well as
+     `session.regular`: on futures the daily close becomes the exchange
+     SETTLEMENT, which is the close floor pivots are defined on. Left to
+     inherit it follows a chart setting, so the same symbol drew different
+     pivots for different viewers
+   - ⚠️ `pivots.pine` collapsed to that single shared resolution on 2026-09-29
+     for COST: a `request.security` inside a user-defined function is
+     instantiated PER CALL SITE and fetched on every bar regardless of whether
+     its call site's guard runs, so per-engine resolutions meant three
+     permanent nine-series HTF fetches (~50% of runtime on the profiler) while
+     the "sharing rules" only skipped array bookkeeping. Two call sites remain:
+     the shared engine source, and Previous Day's daily fallback (it is daily
+     by definition and its close must come from the daily series to land on
+     settlement). `calc_bars_count` dropped 5000 → 2000 at the same time
+   - `pivots.pine` labels are QUEUED (`LevelLabel`), not drawn on the spot, so
+     all three engines can sit on the SAME side (the default) without
+     overlapping. Once every engine has drawn, two passes run: labels sharing
+     an anchor time group into RUNS by Collision Distance (percent of price,
+     matched against each run's FIRST member — matching against every member
+     chains runs end to end, and anchoring lets a label that cleared the run
+     drop back to column 0), then each steps inward past the earlier members of
+     its own run by `Σ(len(earlier code) + gap)` CHARACTERS so the gap holds at
+     every zoom. Nothing moves vertically and nothing guesses at a pixel
+     distance — Pine exposes no vertical zoom, so a label's HEIGHT can only be
+     stood in for by a price distance. Same pattern as
+     `options-positioning-map.pine`, which learned the same lesson: levels do
+     not have to share a price to collide
 
 10. **`options-positioning-map.pine`** (was `options-gex-levels.pine`)
     - Options positioning map — the whole book projected onto price, not gamma
@@ -1391,6 +1442,45 @@ full-session window for "am I in RTH" tests only.
 16. **`cvd.pine`**
     - Cumulative Volume Delta — ONE anchored line in its own pane, tuned for
       5-minute intraday (Session anchor, 1-second intrabars, 200K budget)
+    - The anchor reset comes from the SESSION (`session.isfirstbar_regular` /
+      `session.isfirstbar`), not from a `timeframe.change("1D")` — on a chart
+      displaying extended hours the two do not agree, and the `Session Data`
+      input (default `Regular Hours Only`) is what decides which is meant. The
+      reset is unconditional and separate from the accumulation: folding it in
+      made it depend on the anchor bar having intrabar data, and the 04:00 bar
+      is the likeliest bar of the day to have none
+    - `Regular Hours Only` restricts the REQUEST through
+      `ticker.modify(session = session.regular)`; it does NOT filter the
+      payload per intrabar. The budget is spent newest-first, so pulling
+      04:00-20:00 to use 09:30-16:00 costs more than half the chart history,
+      and an all-zero filtered array also destroys the "empty array means the
+      feed gave nothing" invariant that keeps a dead bar `na` instead of a
+      flat zero
+    - The anchor bar's slope color is read from its own delta, not from
+      `cvdValue > cvdValue[1]` — the latter compares a level just reset to zero
+      against yesterday's close and paints every session open as a fall
+    - TWO SERIES, deliberately: `cvdValue` is the private accumulator and runs
+      through everything; `cvdSeries` is the rendered line and is `na` on any
+      bar the pane did not measure — outside the session under Regular Hours
+      Only, and before the anchor period's first bar with intrabar data. The
+      pivots and the pivot readings take `cvdSeries`, not `cvdValue`: a swing
+      the eye cannot see on the pane is not a swing. A mid-session feed gap is
+      NOT unmeasured (`session.ismarket` still holds) so the level carries
+      forward and the line stays unbroken — that distinction is the whole
+      reason the two names exist. Two defects this closes: a flat overnight
+      stub asserting balance that was never measured, and — because `ta.pivot*`
+      does not let equal values on a pivot's LEFT veto it — that stub's last
+      bar confirming as a pivot against the post-reset values, handing the
+      divergence engine a swing manufactured by the anchor reset and priced off
+      a thin overnight print
+    - ⚠️ `request.security_lower_tf` returns an NA ARRAY ID, not an empty
+      array, when the request itself fails — which is exactly what
+      `ignore_invalid_*` produces (reachable: chart TF equal to the requested
+      resolution, or a symbol with no intrabar entitlement). `array.size()` on
+      an na id raises "Cannot call array methods when ID of array is 'na'", so
+      the size test must come AFTER an `na()` test or the ignore flags crash
+      the script in the one case they exist to survive. An empty array (size 0)
+      is the different, valid state: a bar the feed had no intrabars for
     - Deliberately no delta candles, MA, histogram, threshold coloring or info
       table: the read is the line's shape against price, everything else is
       clutter in front of it. Slope-colored with the same NORD8/NORD9 pair as
@@ -1401,7 +1491,10 @@ full-session window for "am I in RTH" tests only.
       two CVD pivots. Pairs are rejected across an anchor reset — the reset
       prints an artificial swing and the levels either side are not comparable
     - Lines are minted on confirmed closes only (the pivot window's right side
-      includes the forming bar), and retire through `max_lines_count`
+      includes the forming bar), and retire through `max_lines_count`. The
+      same-anchor guard reads the anchor start AS OF THE PIVOT BAR
+      (`cvdAnchorStartBar[divergencePivotRight]`); reading it as of the current
+      bar rejects valid same-period pairs for `right` bars after every reset
 
 ### Common Features Across Indicators
 
@@ -1524,5 +1617,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-09-24
+**Last Updated**: 2026-09-29
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`

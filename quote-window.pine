@@ -202,21 +202,21 @@ color qwTableFrameColor = input.color(
  )
 
 bool qwShowCash = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Cash Indexes",
      tooltip = "SPY, QQQ, DIA, IWM — the four major US cash index ETFs. Bifurcation here = unresolved sentiment. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_CASH
  )
 
 bool qwShowFutures = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Futures Indexes",
      tooltip = "ES1!, NQ1!, YM1!, RTY1! — the corresponding E-mini front-month continuous futures. Useful as a sentiment check against the cash side. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_FUTURES
  )
 
 bool qwShowSectors = input.bool(
-     defval = true,
+     defval = false,
      title = "Show Sectors",
      tooltip = "The 11 SPDR Select Sector ETFs. Sector dispersion is the dimension ADD/VOLD can't see — ADD aggregates every stock into one count and hides rotation. Display only; the regime verdict always considers cash, futures, and sectors regardless of this toggle.",
      group = GROUP_QW_SECTORS
@@ -230,7 +230,7 @@ bool qwIgnoreCommoditySectors = input.bool(
  )
 
 bool qwShowRegime = input.bool(
-     defval = false,
+     defval = true,
      title = "Show Regime Verdict",
      tooltip = "Synthesizes five checks (cash bifurcation, futures bifurcation, sector bifurcation, cash↔futures misalignment, data gap) into a single tradability call: COMMITTED / MILD / LOW CONV / BIFURCATED / DATA GAP. Standalone banner mode: leave this ON and turn OFF Show Cash/Futures/Sectors — the verdict then renders alone as a borderless colored banner sized by Banner Text Size.",
      group = GROUP_QW_REGIME
@@ -336,7 +336,7 @@ color qwRegimeDataGapColor = input.color(
  )
 
 bool qwShowRangeRow = input.bool(
-     defval = false,
+     defval = true,
      title = "Show Opening-Range Row",
      tooltip = "Adds a second day-type row beneath the Regime Verdict: the chart symbol's own opening range measured against its trailing baseline, classified WIDE / NORMAL / NARROW. Independent of the quote window — it reads the instrument you are trading, not the sector basket. OFF by default; nothing computes when off except the shared daily-ATR request.",
      group = GROUP_QW_RANGE

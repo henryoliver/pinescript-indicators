@@ -66,7 +66,9 @@ type DivergencePivot
 // LEFT edge: the intrabar budget is spent newest-first, so the oldest bars run
 // out of intrabar data as new ones arrive and the line's start walks forward.
 //
-// Exports `cvdValue` and `cvdAnchorStartBar` for the divergence engine below.
+// Exports `cvdSeries` (the rendered line) and `cvdAnchorStartBar` for the
+// divergence engine below. `cvdValue` is the raw accumulator and stays private:
+// it runs through stretches the pane refuses to draw.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_CVD = "📊 Cumulative Volume Delta"
 
@@ -75,13 +77,16 @@ const string GROUP_CVD = "📊 Cumulative Volume Delta"
 const color CVD_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color CVD_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-const string TT_CVD_ANCHOR = "Period the running total resets to zero. Session is the intraday read: the reset lands on the chart's own trading-day start (so it follows the chart's session setting, extended hours included) and each day starts flat, so the zero line is the day's buy/sell balance and the line's distance from it is the day's net accumulation. Continuous never resets — the line becomes a pure trend shape and the zero line stops meaning anything. On a chart timeframe at or above the anchor every bar is its own anchor, which collapses the line into a bar-by-bar delta: this is an intraday tool."
+const string TT_CVD_ANCHOR = "Period the running total resets to zero. Session is the intraday read: each day starts flat, so the zero line is the day's buy/sell balance and the line's distance from it is the day's net accumulation — where that day begins is the Session Data setting below, not the chart's. Continuous never resets — the line becomes a pure trend shape and the zero line stops meaning anything. On a chart timeframe at or above the anchor every bar is its own anchor, which collapses the line into a bar-by-bar delta: this is an intraday tool."
 const string TT_CVD_RESOLUTION = "Intrabar resolution the up/down volume split is measured at. Finer data classifies more of the bar's volume correctly but costs history: the plan's intrabar allotment is spent newest-first, so 1 tick buys the most precise delta and the least chart. 1 second is the 5-minute sweet spot. Auto picks by chart timeframe (≤15m → 1 second, intraday → 1 minute, daily → 5 minutes, above → 1 hour). An empty pane means this symbol/plan serves no data at this resolution — step down one level."
-const string TT_CVD_BUDGET = "Maximum intrabars pulled for the whole request — the ceiling is the plan's (100K Basic/Essential/Plus/Premium, 125K Expert, 200K Ultimate) and the budget is spent newest-first. It buys chart history, not accuracy: at 1 second a 5-minute chart costs up to 300 intrabars per bar, so the full 200K covers roughly eight sessions."
+const string TT_CVD_BUDGET = "Maximum intrabars pulled for the whole request — the ceiling is the plan's (100K Basic/Essential/Plus/Premium, 125K Expert, 200K Ultimate) and the budget is spent newest-first. It buys chart history, not accuracy: at 1 second a 5-minute chart costs up to 300 intrabars per bar, so the full 200K covers roughly eight regular sessions. Include Extended Hours spends the same budget across a 16-hour day, so it buys fewer than half as many days."
+const string TT_CVD_SESSION = "Which part of the trading day the total is built from, on a chart that displays extended hours. Regular Hours Only resets on the first regular-session bar and counts only the intrabars inside regular hours, so the day starts flat at the open and the level is pure regular-session flow. The line does not exist outside regular hours rather than running flat through them: nothing was measured there, and a flat overnight stub both asserts balance it never saw and gives the divergence engine a swing invented by the reset. A bar straddling the open contributes only its regular-hours seconds. It also keeps the intrabar budget on regular-hours data instead of spending it on the overnight, which is most of the day. Include Extended Hours resets on the first pre-market bar and counts every intrabar the chart shows. Identical on a chart without extended hours displayed. Applies to the Week and Month anchors too."
 const string TT_CVD_ZERO = "Show the zero line — the anchor period's flat point, where buying and selling volume inside the period cancel out. Only meaningful with an anchor other than Continuous."
 
 cvdAnchorMode = input.string(defval = "Session", title = "Anchor", options = ["Session", "Week", "Month", "Continuous"],
      tooltip = TT_CVD_ANCHOR, group = GROUP_CVD)
+cvdSessionMode = input.string(defval = "Regular Hours Only", title = "Session Data", options = ["Regular Hours Only", "Include Extended Hours"],
+     tooltip = TT_CVD_SESSION, group = GROUP_CVD)
 cvdResolutionMode = input.string(defval = "1 second", title = "Intrabar Resolution", options = ["Auto", "1 tick", "1 second", "1 minute"],
      tooltip = TT_CVD_RESOLUTION, group = GROUP_CVD)
 cvdIntrabarBudget = input.int(defval = 200000, title = "Intrabar Budget", minval = 1000, maxval = 200000, step = 1000,
@@ -99,10 +104,19 @@ string cvdLowerTimeframe = switch cvdResolutionMode
     "1 minute" => "1"
     => cvdAutoTimeframe
 
-string cvdAnchorTimeframe = switch cvdAnchorMode
-    "Week"  => "1W"
-    "Month" => "1M"
-    => "1D"
+bool cvdSessionRegularOnly = cvdSessionMode == "Regular Hours Only"
+
+// Regular Hours Only restricts the REQUEST rather than filtering its payload.
+// The intrabar budget is spent newest-first, so pulling 04:00-20:00 in order to
+// use 09:30-16:00 would spend most of it on prints that are then multiplied by
+// zero, cutting chart history to well under half. Restricting the ticker also
+// keeps the straddle right — on an interval that does not divide the pre-market
+// evenly a bar built from the 04:00 session start contributes only its
+// regular-hours seconds — and it keeps a bar with no data at size 0, which is
+// how the guard below tells "the feed gave nothing" from a measured balance.
+// Filtering the payload instead returned a full array summing to zero, which is
+// indistinguishable from a bar that genuinely traded even.
+string cvdRequestTicker = cvdSessionRegularOnly ? ticker.modify(tickerid = syminfo.tickerid, session = session.regular) : syminfo.tickerid
 
 // Helper function returning one intrabar's signed volume. The intrabar's own
 // close vs open is the classifier; a flat intrabar falls back to close vs the
@@ -122,17 +136,33 @@ f_cvdIntrabarSignedVolume() =>
     (intrabarIsBuy ? 1.0 : -1.0) * nz(source = volume)
 
 // One request, one series — the whole engine. ignore_invalid_* degrade a
-// symbol/plan/session with no intrabar stream to an empty array instead of
-// erroring the script out.
-array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = syminfo.tickerid, timeframe = cvdLowerTimeframe,
+// symbol/plan/session with no intrabar stream to an na array id instead of
+// erroring the script out; see the guard below for why that is not the same
+// thing as an empty array.
+array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = cvdRequestTicker, timeframe = cvdLowerTimeframe,
      expression = f_cvdIntrabarSignedVolume(), ignore_invalid_symbol = true, ignore_invalid_timeframe = true,
      calc_bars_count = cvdIntrabarBudget)
 
 // No intrabar data for this bar is na, never 0 — a zero would draw a flat
 // line that claims the bar traded in perfect balance.
-float cvdBarDelta = array.size(id = cvdIntrabarDeltas) > 0 ? array.sum(id = cvdIntrabarDeltas) : na
+// Two different nothings, and only one of them is an empty array: a bar the
+// feed simply had no intrabars for holds a VALID id of size 0, while a request
+// that FAILED outright holds no id at all. The ignore_invalid_* flags above are
+// what produce the second one, and `array.size()` on an id that is na is a
+// runtime error ("Cannot call array methods when ID of array is 'na'") — so
+// testing size first would crash the script in exactly the case those flags
+// exist to survive. A 1-minute chart with the resolution set to 1 minute, or a
+// symbol with no intrabar entitlement, both reach it.
+float cvdBarDelta = na(cvdIntrabarDeltas) or array.size(id = cvdIntrabarDeltas) == 0 ? na : array.sum(id = cvdIntrabarDeltas)
 
-bool cvdAnchorReset = cvdAnchorMode != "Continuous" and timeframe.change(timeframe = cvdAnchorTimeframe)
+// The day boundary is taken from the session itself, not from a requested 1D
+// series: on a chart displaying extended hours the two do not have to agree,
+// and the whole point of the Session Data input is to say which one is meant.
+bool cvdAnchorReset = switch cvdAnchorMode
+    "Session" => cvdSessionRegularOnly ? session.isfirstbar_regular : session.isfirstbar
+    "Week"    => timeframe.change(timeframe = "1W")
+    "Month"   => timeframe.change(timeframe = "1M")
+    => false
 
 var int cvdAnchorStartBar = 0
 if cvdAnchorReset
@@ -141,14 +171,57 @@ if cvdAnchorReset
 // Running total. The `var` holds the last committed level, so a realtime tick
 // re-adds only the forming bar's delta, and a bar the feed left empty carries
 // the level forward untouched rather than breaking the line.
+// The reset is unconditional: folding it into the accumulation made it depend
+// on the anchor bar having intrabar data, and the first bar of the day is the
+// likeliest bar of the day to have none (04:00 pre-market on an extended-hours
+// chart). A skipped reset carried yesterday's level through today while
+// cvdAnchorStartBar moved anyway, so the zero line lied for the whole session
+// and the divergence guard below believed in a reset that never happened.
 var float cvdValue = na
+if cvdAnchorReset
+    cvdValue := 0.0
 if not na(cvdBarDelta)
-    cvdValue := (cvdAnchorReset ? 0.0 : nz(source = cvdValue)) + cvdBarDelta
+    cvdValue := nz(source = cvdValue) + cvdBarDelta
+
+// A bar is MEASURED when the pane has earned the right to draw a level on it.
+// The running total must survive both disqualifications, so this gates the
+// RENDERED series only, never the accumulator:
+//   · Outside the session being measured. With Regular Hours Only the request
+//     serves no overnight intrabars, so carrying the level forward would stretch
+//     a flat stub across the whole overnight asserting flow that was never
+//     measured — the same lie as a zero delta, one line after the code that
+//     refuses to tell it. Worse, that stub manufactures swings: ta.pivot* does
+//     not let equal values on a pivot's LEFT veto it, so the last bar of the
+//     stub confirms as a pivot against the post-reset values and hands the
+//     divergence engine below a swing built entirely by the anchor reset, with
+//     a thin overnight print for its price. A straddling bar that did receive
+//     regular-hours intrabars stays in scope.
+//   · Before the anchor period's first measured bar. The budget is spent
+//     newest-first, so on older sessions it runs out mid-morning — and the
+//     reset is unconditional, so the level would sit at exactly 0 from the open
+//     until coverage begins and read as a real session that opened in balance.
+// A mid-session feed gap is neither of those: session.ismarket still holds, so
+// the level carries forward and the line stays unbroken, which is the intent.
+var bool cvdAnchorHasData = false
+if cvdAnchorReset
+    cvdAnchorHasData := false
+if not na(cvdBarDelta)
+    cvdAnchorHasData := true
+
+bool cvdBarMeasured = cvdAnchorHasData and (not cvdSessionRegularOnly or session.ismarket or not na(cvdBarDelta))
+
+// The one series the pane draws and the divergence engine reads. Keeping the
+// accumulator and the rendered line as separate names is what lets the total
+// run through the overnight while the line does not.
+float cvdSeries = cvdBarMeasured ? cvdValue : na
 
 // Slope drives the color; flat bars hold the last direction so it doesn't
-// flicker (same treatment as the stochastic %D and the obv signal MA).
+// flicker (same treatment as the stochastic %D and the obv signal MA). The
+// anchor bar is read from its OWN delta instead of from the slope: comparing a
+// level just reset to zero against yesterday's close paints every session open
+// as a fall, whatever that bar's flow actually did.
 var bool cvdRising = true
-cvdRising := cvdValue > cvdValue[1] ? true : cvdValue < cvdValue[1] ? false : cvdRising
+cvdRising := cvdAnchorReset ? nz(source = cvdBarDelta) >= 0 : cvdValue > cvdValue[1] ? true : cvdValue < cvdValue[1] ? false : cvdRising
 color cvdLineColor = cvdRising ? CVD_UP_COLOR : CVD_DOWN_COLOR
 
 // Vendor volume guard — delta is meaningless without a volume feed.
@@ -156,6 +229,15 @@ var float cvdCumulativeVolume = 0.0
 cvdCumulativeVolume += nz(source = volume)
 if barstate.islast and cvdCumulativeVolume == 0
     runtime.error(message = "No volume is provided by the data vendor.")
+
+// Intrabar feed guard, the same shape as the one above: without a lower-
+// timeframe stream there is nothing to split into up and down volume, and the
+// failure is otherwise silent — an empty pane that looks like a flat market.
+var bool cvdIntrabarsSeen = false
+if not na(cvdBarDelta)
+    cvdIntrabarsSeen := true
+if barstate.islast and not cvdIntrabarsSeen
+    runtime.error(message = str.format("No intrabar data at the {0} resolution for this symbol or plan. Step Intrabar Resolution down one level.", cvdLowerTimeframe))
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔀 DIVERGENCE
@@ -227,16 +309,27 @@ bool divergenceRegularOn = divergenceMode == "Regular" or divergenceMode == "Bot
 bool divergenceHiddenOn = divergenceMode == "Hidden" or divergenceMode == "Both"
 
 // Pivots are taken on the CVD line itself and evaluated every bar so the
-// built-ins keep their history regardless of the Show setting.
-bool divergenceHighFound = not na(ta.pivothigh(source = cvdValue, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
-bool divergenceLowFound = not na(ta.pivotlow(source = cvdValue, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
+// built-ins keep their history regardless of the Show setting. The source is
+// the RENDERED series, not the accumulator: a pivot the eye cannot see on the
+// pane is not a swing, and the unmeasured stretches are na there, which also
+// stops ta.pivot* from confirming a swing out of an overnight plateau.
+bool divergenceHighFound = not na(ta.pivothigh(source = cvdSeries, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
+bool divergenceLowFound = not na(ta.pivotlow(source = cvdSeries, leftbars = divergencePivotLeft, rightbars = divergencePivotRight))
 
 // Readings on the pivot bar — `divergencePivotRight` bars back. Price is read
 // on that same bar: one pivot set, both series.
 int divergencePivotBar = bar_index - divergencePivotRight
-float divergenceCvdAtPivot = cvdValue[divergencePivotRight]
+float divergenceCvdAtPivot = cvdSeries[divergencePivotRight]
 float divergencePriceAtHigh = high[divergencePivotRight]
 float divergencePriceAtLow = low[divergencePivotRight]
+
+// The anchor start AS OF THE PIVOT BAR, read out here rather than inside
+// f_divergencePairValid. It is the same value for both sides, so computing it
+// once is right anyway — but the binding reason is that the `and` below
+// short-circuits the helper, and a function holding a history reference it
+// only sometimes evaluates builds an inconsistent history buffer (Pine warns
+// on exactly this). Kept out of the helper, the helper reads no history at all.
+int divergenceAnchorStartAtPivot = cvdAnchorStartBar[divergencePivotRight]
 
 // The previous pivot of each kind is carried in state, not re-derived from the
 // series: one object per side instead of six ta.valuewhen instances and two
@@ -249,12 +342,15 @@ var DivergencePivot divergencePrevLow = DivergencePivot.new(bar = na, cvd = na, 
 // previous pivot exists, it sits the configured distance back, and it belongs
 // to the same anchor period — the running total resets at every anchor, so
 // levels either side of one are different scales and the reset itself prints
-// an artificial swing.
+// an artificial swing. The anchor start it compares against is the one in
+// effect AT THE PIVOT BAR, not now: the pivot sits `divergencePivotRight` bars
+// back, so for that many bars after every reset the current anchor start would
+// reject a pair whose two pivots both belong to the period that just ended.
 f_divergencePairValid(DivergencePivot prevPivot) =>
     bool hasPrevPivot = not na(prevPivot.bar)
     int pivotGap = hasPrevPivot ? divergencePivotBar - prevPivot.bar : 0
     bool gapInRange = hasPrevPivot and pivotGap >= divergenceRangeMin and pivotGap <= divergenceRangeMax
-    gapInRange and (not divergenceSameAnchorOnly or prevPivot.bar >= cvdAnchorStartBar)
+    gapInRange and (not divergenceSameAnchorOnly or prevPivot.bar >= divergenceAnchorStartAtPivot)
 
 bool divergenceHighValid = divergenceHighFound and f_divergencePairValid(prevPivot = divergencePrevHigh)
 bool divergenceLowValid = divergenceLowFound and f_divergencePairValid(prevPivot = divergencePrevLow)
@@ -303,5 +399,5 @@ if barstate.isconfirmed
 // its owning section above.
 // ═════════════════════════════════════════════════════════════════════════════
 hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed,
-     display = cvdShowZeroLine ? display.all : display.none)
-plot(series = cvdValue, title = "CVD", color = cvdLineColor, linewidth = 2)
+     display = cvdShowZeroLine and cvdAnchorMode != "Continuous" ? display.all : display.none)
+plot(series = cvdSeries, title = "CVD", color = cvdLineColor, linewidth = 2)
