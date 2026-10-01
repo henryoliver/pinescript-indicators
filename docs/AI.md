@@ -1441,7 +1441,16 @@ full-session window for "am I in RTH" tests only.
 
 16. **`cvd.pine`**
     - Cumulative Volume Delta — ONE anchored line in its own pane, tuned for
-      5-minute intraday (Session anchor, 1-second intrabars, 200K budget)
+      QQQ on a 6-MINUTE chart (2026-09-30): Session anchor, Regular Hours
+      Only, 1-second intrabars, 200K budget, divergence pivots 5/5 spanning
+      5-30 bars. The arithmetic behind those, not tuning — 1 second because a
+      6-minute bar is 360 seconds (near trade-level in RTH) while 1 tick cannot
+      cover even one QQQ session inside 200K prints; 30 bars because 6 minutes
+      x 30 = 3 hours, and the previous 60 spanned six, pairing a thin
+      pre-market swing against an afternoon one. 5/5 was left alone on purpose:
+      6 vs 5 minutes is a 20% shift, inside the noise of what a pivot window
+      means, and re-tuning it without a sweep would be invention. NONE of this
+      is backtested
     - The anchor reset comes from the SESSION (`session.isfirstbar_regular` /
       `session.isfirstbar`), not from a `timeframe.change("1D")` — on a chart
       displaying extended hours the two do not agree, and the `Session Data`
@@ -1449,13 +1458,26 @@ full-session window for "am I in RTH" tests only.
       reset is unconditional and separate from the accumulation: folding it in
       made it depend on the anchor bar having intrabar data, and the 04:00 bar
       is the likeliest bar of the day to have none
-    - `Regular Hours Only` restricts the REQUEST through
-      `ticker.modify(session = session.regular)`; it does NOT filter the
-      payload per intrabar. The budget is spent newest-first, so pulling
-      04:00-20:00 to use 09:30-16:00 costs more than half the chart history,
-      and an all-zero filtered array also destroys the "empty array means the
-      feed gave nothing" invariant that keeps a dead bar `na` instead of a
-      flat zero
+    - ⚠️ `Regular Hours Only` filters the PAYLOAD per intrabar and must keep
+      doing so. Restricting the request with
+      `ticker.modify(session = session.regular)` is strictly cheaper — it does
+      not spend the newest-first budget on an overnight it discards — and it
+      was built that way on 2026-09-29 and REVERTED on 2026-09-30: **Bar Replay
+      does not serve a session-modified ticker**, so the mode rendered nothing
+      in replay while `Include Extended Hours` (a plain `syminfo.tickerid`)
+      worked. That A/B is the diagnostic; the history cost is the price — and
+      it is small: an intrabar exists per TRADED second, so QQQ's sparse
+      overnight is ~a fifth of a day's intrabars despite two thirds of its
+      clock (~7 sessions filtered vs ~8.5 restricted, not the halving the clock
+      split implies). The 2026-09-29 note claiming it "costs more than half the
+      chart history" was wrong and is what motivated the ticker in the first
+      place
+    - The filter returns `na` for an out-of-session intrabar, NEVER `0.0`.
+      `array.sum()` ignores na elements and returns na only when every element
+      is na, so one expression keeps both cases right: an all-overnight bar
+      reports "nothing measured", and a bar straddling the open still sums
+      exactly its regular-hours seconds. A `0.0` sums to a real zero and claims
+      the bar traded even — the same lie as a zero delta
     - The anchor bar's slope color is read from its own delta, not from
       `cvdValue > cvdValue[1]` — the latter compares a level just reset to zero
       against yesterday's close and paints every session open as a fall
@@ -1481,6 +1503,19 @@ full-session window for "am I in RTH" tests only.
       the size test must come AFTER an `na()` test or the ignore flags crash
       the script in the one case they exist to survive. An empty array (size 0)
       is the different, valid state: a bar the feed had no intrabars for
+    - ⚠️ NO `runtime.error` for a missing intrabar stream, unlike all three
+      reference CVD scripts. From inside the script "this symbol serves no
+      intrabars" is indistinguishable from "this CONTEXT serves none", and the
+      second is routine — Bar Replay above all, where an error kills the whole
+      indicator instead of leaving it blank. A dry feed renders nothing
+    - ⚠️ BAR REPLAY: intrabar coverage in replay is not the same as on a live
+      chart (seconds data exists only from Aug 2022, and tick-in-replay is an
+      Ultimate feature capped at ~7 days back), so the pane can be legitimately
+      blank there while fine live. The built-in A/B is the Session Data input:
+      `Include Extended Hours` requests plain `syminfo.tickerid` while
+      `Regular Hours Only` requests a `ticker.modify()` ticker, so flipping it
+      isolates "replay will not serve a session-modified ticker" from "replay
+      serves no intrabars here at all" with no code edit
     - Deliberately no delta candles, MA, histogram, threshold coloring or info
       table: the read is the line's shape against price, everything else is
       clutter in front of it. Slope-colored with the same NORD8/NORD9 pair as

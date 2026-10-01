@@ -78,9 +78,9 @@ const color CVD_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color CVD_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
 const string TT_CVD_ANCHOR = "Period the running total resets to zero. Session is the intraday read: each day starts flat, so the zero line is the day's buy/sell balance and the line's distance from it is the day's net accumulation — where that day begins is the Session Data setting below, not the chart's. Continuous never resets — the line becomes a pure trend shape and the zero line stops meaning anything. On a chart timeframe at or above the anchor every bar is its own anchor, which collapses the line into a bar-by-bar delta: this is an intraday tool."
-const string TT_CVD_RESOLUTION = "Intrabar resolution the up/down volume split is measured at. Finer data classifies more of the bar's volume correctly but costs history: the plan's intrabar allotment is spent newest-first, so 1 tick buys the most precise delta and the least chart. 1 second is the 5-minute sweet spot. Auto picks by chart timeframe (≤15m → 1 second, intraday → 1 minute, daily → 5 minutes, above → 1 hour). An empty pane means this symbol/plan serves no data at this resolution — step down one level."
-const string TT_CVD_BUDGET = "Maximum intrabars pulled for the whole request — the ceiling is the plan's (100K Basic/Essential/Plus/Premium, 125K Expert, 200K Ultimate) and the budget is spent newest-first. It buys chart history, not accuracy: at 1 second a 5-minute chart costs up to 300 intrabars per bar, so the full 200K covers roughly eight regular sessions. Include Extended Hours spends the same budget across a 16-hour day, so it buys fewer than half as many days."
-const string TT_CVD_SESSION = "Which part of the trading day the total is built from, on a chart that displays extended hours. Regular Hours Only resets on the first regular-session bar and counts only the intrabars inside regular hours, so the day starts flat at the open and the level is pure regular-session flow. The line does not exist outside regular hours rather than running flat through them: nothing was measured there, and a flat overnight stub both asserts balance it never saw and gives the divergence engine a swing invented by the reset. A bar straddling the open contributes only its regular-hours seconds. It also keeps the intrabar budget on regular-hours data instead of spending it on the overnight, which is most of the day. Include Extended Hours resets on the first pre-market bar and counts every intrabar the chart shows. Identical on a chart without extended hours displayed. Applies to the Week and Month anchors too."
+const string TT_CVD_RESOLUTION = "Intrabar resolution the up/down volume split is measured at. Finer data classifies more of the bar's volume correctly but costs history: the plan's intrabar allotment is spent newest-first, so 1 tick buys the most precise delta and the least chart. 1 second is the sweet spot for a 6-minute chart: a 6-minute bar is 360 seconds, so the split is near trade-level inside regular hours while still buying about a week of chart. 1 tick is NOT usable on a heavily-traded ETF — QQQ prints several hundred thousand trades a session, so the whole allotment is spent well before one day is covered. Auto picks by chart timeframe (≤15m → 1 second, intraday → 1 minute, daily → 5 minutes, above → 1 hour). An empty pane means this symbol/plan serves no data at this resolution — step down one level."
+const string TT_CVD_BUDGET = "Maximum intrabars pulled for the whole request — the ceiling is the plan's (100K Basic/Essential/Plus/Premium, 125K Expert, 200K Ultimate) and the budget is spent newest-first. It buys chart history, not accuracy: at 1 second a 6-minute bar costs up to 360 intrabars, so on QQQ with extended hours included — where the overnight is real but thin — the full 200K covers roughly a week of sessions. Regular Hours Only pulls the same intrabars and discards the overnight ones, so it buys the same number of days, not more."
+const string TT_CVD_SESSION = "Which part of the trading day the total is built from, on a chart that displays extended hours. Regular Hours Only resets on the first regular-session bar and counts only the intrabars inside regular hours, so the day starts flat at the open and the level is pure regular-session flow. The line does not exist outside regular hours rather than running flat through them: nothing was measured there, and a flat overnight stub both asserts balance it never saw and gives the divergence engine a swing invented by the reset. A bar straddling the open contributes only its regular-hours seconds. Both modes request the same intrabars — the filter is applied to the prints, not to the request, because Bar Replay will not serve a session-modified ticker — so on an extended-hours chart this mode buys no extra history, it only refuses to count the overnight. Include Extended Hours resets on the first pre-market bar and counts every intrabar the chart shows. Identical on a chart without extended hours displayed. Applies to the Week and Month anchors too."
 const string TT_CVD_ZERO = "Show the zero line — the anchor period's flat point, where buying and selling volume inside the period cancel out. Only meaningful with an anchor other than Continuous."
 
 cvdAnchorMode = input.string(defval = "Session", title = "Anchor", options = ["Session", "Week", "Month", "Continuous"],
@@ -106,18 +106,6 @@ string cvdLowerTimeframe = switch cvdResolutionMode
 
 bool cvdSessionRegularOnly = cvdSessionMode == "Regular Hours Only"
 
-// Regular Hours Only restricts the REQUEST rather than filtering its payload.
-// The intrabar budget is spent newest-first, so pulling 04:00-20:00 in order to
-// use 09:30-16:00 would spend most of it on prints that are then multiplied by
-// zero, cutting chart history to well under half. Restricting the ticker also
-// keeps the straddle right — on an interval that does not divide the pre-market
-// evenly a bar built from the 04:00 session start contributes only its
-// regular-hours seconds — and it keeps a bar with no data at size 0, which is
-// how the guard below tells "the feed gave nothing" from a measured balance.
-// Filtering the payload instead returned a full array summing to zero, which is
-// indistinguishable from a bar that genuinely traded even.
-string cvdRequestTicker = cvdSessionRegularOnly ? ticker.modify(tickerid = syminfo.tickerid, session = session.regular) : syminfo.tickerid
-
 // Helper function returning one intrabar's signed volume. The intrabar's own
 // close vs open is the classifier; a flat intrabar falls back to close vs the
 // previous close, and an unchanged print inherits the last known direction —
@@ -133,13 +121,36 @@ f_cvdIntrabarSignedVolume() =>
         intrabarIsBuy := true
     else if close < close[1]
         intrabarIsBuy := false
-    (intrabarIsBuy ? 1.0 : -1.0) * nz(source = volume)
+    // Session filter, applied per INTRABAR. Out-of-session prints return na,
+    // NOT zero: array.sum() ignores na elements and returns na only when every
+    // element is na, so a bar built entirely from the overnight still reports
+    // "nothing measured" while a bar straddling the open still sums exactly its
+    // regular-hours seconds — the two cases the sum has to keep apart. A 0.0
+    // here would instead sum to a real zero and claim the bar traded even.
+    //
+    // ⚠️ This is the payload filter, not a ticker restriction. Restricting the
+    // request with ticker.modify(session = session.regular) is cheaper — it
+    // would not spend the intrabar budget on an overnight it discards — but Bar
+    // Replay does not serve a session-modified ticker, so Regular Hours Only
+    // rendered nothing in replay while Include Extended Hours (a plain ticker)
+    // worked. Filtering here costs history on an extended-hours chart and costs
+    // nothing at all on an RTH-only one, where session.ismarket never fires.
+    // That cost is far smaller than it looks, which is worth knowing before
+    // anyone is tempted to restore the ticker: an intrabar exists per TRADED
+    // second, not per clock second, and the overnight is sparse. On QQQ the
+    // pre- and post-market together are roughly a fifth of a day's intrabars
+    // despite being two thirds of its clock, so the ticker bought maybe 8.5
+    // sessions where this buys about 7 — not the halving that the 04:00-20:00
+    // vs 09:30-16:00 clock split suggests.
+    bool intrabarCounts = not cvdSessionRegularOnly or session.ismarket
+    float intrabarDelta = intrabarCounts ? (intrabarIsBuy ? 1.0 : -1.0) * nz(source = volume) : na
+    intrabarDelta
 
 // One request, one series — the whole engine. ignore_invalid_* degrade a
 // symbol/plan/session with no intrabar stream to an na array id instead of
 // erroring the script out; see the guard below for why that is not the same
 // thing as an empty array.
-array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = cvdRequestTicker, timeframe = cvdLowerTimeframe,
+array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = syminfo.tickerid, timeframe = cvdLowerTimeframe,
      expression = f_cvdIntrabarSignedVolume(), ignore_invalid_symbol = true, ignore_invalid_timeframe = true,
      calc_bars_count = cvdIntrabarBudget)
 
@@ -153,6 +164,9 @@ array<float> cvdIntrabarDeltas = request.security_lower_tf(symbol = cvdRequestTi
 // testing size first would crash the script in exactly the case those flags
 // exist to survive. A 1-minute chart with the resolution set to 1 minute, or a
 // symbol with no intrabar entitlement, both reach it.
+// A THIRD nothing lands here too and needs no branch of its own: under Regular
+// Hours Only an overnight bar returns a full array whose elements are every one
+// of them na, and array.sum() of that is na by definition.
 float cvdBarDelta = na(cvdIntrabarDeltas) or array.size(id = cvdIntrabarDeltas) == 0 ? na : array.sum(id = cvdIntrabarDeltas)
 
 // The day boundary is taken from the session itself, not from a requested 1D
@@ -230,14 +244,13 @@ cvdCumulativeVolume += nz(source = volume)
 if barstate.islast and cvdCumulativeVolume == 0
     runtime.error(message = "No volume is provided by the data vendor.")
 
-// Intrabar feed guard, the same shape as the one above: without a lower-
-// timeframe stream there is nothing to split into up and down volume, and the
-// failure is otherwise silent — an empty pane that looks like a flat market.
-var bool cvdIntrabarsSeen = false
-if not na(cvdBarDelta)
-    cvdIntrabarsSeen := true
-if barstate.islast and not cvdIntrabarsSeen
-    runtime.error(message = str.format("No intrabar data at the {0} resolution for this symbol or plan. Step Intrabar Resolution down one level.", cvdLowerTimeframe))
+// There is deliberately NO runtime.error for a missing intrabar stream, even
+// though the reference CVD scripts all carry one. "This symbol serves no
+// intrabars" and "this CONTEXT serves no intrabars" are indistinguishable from
+// inside the script, and the second is routine: Bar Replay is the case that
+// matters, where an error would kill the whole indicator instead of leaving it
+// blank. A dry feed renders nothing and the Intrabar Resolution tooltip says
+// what that means — the same doctrine as the na-not-zero rule above.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🔀 DIVERGENCE
@@ -272,8 +285,8 @@ if barstate.islast and not cvdIntrabarsSeen
 const string GROUP_DIVERGENCE = "🔀 Divergence"
 
 const string TT_DIV_MODE = "Which divergence families to draw. Regular is the reversal read (price extends, flow does not) and is the reason this pane exists. Hidden is the continuation read — useful in a trend, noisy everywhere else, which is why it is off by default. Regular draws dotted and hidden dashed by default, each with its own style and width."
-const string TT_DIV_PIVOT = "Bars required either side of a CVD swing for it to count as a pivot. Left sets how much structure a swing must clear to qualify; right sets how long it must hold — and is also the lag, since a pivot is only confirmed that many bars later. 5/5 on a 5-minute chart is a 25-minute swing confirmed 25 minutes after the fact; drop the right side for earlier and noisier."
-const string TT_DIV_RANGE = "Bar distance between the two pivots a divergence may span. Below the minimum the two swings are the same move; above the maximum they are unrelated structure and the line means nothing. 5 to 60 bars on a 5-minute chart is 25 minutes to one session."
+const string TT_DIV_PIVOT = "Bars required either side of a CVD swing for it to count as a pivot. Left sets how much structure a swing must clear to qualify; right sets how long it must hold — and is also the lag, since a pivot is only confirmed that many bars later. 5/5 on a 6-minute chart is a 30-minute swing confirmed 30 minutes after the fact; drop the right side for earlier and noisier. Left and right do NOT have to match — cutting only the right buys speed without letting a smaller swing qualify."
+const string TT_DIV_RANGE = "Bar distance between the two pivots a divergence may span. Below the minimum the two swings are the same move; above the maximum they are unrelated structure and the line means nothing. 5 to 30 bars on a 6-minute chart is 30 minutes to 3 hours — two swings inside one intraday regime. The old 60-bar ceiling spanned six hours, which on an extended-hours chart pairs a thin pre-market swing against an afternoon one; they are not the same market."
 const string TT_DIV_ANCHOR = "Reject divergences whose two pivots sit in different anchor periods. The running total resets at every anchor, so a CVD level from before the reset is not comparable to one after it — and the reset itself prints an artificial swing. Leave on for any anchored CVD; it does nothing when the anchor is Continuous."
 const string TT_DIV_REGULAR_LINE = "Line style and width for REGULAR divergences — the reversal read. Style carries the family and color carries the direction, so leave regular and hidden on different styles if you draw Both; matching them makes a reversal line and a continuation line identical apart from hue."
 const string TT_DIV_HIDDEN_LINE = "Line style and width for HIDDEN divergences — the continuation read. Style carries the family and color carries the direction, so leave regular and hidden on different styles if you draw Both; matching them makes a reversal line and a continuation line identical apart from hue."
@@ -288,7 +301,7 @@ divergencePivotRight = input.int(defval = 5, title = "", minval = 1, maxval = 50
      inline = "divergence_pivot", group = GROUP_DIVERGENCE)
 divergenceRangeMin = input.int(defval = 5, title = "Bars Between Pivots (Min / Max)", minval = 1, maxval = 100,
      inline = "divergence_range", tooltip = TT_DIV_RANGE, group = GROUP_DIVERGENCE)
-divergenceRangeMax = input.int(defval = 60, title = "", minval = 2, maxval = 500,
+divergenceRangeMax = input.int(defval = 30, title = "", minval = 2, maxval = 500,
      inline = "divergence_range", group = GROUP_DIVERGENCE)
 divergenceSameAnchorOnly = input.bool(defval = true, title = "Same Anchor Period Only",
      tooltip = TT_DIV_ANCHOR, group = GROUP_DIVERGENCE, display = display.none)
