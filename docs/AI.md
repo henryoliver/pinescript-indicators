@@ -1096,6 +1096,19 @@ full-session window for "am I in RTH" tests only.
   `varip`-sticky and document the reload caveat: intrabar-only state does not
   reproduce on replay, because historical bars run a single closing tick.
 
+### 11b. Never Anchor a Long-Lived Drawing by an Old `bar_index`
+- A drawing coordinate given as `xloc.bar_index` is resolved through the
+  history buffer: `x = someOldBarIndex` is a historical offset of
+  `bar_index - someOldBarIndex`. If that origin is stored and re-applied every
+  bar (`line.set_xy1(x = swing.barIndex)`), the offset grows by one per bar and
+  eventually crosses the buffer — "The requested historical offset (1413) is
+  beyond the historical buffer's limit (1412)". The runtime error wipes EVERY
+  drawing at once, and it typically fires on the first realtime bar, because
+  the last historical bar sat exactly at the limit.
+- Fix: store the origin's `time` and draw with `xloc = xloc.bar_time`. A time
+  coordinate is not a history reference. `swings.pine` hit this 2026-10-01
+  (`Swing.barTime`); a bigger `max_bars_back` only moves the cliff.
+
 ### 12. Never Put a History Reference Inside a Conditionally-Called Helper
 - `and` / `or` / `?:` short-circuit, so `cond and f_helper(...)` skips the call
   on bars where `cond` is false. If `f_helper` reads history — a `[]` offset, or
@@ -1258,6 +1271,32 @@ full-session window for "am I in RTH" tests only.
      major swings)
    - `swings.pine` (was `major-swings.pine`) draws the two-degree
      medium/major swing structure, with a Left/Middle/Right label anchor
+   - `swings.pine` Swing Strength is in MINUTES since 2026-10-01 (default 30,
+     converted to bars per interval; a bars input covers daily+), so 1m/2m/3m/6m
+     resolve the same swings — the old bar count made the 1m an 11-minute swing
+     chart. Defaults ship six lines max (2 major + 1 nearest medium per side);
+     ordinary broken levels are hidden unless Show Broken History is on, while
+     FLIP and MSS draw for one reference window with their own color inputs
+     (they used to inherit Broken, so they ignored the color you set)
+   - `swings.pine` selection rules (2026-10-01 review): FLIP and MSS share one
+     3000 "in play" score band — MSS had none and lost every slot to unbroken
+     levels. Only a NEW strong promotion bumps `structureStamp` (re-promoting an
+     already-strong origin used to reshuffle on nearly every break); a held level
+     that stops being drawable triggers its own reselection. Strength caps at 120
+     minutes / 120 bars and the yardstick at 960 bars, so no minute chart is
+     clamped. A swing is not scanned for touch/pierce on its own confirmation bar
+   - `swings.pine` break scan is GATED (`liveHighFloor` / `liveLowCeiling`): a
+     bar below every unbroken high's zone and above every unbroken low's zone
+     cannot change any swing, so the 40-swing scan is skipped (it was ~70% of
+     runtime). The touch latch is `lastInsideBarIndex`, not a bool, precisely so
+     skipped bars need no latch clearing — don't revert it to a flag. A released
+     (no-longer-drawable) held level is a REFILL, not a re-rank: survivors keep
+     their slots. Re-ranking on release made unrelated lines vanish the next bar
+   - ⚠️ `swings.pine` is CLOSED-BAR ONLY by design (Henry, 2026-10-01): it is
+     the past projected into the future, so nothing runs intrabar or per
+     realtime tick. Render gate is `barstate.islastconfirmedhistory or
+     (barstate.islast and barstate.isconfirmed)`; every state write is on
+     `barstate.isconfirmed`. Never add tick-time behavior to it
    - `pivots.pine` (was `floor-pivots.pine`) holds three independent engines —
      classic floor pivots + CPR, the Camarilla equation, and previous day —
      each with its own history depth, styling and label placement, all reading
@@ -1652,5 +1691,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-09-29
+**Last Updated**: 2026-10-01
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`
