@@ -2,7 +2,7 @@
 // © henry_oliver
 
 //@version=6
-indicator(title = "On Balance Volume", shorttitle = "🐳 OBV", format = format.volume, timeframe = "", timeframe_gaps = false)
+indicator(title = "Volume Split Momentum", shorttitle = "🔋 VSM", format = format.price, precision = 2, timeframe = "", timeframe_gaps = false)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🧱 CONSTANTS
@@ -31,40 +31,72 @@ const color NORD14 = #A3BE8C
 const color NORD15 = #B48EAD
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🐳 ON BALANCE VOLUME
-// Volume added on up-closes, subtracted on down-closes, unchanged on equal
-// closes — a running cumulative total. It compares the CLOSE to the prior
-// close (never highs/lows), and the absolute value is meaningless — read the
-// shape: direction, slope, and position relative to the signal MA.
+// 🔋 VOLUME SPLIT MOMENTUM
+// Every bar's % price change is filed by the volume behind it: HEAVY bars
+// (volume above its trailing average) add their move, LIGHT bars subtract
+// theirs. The line is the running total of heavy-bar momentum minus
+// light-bar momentum:
+//   · Rising — price advances on heavy volume and pulls back on light volume:
+//     buyers are behind the move.
+//   · Falling — price drops on heavy volume and bounces on light volume:
+//     sellers are behind the move.
+// Adding the two halves back together rebuilds the price chart itself;
+// keeping them apart is what carries the information.
+//
+// Heavy/light is judged against the bar's own recent volume, not the prior
+// bar's — bar-to-bar volume changes are mostly the intraday volume curve, not
+// conviction. The session's first bar is left out: its move is the overnight
+// gap, which no bar's volume traded.
+//
+// Windows are set in minutes so 2-minute and 6-minute charts read the same
+// stretch of the session. The absolute value is meaningless; the read is the
+// line against its signal MA.
 // ═════════════════════════════════════════════════════════════════════════════
-const string GROUP_OBV = "🐳 On Balance Volume"
+const string GROUP_VSM = "🔋 Volume Split Momentum"
 
 // Thin and neutral so the signal MA reads as the primary line.
-const color OBV_LINE_COLOR = NORD3
+const color VSM_LINE_COLOR = NORD3
 
-obvSource = input.source(defval = close, title = "Source",
-     tooltip = "📍 Series compared bar to bar.\n• Default close — OBV reads the close vs the prior close", group = GROUP_OBV)
+const float VSM_BASELINE_MINUTES = 120.0   // trailing volume average that splits heavy from light
+const int   VSM_BASELINE_FALLBACK_BARS = 20 // non-intraday charts, and the floor on intraday ones
 
-// OBV core: sign of the close-to-close change scales the bar's whole volume,
-// accumulated. nz() guards the first bar and any gaps the vendor leaves blank.
-float obv = ta.cum(source = math.sign(number = ta.change(source = obvSource)) * nz(source = volume))
+vsmSource = input.source(defval = close, title = "Source",
+     tooltip = "📍 Series whose bar-to-bar % change is split by volume.\n• Default close", group = GROUP_VSM)
 
-// Vendor volume guard — OBV is meaningless without a volume feed.
-var float obvCumulativeVolume = 0.0
-obvCumulativeVolume += nz(source = volume)
-if barstate.islast and obvCumulativeVolume == 0
+// Helper function — minutes → bars on intraday charts (at least floorBars),
+// fallbackBars on daily and above.
+// Simple-qualified so the result can size ta.sma / ta.ema.
+f_vsmBars(simple float minutes, simple int floorBars, simple int fallbackBars) =>
+    timeframe.isintraday ? math.max(floorBars, math.round(number = minutes * 60.0 / timeframe.in_seconds())) : fallbackBars
+
+simple int vsmBaselineBars = f_vsmBars(minutes = VSM_BASELINE_MINUTES, floorBars = VSM_BASELINE_FALLBACK_BARS, fallbackBars = VSM_BASELINE_FALLBACK_BARS)
+
+// Bar move in % and the volume it traded on, relative to the trailing average
+// (current bar included). Equal to the average counts as light. The gap bar
+// is dropped on intraday charts only — on a daily chart every bar is a
+// session's first bar.
+float vsmRoc = ta.roc(source = vsmSource, length = 1)
+float vsmChange = timeframe.isintraday and session.isfirstbar ? 0.0 : nz(source = vsmRoc)
+float vsmVolumeAverage = ta.sma(source = nz(source = volume), length = vsmBaselineBars)
+bool  vsmHeavy = vsmVolumeAverage > 0.0 and nz(source = volume) > vsmVolumeAverage
+float vsm = ta.cum(source = vsmHeavy ? vsmChange : -vsmChange)
+
+// Vendor volume guard — the split is meaningless without a volume feed.
+var float vsmCumulativeVolume = 0.0
+vsmCumulativeVolume += nz(source = volume)
+if barstate.islast and vsmCumulativeVolume == 0
     runtime.error(message = "No volume is provided by the data vendor.")
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 〰️ SIGNAL MA
-// A moving average OF the OBV line. OBV above it = bullish volume
-// pattern, below = bearish; a rising MA under flat price is the accumulation
-// tell. Auto length spans 15 minutes intraday — a longer average lags into
-// the previous swing and the read turns backwards — and 20 bars on daily and
-// above.
+// A moving average OF the VSM line. Above it = recent heavy volume is on the
+// buy side, below = on the sell side; the distance is the strength. Auto
+// length spans 30 minutes — long enough to hold a swing, short enough that
+// the read is about this leg; a fixed bar count would be a different window
+// on every chart.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_SIGNAL = "〰️ Signal MA"
-const float  SIGNAL_AUTO_MINUTES = 15.0
+const float  SIGNAL_AUTO_MINUTES = 30.0
 const int    SIGNAL_AUTO_FLOOR_BARS = 3
 const int    SIGNAL_AUTO_FALLBACK_BARS = 20
 const int    SIGNAL_AUTO_MAX_BARS = 1000
@@ -74,16 +106,16 @@ const int    SIGNAL_AUTO_MAX_BARS = 1000
 const color SIGNAL_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color SIGNAL_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-// Fill colors between the OBV and its signal MA — the signal pair at 10% /
+// Fill colors between the VSM and its signal MA — the signal pair at 10% /
 // 5% opacity, so both lines stay readable on top.
 const color FILL_UP_COLOR = color.new(color = NORD8, transp = 90)
 const color FILL_DOWN_COLOR = color.new(color = NORD9, transp = 95)
 
 signalMaType = input.string(defval = "SMA", title = "Type", options = ["SMA", "EMA"],
-     tooltip = "〰️ Moving average of the OBV line (never of price).\n• Bright = rising, dim = falling\n• OBV above it = bullish volume, below = bearish\n• Default SMA", group = GROUP_SIGNAL, display = display.none)
+     tooltip = "〰️ Moving average of the VSM line.\n• Bright = rising, dim = falling\n• VSM above it = volume backing buyers, below = backing sellers\n• Distance from it = strength\n• Default SMA", group = GROUP_SIGNAL, display = display.none)
 signalAutoLength = input.bool(defval = true, title = "Auto", inline = "signal_length", group = GROUP_SIGNAL, display = display.none)
-signalMaLength = input.int(defval = 8, title = "Length", minval = 1, maxval = 1000, inline = "signal_length",
-     tooltip = "🔢 MA lookback.\n• Auto (default): 15 minutes — 8 bars on 2-min, 3 on 6-min, 20 on daily\n• Untick Auto to use Length in bars\n• Past ~30 minutes intraday the read turns backwards", group = GROUP_SIGNAL, display = display.none, active = not signalAutoLength)
+signalMaLength = input.int(defval = 15, title = "Length", minval = 1, maxval = 1000, inline = "signal_length",
+     tooltip = "🔢 MA lookback.\n• Auto (default): 30 minutes — 15 bars on 2-min, 5 on 6-min, 20 on daily\n• Untick Auto to use Length in bars\n• Past ~1 hour the read turns backwards", group = GROUP_SIGNAL, display = display.none, active = not signalAutoLength)
 
 // Helper function — the Auto length: `minutes` in bars of `barSeconds`,
 // clamped to SIGNAL_AUTO_FLOOR_BARS..SIGNAL_AUTO_MAX_BARS. A bar of a day or
@@ -97,8 +129,8 @@ simple int signalLength = signalAutoLength ? f_signalAutoBars(minutes = SIGNAL_A
 
 // Both averages run every bar so each keeps a regular history; the input picks
 // which one is shown.
-float signalSma = ta.sma(source = obv, length = signalLength)
-float signalEma = ta.ema(source = obv, length = signalLength)
+float signalSma = ta.sma(source = vsm, length = signalLength)
+float signalEma = ta.ema(source = vsm, length = signalLength)
 float signalMa = signalMaType == "EMA" ? signalEma : signalSma
 
 // MA slope drives the color; hold the last direction on flat bars so it doesn't
@@ -107,19 +139,19 @@ var bool signalRising = true
 signalRising := signalMa > signalMa[1] ? true : signalMa < signalMa[1] ? false : signalRising
 color signalColor = signalRising ? SIGNAL_UP_COLOR : SIGNAL_DOWN_COLOR
 
-// Fill between the OBV and its signal MA: up color while the OBV is at or
+// Fill between the VSM and its signal MA: up color while the VSM is at or
 // above the MA, down color below it.
-color signalFillColor = obv >= signalMa ? FILL_UP_COLOR : FILL_DOWN_COLOR
+color signalFillColor = vsm >= signalMa ? FILL_UP_COLOR : FILL_DOWN_COLOR
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS
 // Final plot, hline and fill statements only — every series and color is
 // computed in its owning section above.
 // ═════════════════════════════════════════════════════════════════════════════
-obvPlot = plot(series = obv, title = "OBV", color = OBV_LINE_COLOR, linewidth = 1)
+vsmPlot = plot(series = vsm, title = "VSM", color = VSM_LINE_COLOR, linewidth = 1)
 // A fill must follow the plots it joins, and the Style tab lists entries in
 // declaration order. The MA is therefore plotted twice: a hidden, non-editable
 // edge for the fill, then the visible line — which lists the fill above it.
 signalFillEdge = plot(series = signalMa, title = "Signal MA Fill Edge", color = na, editable = false, display = display.none)
-fill(plot1 = obvPlot, plot2 = signalFillEdge, color = signalFillColor, title = "OBV / Signal Fill")
+fill(plot1 = vsmPlot, plot2 = signalFillEdge, color = signalFillColor, title = "VSM / Signal Fill")
 plot(series = signalMa, title = "Signal MA", color = signalColor, linewidth = 3)

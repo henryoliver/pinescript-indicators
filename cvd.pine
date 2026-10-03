@@ -325,7 +325,8 @@ if barstate.isconfirmed
 // 〰️ SIGNAL MA
 // A moving average OF the CVD line. Above it = buying pressure building,
 // below = selling. Context, not a trigger — the reversal read is the
-// divergences.
+// divergences. Auto length spans 30 minutes; past about an hour the average
+// lags into the previous swing and the read turns backwards.
 //
 // Calculation timeframe: indicator(timeframe=) is unavailable to a script that
 // draws, so a higher timeframe is built by hand. A running total's value at a
@@ -335,103 +336,72 @@ if barstate.isconfirmed
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_SIGNAL = "〰️ Signal MA"
 const string GROUP_CALC = "🧮 Calculation"
-const string TT_SIGNAL_BB = "📐 'SMA + Bollinger Bands' only: band distance from the MA.\n• Default 2.0 standard deviations"
+const float  SIGNAL_AUTO_MINUTES = 30.0
+const int    SIGNAL_AUTO_FLOOR_BARS = 3
+const int    SIGNAL_AUTO_FALLBACK_BARS = 20
+const int    SIGNAL_AUTO_MAX_BARS = 1000
 
 // Signal-line slope colors — one blue family, so up/down read as one line
 // while the shade still shows its lean.
 const color SIGNAL_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color SIGNAL_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-signalMaType = input.string(defval = "SMA", title = "Type",
-     options = ["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"],
+// Fill colors between the CVD and its signal MA — the signal pair at 10% /
+// 5% opacity, so both lines stay readable on top.
+const color FILL_UP_COLOR = color.new(color = NORD8, transp = 90)
+const color FILL_DOWN_COLOR = color.new(color = NORD9, transp = 95)
+
+signalMaType = input.string(defval = "SMA", title = "Type", options = ["SMA", "EMA"],
      tooltip = "〰️ Moving average of the CVD line.\n• Bright = rising, dim = falling\n• CVD above it = buying building, below = selling\n• Default SMA", group = GROUP_SIGNAL, display = display.none)
-signalMaLength = input.int(defval = 20, title = "Length", minval = 1,
-     tooltip = "🔢 MA lookback in bars of the Calculation timeframe.\n• Default 20\n• Restarts at every anchor reset", group = GROUP_SIGNAL, display = display.none)
-signalBbMult = input.float(defval = 2.0, title = "BB StdDev", minval = 0.001, maxval = 50, step = 0.5,
-     tooltip = TT_SIGNAL_BB, group = GROUP_SIGNAL, display = display.none)
+signalAutoLength = input.bool(defval = true, title = "Auto", inline = "signal_length", group = GROUP_SIGNAL, display = display.none)
+signalMaLength = input.int(defval = 15, title = "Length", minval = 1, maxval = 1000, inline = "signal_length",
+     tooltip = "🔢 MA lookback, in bars of the Calculation timeframe.\n• Auto (default): 30 minutes — 15 bars on 2-min, 5 on 6-min, 20 on daily\n• Untick Auto to use Length in bars\n• Past ~1 hour the read turns backwards\n• Restarts at every anchor reset", group = GROUP_SIGNAL, display = display.none, active = not signalAutoLength)
 
 calcTimeframe = input.timeframe(defval = "", title = "Timeframe",
      tooltip = "🧮 Timeframe the CVD and its MA are shown on.\n• Chart (default) — follows the chart\n• Higher — line steps at each higher-timeframe close; MA counts those bars\n• Divergences stay on the chart's own swings", group = GROUP_CALC)
 calcWaitForClose = input.bool(defval = false, title = "Wait for timeframe closes",
      tooltip = "⏱ Higher timeframe only.\n• On — values only at each close, gaps between\n• Off (default) — CVD stays live, MA holds its last close", group = GROUP_CALC)
 
-bool signalEnabled = signalMaType != "None"
-bool signalIsBB = signalMaType == "SMA + Bollinger Bands"
-
-// Helper function — linearly weighted average of the window, newest sample
-// heaviest (ta.wma's weighting).
-f_signalWma(array<float> samples) =>
-    float wmaWeightedSum = 0.0
-    float wmaWeightTotal = 0.0
-    for [sampleIndex, sampleValue] in samples
-        wmaWeightedSum += sampleValue * (sampleIndex + 1)
-        wmaWeightTotal += sampleIndex + 1
-    wmaWeightTotal > 0.0 ? wmaWeightedSum / wmaWeightTotal : na
-
-// Helper function — volume-weighted average of the window (ta.vwma's
-// weighting: each sample weighted by the volume of its Calculation-timeframe
-// bar).
-f_signalVwma(array<float> samples, array<float> sampleVolumes) =>
-    float vwmaWeightedSum = 0.0
-    float vwmaVolumeTotal = 0.0
-    for [sampleIndex, sampleValue] in samples
-        float sampleVolume = array.get(id = sampleVolumes, index = sampleIndex)
-        vwmaWeightedSum += sampleValue * sampleVolume
-        vwmaVolumeTotal += sampleVolume
-    vwmaVolumeTotal > 0.0 ? vwmaWeightedSum / vwmaVolumeTotal : na
-
 // A higher timeframe only when it really is higher. The last chart bar inside
 // each HTF bar is its close.
 bool calcUsesHtf = calcTimeframe != "" and timeframe.in_seconds(timeframe = calcTimeframe) > timeframe.in_seconds()
 bool calcHtfClosing = not calcUsesHtf or time_close == time_close(timeframe = calcTimeframe)
 
+// Helper function — the Auto length: `minutes` in bars of `barSeconds`,
+// clamped to SIGNAL_AUTO_FLOOR_BARS..SIGNAL_AUTO_MAX_BARS. A bar of a day or
+// longer falls back to SIGNAL_AUTO_FALLBACK_BARS, where minutes mean nothing.
+// `barSeconds` is the Calculation timeframe's bar.
+f_signalAutoBars(float minutes, int barSeconds) =>
+    barSeconds >= 86400 ? SIGNAL_AUTO_FALLBACK_BARS :
+         math.min(SIGNAL_AUTO_MAX_BARS, math.max(SIGNAL_AUTO_FLOOR_BARS, math.round(number = minutes * 60.0 / barSeconds)))
+
+int signalLength = signalAutoLength ? f_signalAutoBars(minutes = SIGNAL_AUTO_MINUTES,
+     barSeconds = calcUsesHtf ? timeframe.in_seconds(timeframe = calcTimeframe) : timeframe.in_seconds()) : signalMaLength
+
 // Rolling window of samples, one per Calculation-timeframe bar, instead of
-// ta.* built-ins (those must run every bar and would count chart bars). Each
-// type reproduces its built-in: SMA / WMA / VWMA / stdev need a full window,
-// EMA and SMMA (RMA) seed from the window's SMA and then recurse. On the chart
-// timeframe every bar is a sample, so the result is the built-in's.
+// ta.* built-ins (those must run every bar and would count chart bars). The
+// SMA needs a full window; the EMA seeds from that SMA and then recurses. On
+// the chart timeframe every bar is a sample, so both match the built-ins.
 var array<float> signalSamples = array.new<float>()
-var array<float> signalSampleVolumes = array.new<float>()
-var float signalVolumeAccumulator = 0.0
-var float signalRecursive = na
-var float signalCvdSample = na
+var float signalEma = na
+var float signalLineSample = na
 var float signalMa = na
-var float signalStDev = na
 // The window restarts with the anchor: the CVD jumps back to zero at a reset,
 // so an average still holding the prior period would sit far from the line
 // and paint every open as a cross. Blank for the first Length samples.
 if cvdAnchorReset
     array.clear(id = signalSamples)
-    array.clear(id = signalSampleVolumes)
-    signalVolumeAccumulator := 0.0
-    signalRecursive := na
-    signalCvdSample := na
+    signalEma := na
+    signalLineSample := na
     signalMa := na
-    signalStDev := na
-if not na(cvdSeries)
-    signalVolumeAccumulator += nz(source = volume)
 if calcHtfClosing and not na(cvdSeries)
-    signalCvdSample := cvdSeries
+    signalLineSample := cvdSeries
     array.push(id = signalSamples, value = cvdSeries)
-    array.push(id = signalSampleVolumes, value = signalVolumeAccumulator)
-    signalVolumeAccumulator := 0.0
-    if array.size(id = signalSamples) > signalMaLength
+    if array.size(id = signalSamples) > signalLength
         array.shift(id = signalSamples)
-        array.shift(id = signalSampleVolumes)
-    bool signalWindowFull = array.size(id = signalSamples) == signalMaLength
-    float signalSma = signalWindowFull ? array.avg(id = signalSamples) : na
-    if signalMaType == "EMA" or signalMaType == "SMMA (RMA)"
-        float signalAlpha = signalMaType == "EMA" ? 2.0 / (signalMaLength + 1.0) : 1.0 / signalMaLength
-        signalRecursive := na(signalRecursive) ? signalSma : signalAlpha * cvdSeries + (1.0 - signalAlpha) * signalRecursive
-    signalMa := switch signalMaType
-        "SMA"                   => signalSma
-        "SMA + Bollinger Bands" => signalSma
-        "EMA"                   => signalRecursive
-        "SMMA (RMA)"            => signalRecursive
-        "WMA"                   => signalWindowFull ? f_signalWma(samples = signalSamples) : na
-        "VWMA"                  => signalWindowFull ? f_signalVwma(samples = signalSamples, sampleVolumes = signalSampleVolumes) : na
-        => na
-    signalStDev := signalIsBB and signalWindowFull ? array.stdev(id = signalSamples) * signalBbMult : na
+    float signalSma = array.size(id = signalSamples) == signalLength ? array.avg(id = signalSamples) : na
+    signalEma := na(signalEma) ? signalSma : signalEma + 2.0 / (signalLength + 1.0) * (cvdSeries - signalEma)
+    signalMa := signalMaType == "EMA" ? signalEma : signalSma
 
 // MA slope drives the color; hold the last direction on flat bars so it doesn't
 // flicker.
@@ -439,12 +409,16 @@ var bool signalRising = true
 signalRising := signalMa > signalMa[1] ? true : signalMa < signalMa[1] ? false : signalRising
 color signalColor = signalRising ? SIGNAL_UP_COLOR : SIGNAL_DOWN_COLOR
 
-// Plot series. Chart timeframe: the CVD and its MA wherever the CVD is
-// measured. Higher timeframe: wait-for-close shows both only on HTF closes;
-// otherwise the CVD stays live and the MA holds its last close.
+// Plot series. Chart timeframe: the line and its MA wherever the line draws.
+// Higher timeframe: wait-for-close shows both only on HTF closes; otherwise
+// the line stays live and the MA holds its last close.
 bool calcGapNow = calcUsesHtf and calcWaitForClose and not calcHtfClosing
-float cvdPlotValue = calcGapNow ? na : calcUsesHtf and calcWaitForClose ? signalCvdSample : cvdSeries
+float cvdPlotValue = calcGapNow ? na : calcUsesHtf and calcWaitForClose ? signalLineSample : cvdSeries
 float signalPlotValue = calcGapNow or na(cvdSeries) and not calcUsesHtf ? na : signalMa
+
+// Fill between the CVD and its signal MA: up color while the CVD is at or
+// above the MA, down color below it.
+color signalFillColor = cvdPlotValue >= signalPlotValue ? FILL_UP_COLOR : FILL_DOWN_COLOR
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS
@@ -453,14 +427,10 @@ float signalPlotValue = calcGapNow or na(cvdSeries) and not calcUsesHtf ? na : s
 // ═════════════════════════════════════════════════════════════════════════════
 hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed,
      display = cvdShowZeroLine and cvdAnchorMode != "Continuous" ? display.all : display.none)
-plot(series = cvdPlotValue, title = "CVD", color = CVD_LINE_COLOR, linewidth = 2)
-plot(series = signalPlotValue, title = "Signal MA", color = signalColor, linewidth = 3,
-     display = signalEnabled ? display.all : display.none)
-
-// Bollinger Bands — only drawn in 'SMA + Bollinger Bands' mode.
-bbUpperPlot = plot(series = signalIsBB ? signalPlotValue + signalStDev : na, title = "Upper Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
-bbLowerPlot = plot(series = signalIsBB ? signalPlotValue - signalStDev : na, title = "Lower Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
-fill(plot1 = bbUpperPlot, plot2 = bbLowerPlot, color = signalIsBB ? color.new(color = NORD8, transp = 92) : na,
-     title = "Bollinger Bands Background Fill", display = signalIsBB ? display.all : display.none)
+cvdPlot = plot(series = cvdPlotValue, title = "CVD", color = CVD_LINE_COLOR, linewidth = 1)
+// A fill must follow the plots it joins, and the Style tab lists entries in
+// declaration order. The MA is therefore plotted twice: a hidden, non-editable
+// edge for the fill, then the visible line — which lists the fill above it.
+signalFillEdge = plot(series = signalPlotValue, title = "Signal MA Fill Edge", color = na, editable = false, display = display.none)
+fill(plot1 = cvdPlot, plot2 = signalFillEdge, color = signalFillColor, title = "CVD / Signal Fill")
+plot(series = signalPlotValue, title = "Signal MA", color = signalColor, linewidth = 3)

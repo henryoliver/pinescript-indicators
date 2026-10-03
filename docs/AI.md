@@ -1189,9 +1189,9 @@ full-session window for "am I in RTH" tests only.
      85 logged sessions, worst-regime direction +0.0114 → +0.0178 vs the old
      75/5/20/20/20, shift unchanged; NQ above ~40 trades one chunk against
      another and turns the line into futures premium
-   - Pane = obv.pine/cvd.pine pattern: CBI line NORD3 width 2; 〰️ Signal MA
-     identical to obv (SMA 20 default, slope NORD8/NORD9, width 3, BB option)
-     computed over a rolling sample window; 🧮 Calculation group (Timeframe /
+   - Pane = the shared volume-pane pattern (see "Signal MA lengths" below):
+     CBI line NORD3 width 1, signal MA EMA Auto 4 h, slope NORD8/NORD9 width 3,
+     line/MA fill, computed over a rolling sample window; 🧮 Calculation group (Timeframe /
      Wait for timeframe closes) built manually because the ◆ are drawings.
      The MA window does NOT restart at 07:00/09:30 (the CBI is a ±100
      oscillator, not a running total). No vendor volume guard: every leg is a
@@ -1200,6 +1200,31 @@ full-session window for "am I in RTH" tests only.
      sessions; bearish never measured — both ON by default, tooltips say so),
      coloured like cvd's divergences (NORD8 bull / NORD11 bear)
    - NO `alertcondition()` — the pane is read, not subscribed to
+   - BREADTH LEVEL vs MOMENTUM (2026-10-03, cbimom.py, v4 logs 85 sessions,
+     75/5/10/20/40): worst-chunk DIRECTION level +0.018 (2-min) / +0.021
+     (6-min); line − 40-min MA −0.015 / −0.020; 20-min slope −0.002 / −0.008.
+     Opposite of VSM: breadth POSITION carries forward, breadth MOMENTUM
+     mean-reverts. Only CUMTICK holds in both forms. Tooltips now point at
+     distance from zero; the signal MA stays context
+   - "CBI / Signal Fill" (2026-10-03, Henry's visual trial — CBI first, may
+     roll to the other panes): fill() between the CBI plot and the signal MA
+     plot, two colors only — NORD8 at 10% opacity (transp 90) while CBI ≥ MA,
+     NORD9 at 5% (transp 95) below. No input — toggled in the Style tab; hidden
+     with the MA when Type = None
+   - WHOLE-MARKET ROUTING (2026-10-03, bulstudy/bulsweep/buldia*.py on
+     bul-1/2/3 = 87 sessions Jun 1–Oct 2, 3 chunks of 29): universe inputs
+     REMOVED, routing fixed: VOLD = mean of ADVDECV/TVOL .NQ + .NY + .DJ (each
+     tape its own 09:30 baseline via f_cbiVoldLeg), ADD = ADVDEC.US (±4500),
+     %VWAP = PCTABOVEVWAP.US (±15), CUMTICK = classic USI:TICK. Weights
+     75/5/5/30/20. QQQ worst-chunk DIR/SHIFT 2-min +0.018/+0.004, 6-min
+     +0.017/−0.003 vs old routing −0.005/+0.009 and −0.004/+0.004 (old ranked
+     805/864 in the sweep). Bullish ◆ +5.8 bps 71% n21 (every chunk positive;
+     old +4.3 65%); bearish ◆ still no edge (−0.7, 52%). All-US TICK (TICK.US)
+     gave the best line SHIFT (+0.025) but broke the ◆ (−3.0, 50%) — rejected.
+     SPY: direction improves, nothing predicts SPY shift. Single stocks
+     (NVDA/AAPL/MSFT/TSLA): no configuration holds in every chunk — breadth is
+     a market read, not a single-name read. NQ PREMIUM measured −0.090 alone
+     in Jun–Jul (it carried 40 before) → 20
 
 2. **`fundamental-view-indicator.pine`**
    - Displays comprehensive fundamental data table
@@ -1480,14 +1505,13 @@ full-session window for "am I in RTH" tests only.
 15. **`obv.pine`**
     - On Balance Volume (Barry Burns methodology) — smart-money/accumulation
       detector in its own pane
-    - OBV drawn thin/neutral (like the MACD line); a 20-period SIMPLE MA OF OBV
-      is the hero line, slope-colored with the same blue up/down pair as the
-      macd-waves signal line and stochastic %D
-    - Bollinger Bands mode retained from the stock indicator
+    - OBV drawn thin/neutral (width 1); the signal MA OF OBV (SMA, Auto 15
+      min) is the hero line, slope-colored with the same blue up/down pair as
+      the macd-waves signal line and stochastic %D, with the line/MA fill
     - Deliberately carries no trend lines or horizontal S/R (Barry rejects both
       on OBV) — the signal MA is the only reference
-    - THE REFERENCE PATTERN for cvd.pine and composite-breadth.pine (line
-      NORD3 width 2, signal MA width 3, same inputs/groups). It alone uses the
+    - THE REFERENCE PATTERN for cvd, composite-breadth and
+      volume-split-momentum (see "Signal MA lengths" for the shared pane). It alone uses the
       built-in `indicator(timeframe = "", timeframe_gaps = false)` because it
       draws nothing; no zero line because a chart-start cumulative total has
       no meaningful zero
@@ -1516,8 +1540,9 @@ full-session window for "am I in RTH" tests only.
     - NO `runtime.error` for a missing footprint: "symbol serves none" and
       "context serves none" (Bar Replay) are indistinguishable from inside
     - Pane = obv.pine: one ⚖️ group (Anchor, Decay Length [`active` only on
-      Decay], Session Data, Zero Line); CVD NORD3 width 2; 〰️ Signal MA =
-      obv's (default SMA 20, slope NORD8 t20 / NORD9 t60, width 3, BB option);
+      Decay], Session Data, Zero Line); CVD NORD3 width 1; 〰️ Signal MA =
+      the shared pane (SMA, Auto 30 min, slope NORD8 t20 / NORD9 t60, width 3,
+      line/MA fill);
       🧮 Calculation (Timeframe + Wait for timeframe closes, default OFF like
       obv's `timeframe_gaps = false`) built manually because
       indicator(timeframe=) is barred for scripts that draw. The MA runs on a
@@ -1543,6 +1568,109 @@ full-session window for "am I in RTH" tests only.
     - Code comments and tooltips carry logic only (emoji + bullets, key
       values); dates, sample sizes and provenance live here, not in the file
     - NO `alertcondition()`
+
+17. **`volume-split-momentum.pine`** (🔋 VSM, built 2026-10-03)
+    - Henry's request: "same idea as VBSM (2tm) but far superior". VBSM sums
+      cumulative ROC on falling-volume bars (NVI) and rising-volume bars (PVI)
+      — the sum IS price (corr 0.9999 with cumulative % move), so its fill is
+      price vs its 25 SMA (DIRECTION −0.07, 47% hit on 29 sessions)
+    - VSM keeps the halves APART: line = cum(ROC × +1 on HEAVY bars, −1 on
+      LIGHT bars), heavy = volume > SMA(volume, 120 min) incl. current bar.
+      Session's first bar ROC = 0 (overnight gap). Read = line vs signal MA
+    - MEASURED on the cvd logs (58 sessions Jul–Sep, QQQ, ETH, scored on RTH,
+      line − MA, DIRECTION = ½IC + ½partial IC vs trailing 20 min at 10/20/30
+      min; SHIFT as in the CBI work), worst month:
+      2-min: VSM +0.035 / shift +0.025 · VBSM −0.010 / −0.040 · OBV −0.030 /
+      −0.021 · CVD session +0.011 / +0.007
+      6-min: VSM +0.032 / +0.009 · VBSM −0.012 / −0.091 · OBV −0.001 / −0.006
+      · CVD +0.005 / +0.005
+      The edge is in DISTANCE from the MA, not the colour: following the
+      above/below side alone is ~50-51% hit, +0.4-1.1 bps / 20 min
+    - Rejected variants: PVI, NVI, PVI−NVI (sign flips by month); time-of-day
+      relative volume (worse than trailing); participation-weighted ROC×rvol;
+      heavy threshold 1.2/1.5 (fails a month); 0.8 also fine. Windows MUST be
+      in minutes: 20-bar signal on 6-min (2 h) fails July (−0.041); 40-min
+      signal works on both → Auto (now 30 min, see Signal MA lengths),
+      baseline 120 min
+    - OBV pattern exactly: built-in `indicator(timeframe = "",
+      timeframe_gaps = false)` (no drawings), line NORD3 width 1, signal MA
+      width 3 + line/MA fill, no zero line (chart-start cumulative), vendor
+      volume guard, NO alerts. Not compiled by Henry yet at time of writing
+    - Analysis scripts: scratchpad vbm1-4.py (cvd-logs)
+    - MERGE WITH CVD TESTED AND REJECTED (2026-10-03, merge1/2.py): z-blends
+      of VSM + delta increments at 1:1/2:1/1:2/3:1 all lose VSM's worst-month
+      direction (−0.015 to +0.015); delta split by heavy/light, ROC × delta
+      ratio, |delta|-defined heavy bars all worse. "VSM only on bars where
+      delta agrees with price" is a wash (6-min worst dir +0.041 vs +0.032,
+      but 2-min shift avg +0.049 vs +0.057) and would add a footprint
+      dependency. Divergences on VSM do NOT carry CVD's edge: reg bear +0.2
+      bps/20m (CVD +7.9, 73%). Keep two panes: VSM = direction, CVD =
+      regular-bearish divergence. `simple` qualifiers on f_vsmBars params are
+      required — untyped-qualifier params made signalLength series and
+      ta.ema/ta.rma refused it
+
+18. **`agreement-strategy.pine`** (🤝 VAS, strategy(), built 2026-10-03)
+    - Henry's "all panes agree" trade as a Strategy Tester script. Recomputes
+      VSM, CVD (footprint, session anchor) and CBI (whole-market engine,
+      constant weights) exactly as the panes do; 6-minute states built from
+      the chart's bars at each `time_close("6")` close. OBV deliberately out
+      (removing it improved the offline test)
+    - Entry: all three on the trade's side of their signal MAs on 2-min AND
+      6-min, %D(5/2/3) ≥ 85 long / ≤ 15 short (first bar of the setup), no
+      entries 11:30-13:30 or after 15:40. Fills next open
+    - Exits in thirds: stop beyond the 10-bar swing; T1 at +0.5R or first
+      disagreement (strategy.close + cancel T1) → stop to breakeven; T2 at +1R;
+      T3 when all three flip against, BE stop, or 15:56
+    - Offline expectation (63 sessions, Jul–Oct): win ~47%, +0.054%/trade,
+      PF ~3.5, ~1.9 trades/day — chosen from 120 combos, expect lower live
+    - Commission 0.005% per side (= 1 bp round trip as tested); capital 250k
+      so 300 QQQ shares fit at 100% margin
+    - ENTRY MODE input (2026-10-03, Henry: "the entries are wrong"): default
+      "Cycle Hook" = Henry's rules — all three SIGNAL-MA SLOPES agree (pane
+      colour), longs only when rising / shorts only when falling, %D hooks up
+      from < 20 (down from > 80) on the bar close; disagreement exits use the
+      slopes too. "Momentum Push" = the line-vs-MA + %D-at-extreme version.
+      6-min agreement and lunch skip now default OFF (not in Henry's rules).
+      OFFLINE (slope.py/slope2.py, 63 sessions): Cycle Hook PF 0.53, win 32%,
+      negative every month; %D crossing back through 20/80 PF 0.58; line slopes
+      PF 0.41. Momentum Push at the same defaults PF 2.03, win 35%
+
+### Signal MA lengths — all four volume/breadth panes (2026-10-03, siglen.py)
+- SHARED PANE PATTERN (OBV, CVD, VSM, CBI — keep identical): main line NORD3
+  width 1; 〰️ Signal MA (Type SMA/EMA, ☑ Auto + Length inline), slope-colored
+  NORD8 t20 / NORD9 t60 width 3; `signalFillColor` fill between line and MA
+  (NORD8 t90 above / NORD9 t95 below); Style tab order line → fill → MA via
+  the hidden `signalFillEdge` plot. CVD/CBI add the 🧮 Calculation group
+- TYPES REDUCED to SMA / EMA only (Henry, 2026-10-03): None, SMA + Bollinger
+  Bands, SMMA (RMA), WMA and VWMA removed with their code (BB plots, stdev,
+  WMA/VWMA helpers, sample-volume arrays). OBV/VSM compute ta.sma AND ta.ema
+  every bar and pick one (no conditional ta.* calls); CVD/CBI keep one
+  rolling sample window — SMA = full-window mean, EMA seeded from it. Hide
+  the MA from the Style tab instead of a "None" type
+- CBI fill row sits ABOVE Signal MA in the Style tab: the MA is plotted
+  twice — a hidden `editable = false` edge plot for fill(), then the visible
+  line (Style tab lists entries in declaration order; fill must follow its
+  plots)
+- UI: an "Auto" checkbox (default ON) inline with "Length"; Length is greyed
+  out (`active = not signalAutoLength`) while Auto is on and holds the 2-min
+  equivalent (OBV 8 / CVD 15 / VSM 15 / CBI 120) for when it is unticked.
+  f_signalAutoBars clamps to 3..1000 bars; a bar of ≥1 day → 20 bars. OBV/VSM
+  keep it simple-qualified (ta.ema/ta.rma need simple int)
+- AUTO is set in MINUTES (a fixed bar count is a
+  different window on 2-min vs 6-min — "20 bars" was 40 min vs 2 h, and at 2 h
+  OBV and CVD read BACKWARDS). Non-intraday falls back to 20 bars; CVD/CBI
+  count minutes in Calculation-timeframe bars
+- Measured on line − MA DIRECTION, worst month 2-min / 6-min:
+  · OBV  SMA 15 min (8 / 3 bars)   ≈ +0.02 / +0.034  (old 20 bars: −0.030 / −0.073)
+  · CVD  SMA 30 min (15 / 5 bars)  +0.008 / +0.005   (old: +0.011 / −0.057)
+  · VSM  SMA 30 min (15 / 5 bars)  +0.047 / +0.038   (old 40 min: +0.035 / +0.032)
+  · CBI  EMA 240 min (120 / 40)    +0.033 / +0.034   (old 20 bars: −0.021 / −0.019);
+    every CBI length under ~90 min is negative — breadth momentum mean-reverts,
+    only a slow baseline helps. CBI type default changed SMA → EMA
+- Signal-line COLOUR (slope) is ~50-52% hit at every length on every pane — it
+  is cosmetic; the distance from the MA is the read
+- VSM bug fixed same pass: `session.isfirstbar ? 0` zeroed EVERY bar on daily
+  charts / Timeframe ≥ 1D (flat line) → now `timeframe.isintraday and …`
 
 ### Common Features Across Indicators
 

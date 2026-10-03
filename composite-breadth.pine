@@ -44,22 +44,29 @@ const string CBI_SESSION_MOC            = "1545-1600:23456"   // market-on-close
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 📊 COMPOSITE BREADTH
-// Five legs read the cash market's internals, each normalised to ±1 and
+// Five legs read the WHOLE cash market's internals, each normalised to ±1 and
 // blended into one ±100 line:
-//   VOLD     up-volume minus down-volume ÷ total volume, counted from 09:30
-//            (premarket volume leans bullish and would tilt the first hour)
-//   ADD      advancers minus decliners ÷ a per-market issue scale
-//   %VWAP    percent of stocks above their VWAP, centred on 50
-//   CUMTICK  10-minute slope of bias-adjusted cumulative TICK — cash session
-//            only
+//   VOLD     up-volume minus down-volume ÷ total volume, averaged across the
+//            Nasdaq, NYSE and Dow tapes, counted from 09:30 (premarket volume
+//            leans bullish and would tilt the first hour)
+//   ADD      advancers minus decliners across all US markets
+//   %VWAP    percent of all US stocks above their VWAP, centred on 50
+//   CUMTICK  10-minute slope of bias-adjusted cumulative NYSE TICK ($TICK) —
+//            cash session only
 //   NQ PREM  how far NQ1! has run ahead of the chart's price since 09:30 —
 //            cash session only, Nasdaq-listed charts only
+// A single exchange's breadth is that exchange's mood; averaging the tapes
+// reads the market as a whole, and drops out any one feed's quirks. TICK stays
+// on the classic NYSE $TICK: the all-US TICK is noisier and blurs the
+// non-confirmation ◆ at session extremes.
 // Before 09:30 the line runs on VOLD/ADD/%VWAP from 07:00, each recentred on
 // its own ~20-session premarket average (the raw premarket feeds lean bullish
 // almost every day).
 //
-// The line is context — the day's internals; the ◆ markers are the reversal
-// read.
+// The read is the LEVEL — how far above or below zero the line sits. Breadth
+// position carries forward; breadth momentum (the line against its own recent
+// average, or its slope) mean-reverts, so the signal MA is context only. The ◆
+// markers are the reversal read.
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_CBI = "📊 Composite Breadth"
 const string GROUP_CBI_WEIGHTS = "⚖️ Weights"
@@ -71,95 +78,34 @@ const float CBI_SCALE_MAX                    = 100.0
 const float CBI_DISPLAY_SMOOTH_MINUTES       = 6.0      // light EMA on the plotted line, in minutes (3 bars on 2-min)
 const float CBI_CUMTICK_SLOPE_MINUTES        = 10.0     // cumulative-TICK slope lookback
 const float CBI_CUMTICK_SLOPE_SMOOTH_MINUTES = 10.0     // EMA on that slope before normalising — the raw slope flips sign constantly
-const float CBI_TICK_FIXED_SCALE             = 500.0    // cumTICK saturation: TICK averaging ±500 across the slope window (NYSE), scaled per universe
+const float CBI_TICK_FIXED_SCALE             = 500.0    // cumTICK saturation: TICK averaging ±500 across the slope window (NYSE scale)
 const float CBI_TICK_BIAS_DAYS               = 20.0     // Adjusted TICK: trailing ~20-day TICK mean subtracted before cumulating
 const float CBI_PREMARKET_BIAS_DAYS          = 20.0     // trailing window of the premarket de-bias
 const float CBI_NQ_PREMIUM_SCALE             = 0.0005   // NQ PREMIUM saturates at a 5 bp move of NQ1!/price from its 09:30 value
 
-const string CBI_UNIVERSES_TT = "\n\n🌐 .US All Markets · .NY NYSE · .NQ NASDAQ · .DJ Dow Jones · .AX NYSE Arca · .AM NYSE American"
-
-cbiMarket = input.string(defval = "NASDAQ", title = "Breadth Universe",
-     options = ["US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "🌐 Fallback for any leg set to 'Same as Breadth Universe'.\n• NASDAQ (default) — QQQ, NQ, Nasdaq stocks\n• NYSE — SPY, ES", group = GROUP_CBI, display = display.none)
-cbiVoldUniverse = input.string(defval = "NASDAQ", title = "VOLD Universe",
-     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "💰 Up/down volume ÷ total volume (USI:ADVDECV / USI:TVOL).\n• Default NASDAQ — strongest for QQQ" + CBI_UNIVERSES_TT, group = GROUP_CBI, display = display.none)
-cbiAddUniverse = input.string(defval = "NYSE", title = "A-D Universe",
-     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "📈 Advancers − decliners (USI:ADVDEC).\n• Default NYSE — Nasdaq issue counts are distorted by small-cap listing churn" + CBI_UNIVERSES_TT, group = GROUP_CBI, display = display.none)
-cbiPctVwapUniverse = input.string(defval = "NYSE", title = "%VWAP Universe",
-     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "🎯 Percent of stocks above their VWAP (USI:PCTABOVEVWAP).\n• Default NYSE" + CBI_UNIVERSES_TT, group = GROUP_CBI, display = display.none)
-cbiTickUniverse = input.string(defval = "NYSE", title = "TICK Universe",
-     options = ["Same as Breadth Universe", "US All Markets", "NYSE", "NASDAQ", "Dow Jones", "NYSE Arca", "NYSE American"],
-     tooltip = "⚡ Upticks − downticks across the market.\n• Default NYSE → the classic USI:TICK ($TICK), not the ~3× smaller TICK.NY\n• TICK.NQ makes the composite worse" + CBI_UNIVERSES_TT, group = GROUP_CBI, display = display.none)
 cbiShowZeroLine = input.bool(defval = true, title = "Show Zero Line",
-     tooltip = "➖ Zero = balanced internals.\n• Above = the cash market is net buying\n• Below = net selling\n• Context, not a trigger", group = GROUP_CBI, display = display.none)
+     tooltip = "➖ Zero = balanced internals.\n• Above = the cash market is net buying, below = net selling\n• Distance from zero = strength — the read that carries forward\n• A crossing on its own is not a trigger", group = GROUP_CBI, display = display.none)
 
 // Weights — only the ratios matter. VOLD carries the most because it is the
-// steadiest leg; %VWAP and CUMTICK swing hardest, so small weights already
-// move the line; NQ above ~40 would turn the line into futures premium
-// rather than breadth.
+// steadiest leg; CUMTICK is second because it is the leg that turns first;
+// ADD and %VWAP echo VOLD, so they get little; NQ above ~40 would turn the
+// line into futures premium rather than breadth.
 const string CBI_WEIGHT_TT = "\n\n⚖️ Only the ratios between weights matter · 0 = leg off (no request)"
 cbiVoldWeight = input.float(defval = 75, title = "VOLD", minval = 0, maxval = 100, step = 5,
-     tooltip = "💰 Up-volume vs down-volume — the money behind the move.\n• Default 75 — the steadiest leg, so it carries the most weight" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
+     tooltip = "💰 Up-volume vs down-volume — the money behind the move.\n• Nasdaq + NYSE + Dow tapes, averaged\n• Default 75 — the steadiest leg, so it carries the most weight" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
 cbiAddWeight = input.float(defval = 5, title = "ADD", minval = 0, maxval = 100, step = 5,
-     tooltip = "📈 Advancers − decliners — how many stocks join the move.\n• Default 5 — more weight hurts the direction read" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
-cbiPctVwapWeight = input.float(defval = 10, title = "PCTABOVEVWAP", minval = 0, maxval = 100, step = 5,
-     tooltip = "🎯 % of stocks above their VWAP — positioning vs the institutional benchmark.\n• Default 10 — loud and close to price, a little goes a long way" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
-cbiCumTickWeight = input.float(defval = 20, title = "CUMTICK", minval = 0, maxval = 100, step = 5,
-     tooltip = "⚡ Slope of cumulative TICK — the print-by-print rhythm.\n• Default 20 — swings hardest of the five\n• Cash session only" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
-cbiNqPremiumWeight = input.float(defval = 40, title = "NQ PREMIUM", minval = 0, maxval = 100, step = 5,
-     tooltip = "🚀 NQ1! running rich or cheap vs the chart's price since 09:30 — futures lead price discovery.\n• Default 40\n• Cash session, Nasdaq-listed charts only (off on SPY)\n• Needs real-time CME data — set 0 without it" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
+     tooltip = "📈 Advancers − decliners across all US markets — how many stocks join the move.\n• Default 5 — echoes VOLD, more weight hurts the direction read" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
+cbiPctVwapWeight = input.float(defval = 5, title = "PCTABOVEVWAP", minval = 0, maxval = 100, step = 5,
+     tooltip = "🎯 % of all US stocks above their VWAP — positioning vs the institutional benchmark.\n• Default 5 — loud and close to price, a little goes a long way" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
+cbiCumTickWeight = input.float(defval = 30, title = "CUMTICK", minval = 0, maxval = 100, step = 5,
+     tooltip = "⚡ Slope of cumulative NYSE TICK ($TICK) — the print-by-print rhythm.\n• Default 30 — the leg that turns first\n• Cash session only" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
+cbiNqPremiumWeight = input.float(defval = 20, title = "NQ PREMIUM", minval = 0, maxval = 100, step = 5,
+     tooltip = "🚀 NQ1! running rich or cheap vs the chart's price since 09:30 — futures lead price discovery.\n• Default 20\n• Cash session, Nasdaq-listed charts only (off on SPY)\n• Needs real-time CME data — set 0 without it" + CBI_WEIGHT_TT, group = GROUP_CBI_WEIGHTS)
 
-// Universe routing — one dotted USI suffix per leg.
-f_cbiResolveUniverse(string universe) =>
-    universe == "Same as Breadth Universe" ? cbiMarket : universe
-
-f_cbiUsiSuffix(string universe) =>
-    switch universe
-        "US All Markets" => "US"
-        "NYSE"           => "NY"
-        "NASDAQ"         => "NQ"
-        "Dow Jones"      => "DJ"
-        "NYSE Arca"      => "AX"
-        "NYSE American"  => "AM"
-        => "NQ"
-
-string cbiVoldUniverseResolved    = f_cbiResolveUniverse(universe = cbiVoldUniverse)
-string cbiAddUniverseResolved     = f_cbiResolveUniverse(universe = cbiAddUniverse)
-string cbiPctVwapUniverseResolved = f_cbiResolveUniverse(universe = cbiPctVwapUniverse)
-string cbiTickUniverseResolved    = f_cbiResolveUniverse(universe = cbiTickUniverse)
-string cbiVoldSuffix    = f_cbiUsiSuffix(universe = cbiVoldUniverseResolved)
-string cbiAddSuffix     = f_cbiUsiSuffix(universe = cbiAddUniverseResolved)
-string cbiPctVwapSuffix = f_cbiUsiSuffix(universe = cbiPctVwapUniverseResolved)
-string cbiTickSuffix    = f_cbiUsiSuffix(universe = cbiTickUniverseResolved)
-
-// Per-universe calibration. ADD saturates at the typical extremes (NYSE
-// ±2,000, Nasdaq ±2,500, scaled by issue count elsewhere); %VWAP saturates at
-// the 35/65 rails on the liquid tapes and wider on the narrow or correlated
-// ones; TICK levels scale by an issue-count factor.
-float cbiAddScale = switch cbiAddUniverseResolved
-    "US All Markets" => 4500.0
-    "NYSE"           => 2000.0
-    "NASDAQ"         => 2500.0
-    "Dow Jones"      => 27.0
-    "NYSE Arca"      => 2000.0
-    "NYSE American"  => 200.0
-    => 2500.0
-float cbiPctVwapBand = switch cbiPctVwapUniverseResolved
-    "Dow Jones"     => 20.0
-    "NYSE Arca"     => 30.0
-    "NYSE American" => 30.0
-    => 15.0
-float cbiTickMarketFactor = switch cbiTickUniverseResolved
-    "US All Markets" => 2.25
-    "NYSE"           => 1.0
-    "NASDAQ"         => 1.25
-    "Dow Jones"      => 0.026
-    "NYSE Arca"      => 1.6
-    "NYSE American"  => 0.17
-    => 1.25
+// Whole-market calibration. ADD saturates at ±4,500 (all US issues); %VWAP at
+// the 35/65 rails.
+const float CBI_ADD_SCALE          = 4500.0
+const float CBI_PCTVWAP_BAND       = 15.0
 
 // Minutes → bars, so the windows keep their meaning on 1/2/3/6-minute charts.
 f_cbiBars(float minutes, int floorBars) =>
@@ -170,29 +116,37 @@ int   cbiCumTickSlopeWindow      = f_cbiBars(minutes = CBI_CUMTICK_SLOPE_MINUTES
 int   cbiCumTickSlopeSmoothBars  = f_cbiBars(minutes = CBI_CUMTICK_SLOPE_SMOOTH_MINUTES, floorBars = 2)
 int   cbiTickBiasWindowBars      = f_cbiBars(minutes = CBI_TICK_BIAS_DAYS * 390.0, floorBars = 10)
 int   cbiPremarketBiasBars       = f_cbiBars(minutes = CBI_PREMARKET_BIAS_DAYS * 150.0, floorBars = 10)
-float cbiCumTickSlopeScale       = cbiCumTickSlopeWindow * CBI_TICK_FIXED_SCALE * cbiTickMarketFactor
+float cbiCumTickSlopeScale       = cbiCumTickSlopeWindow * CBI_TICK_FIXED_SCALE
 
 // Data requests. Every USI feed is requested on its EXTENDED session so the
 // premarket arrives on an extended-hours chart and close[1] on the 09:30 bar
 // is the last premarket print on any chart (the RTH-only VOLD baseline).
 // gaps_on: no feed = na, never a stale forward-filled value. Chart timeframe
 // throughout, so lookahead_off has nothing to look ahead into.
-f_cbiUsiTicker(string feed, string suffix) =>
-    ticker.new(prefix = "USI", ticker = feed + "." + suffix, session = session.extended)
+f_cbiUsiTicker(string feed) =>
+    ticker.new(prefix = "USI", ticker = feed, session = session.extended)
 
-float cbiAddNet = request.security(symbol = f_cbiUsiTicker(feed = "ADVDEC", suffix = cbiAddSuffix), timeframe = timeframe.period,
+// Helper function — a cumulative USI feed with its prior print.
+f_cbiUsiPair(string feed) =>
+    request.security(symbol = f_cbiUsiTicker(feed = feed), timeframe = timeframe.period,
+         expression = [close, close[1]], gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+
+float cbiAddNet = request.security(symbol = f_cbiUsiTicker(feed = "ADVDEC.US"), timeframe = timeframe.period,
      expression = close, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-[cbiVoldNet, cbiVoldNetPrior] = request.security(symbol = f_cbiUsiTicker(feed = "ADVDECV", suffix = cbiVoldSuffix), timeframe = timeframe.period,
-     expression = [close, close[1]], gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-[cbiTotalVol, cbiTotalVolPrior] = request.security(symbol = f_cbiUsiTicker(feed = "TVOL", suffix = cbiVoldSuffix), timeframe = timeframe.period,
-     expression = [close, close[1]], gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
-float cbiPctVwap = request.security(symbol = f_cbiUsiTicker(feed = "PCTABOVEVWAP", suffix = cbiPctVwapSuffix), timeframe = timeframe.period,
+[cbiVoldNetNq, cbiVoldNetNqPrior] = f_cbiUsiPair(feed = "ADVDECV.NQ")
+[cbiTotalVolNq, cbiTotalVolNqPrior] = f_cbiUsiPair(feed = "TVOL.NQ")
+[cbiVoldNetNy, cbiVoldNetNyPrior] = f_cbiUsiPair(feed = "ADVDECV.NY")
+[cbiTotalVolNy, cbiTotalVolNyPrior] = f_cbiUsiPair(feed = "TVOL.NY")
+[cbiVoldNetDj, cbiVoldNetDjPrior] = f_cbiUsiPair(feed = "ADVDECV.DJ")
+[cbiTotalVolDj, cbiTotalVolDjPrior] = f_cbiUsiPair(feed = "TVOL.DJ")
+float cbiPctVwap = request.security(symbol = f_cbiUsiTicker(feed = "PCTABOVEVWAP.US"), timeframe = timeframe.period,
      expression = close, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
-// NYSE TICK routes to the classic USI:TICK (cash session only by nature).
+// The classic NYSE TICK, USI:TICK — not USI:TICK.NY, a different, ~3× smaller
+// series. Cash session only by nature.
 float cbiTickRaw = na
 if cbiCumTickWeight > 0.0
-    cbiTickRaw := request.security(symbol = cbiTickSuffix == "NY" ? "USI:TICK" : "USI:TICK." + cbiTickSuffix, timeframe = timeframe.period,
+    cbiTickRaw := request.security(symbol = f_cbiUsiTicker(feed = "TICK"), timeframe = timeframe.period,
          expression = close, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
 
 bool  cbiNqEligible = syminfo.prefix == "NASDAQ"
@@ -224,20 +178,31 @@ f_cbiEwma(float previous, float sample, float length) =>
 f_cbiClamp(float value) =>
     na(value) ? na : math.max(-1.0, math.min(1.0, value))
 
-// VOLD, RTH-only from 09:30: both cumulative feeds are read net of their last
-// premarket print, so the structurally bullish premarket volume does not tilt
-// the cash session.
-var float cbiVoldBase = na
-var float cbiTotalVolBase = na
-if cbiLineReset
-    cbiVoldBase     := cbiSessionOpened ? cbiVoldNetPrior : na
-    cbiTotalVolBase := cbiSessionOpened ? cbiTotalVolPrior : na
-bool  cbiVoldBaseValid = cbiInRth and not na(cbiVoldBase) and not na(cbiTotalVolBase) and not na(cbiTotalVol) and cbiTotalVol > cbiTotalVolBase
-float cbiVoldConfidence = cbiVoldBaseValid ? f_cbiClamp(value = (cbiVoldNet - cbiVoldBase) / (cbiTotalVol - cbiTotalVolBase)) :
-     not na(cbiTotalVol) and cbiTotalVol > 0.0 ? f_cbiClamp(value = cbiVoldNet / cbiTotalVol) : na
+// Helper function — one tape's VOLD, RTH-only from 09:30: both cumulative
+// feeds are read net of their last premarket print, so the structurally
+// bullish premarket volume does not tilt the cash session. Before 09:30 the
+// raw premarket ratio is used (and de-biased below). Each call site keeps its
+// own baselines.
+f_cbiVoldLeg(float net, float netPrior, float total, float totalPrior) =>
+    var float netBase = na
+    var float totalBase = na
+    if cbiLineReset
+        netBase   := cbiSessionOpened ? netPrior : na
+        totalBase := cbiSessionOpened ? totalPrior : na
+    bool baseValid = cbiInRth and not na(netBase) and not na(totalBase) and not na(total) and total > totalBase
+    baseValid ? f_cbiClamp(value = (net - netBase) / (total - totalBase)) :
+         not na(total) and total > 0.0 ? f_cbiClamp(value = net / total) : na
 
-float cbiAddConfidence     = f_cbiClamp(value = cbiAddNet / cbiAddScale)
-float cbiPctVwapConfidence = f_cbiClamp(value = (cbiPctVwap - 50.0) / cbiPctVwapBand)
+float cbiVoldNq = f_cbiVoldLeg(net = cbiVoldNetNq, netPrior = cbiVoldNetNqPrior, total = cbiTotalVolNq, totalPrior = cbiTotalVolNqPrior)
+float cbiVoldNy = f_cbiVoldLeg(net = cbiVoldNetNy, netPrior = cbiVoldNetNyPrior, total = cbiTotalVolNy, totalPrior = cbiTotalVolNyPrior)
+float cbiVoldDj = f_cbiVoldLeg(net = cbiVoldNetDj, netPrior = cbiVoldNetDjPrior, total = cbiTotalVolDj, totalPrior = cbiTotalVolDjPrior)
+
+// The three tapes averaged; a tape with no print drops out.
+int   cbiVoldTapes = (na(cbiVoldNq) ? 0 : 1) + (na(cbiVoldNy) ? 0 : 1) + (na(cbiVoldDj) ? 0 : 1)
+float cbiVoldConfidence = cbiVoldTapes > 0 ? (nz(source = cbiVoldNq) + nz(source = cbiVoldNy) + nz(source = cbiVoldDj)) / cbiVoldTapes : na
+
+float cbiAddConfidence     = f_cbiClamp(value = cbiAddNet / CBI_ADD_SCALE)
+float cbiPctVwapConfidence = f_cbiClamp(value = (cbiPctVwap - 50.0) / CBI_PCTVWAP_BAND)
 
 // CUMTICK — cash session only. Bias-adjusted TICK summed from the open; the
 // smoothed 10-minute slope is the reading; it holds through the MOC window.
@@ -315,7 +280,9 @@ if not na(cbiNqConfidence) and cbiNqPremiumWeight > 0.0
 float cbiRaw = cbiWeightTotal > 0.0 and cbiInBreadthHours ? cbiWeightedSum / cbiWeightTotal * CBI_SCALE_MAX : na
 
 // The plotted line — a light EMA, reseeded at 07:00 and 09:30, blank outside
-// 07:00-16:00 ET. Read by the ◆ engine and the signal MA.
+// 07:00-16:00 ET.
+// Exported to the ◆ engine and the signal MA: `cbiLine`, the session flags
+// `cbiSessionOpened` / `cbiInRth`, and the minutes → bars helper `f_cbiBars`.
 var float cbiLine = na
 if cbiLineReset
     cbiLine := na
@@ -323,7 +290,6 @@ cbiLine := na(cbiRaw) ? na : f_cbiEwma(previous = cbiLine, sample = cbiRaw, leng
 
 // No vendor volume guard: every leg is a USI or CME feed, never the chart's
 // own volume, so an index chart without volume (NDX, SPX) is a valid host.
-// Chart volume only weights the VWMA signal MA, which returns na without it.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎯 PRICE CONFIRMATION
@@ -338,9 +304,9 @@ const string GROUP_CONFIRM = "🎯 Price Confirmation"
 const float CBI_MARKER_OFFSET = 6.0   // pane units the ◆ sits away from the line
 
 cbiShowBullishNonConf = input.bool(defval = true, title = "Bullish ◆ (price low, breadth higher)",
-     tooltip = "◆ New session LOW in price that breadth refuses to follow.\n• 📊 65-76% right 30 min later — the read that works\n• Rare — about one every eight sessions", group = GROUP_CONFIRM)
+     tooltip = "◆ New session LOW in price that breadth refuses to follow.\n• 📊 +5.8 bps, 71% right 30 min later — the read that works\n• About one every four sessions", group = GROUP_CONFIRM)
 cbiShowBearishNonConf = input.bool(defval = true, title = "Bearish ◆ (price high, breadth lower)",
-     tooltip = "◆ New session HIGH in price that breadth refuses to follow.\n• 📊 No edge (33-51% right) — watch it, do not trade it", group = GROUP_CONFIRM)
+     tooltip = "◆ New session HIGH in price that breadth refuses to follow.\n• 📊 No edge (~52% right) — watch it, do not trade it", group = GROUP_CONFIRM)
 cbiConfirmBullColor = input.color(defval = color.new(color = NORD8, transp = 20), title = "Bullish Color", group = GROUP_CONFIRM)
 cbiConfirmBearColor = input.color(defval = color.new(color = NORD11, transp = 10), title = "Bearish Color", group = GROUP_CONFIRM)
 cbiConfirmSeparationMinutes = input.int(defval = 30, title = "Min Extreme Separation (minutes)", minval = 10, maxval = 120, step = 5,
@@ -367,7 +333,7 @@ if cbiSessionOpened
 // Helper function — one ◆ with its readings in the tooltip.
 f_cbiConfirmMarker(bool isBullish, float priceNow, float breadthPrior) =>
     string confirmText = isBullish ?
-         "🟦 BULLISH NON-CONFIRMATION\nNew session low, breadth higher.\n\n• Price " + str.tostring(value = priceNow, format = format.mintick) + "\n• CBI " + str.tostring(value = cbiLine, format = "0.0") + " vs " + str.tostring(value = breadthPrior, format = "0.0") + " at the prior low\n\n📊 65-76% right 30 min later" :
+         "🟦 BULLISH NON-CONFIRMATION\nNew session low, breadth higher.\n\n• Price " + str.tostring(value = priceNow, format = format.mintick) + "\n• CBI " + str.tostring(value = cbiLine, format = "0.0") + " vs " + str.tostring(value = breadthPrior, format = "0.0") + " at the prior low\n\n📊 +5.8 bps, 71% right 30 min later" :
          "🟥 BEARISH NON-CONFIRMATION\nNew session high, breadth lower.\n\n• Price " + str.tostring(value = priceNow, format = format.mintick) + "\n• CBI " + str.tostring(value = cbiLine, format = "0.0") + " vs " + str.tostring(value = breadthPrior, format = "0.0") + " at the prior high\n\n📊 No edge — watch it, do not trade it"
     label.new(x = bar_index, y = cbiLine + (isBullish ? -CBI_MARKER_OFFSET : CBI_MARKER_OFFSET), text = "", tooltip = confirmText,
          xloc = xloc.bar_index, yloc = yloc.price, style = label.style_diamond,
@@ -391,9 +357,11 @@ if barstate.isconfirmed and cbiInRth and not na(cbiLine)
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 〰️ SIGNAL MA
-// A moving average OF the CBI line. Above it = breadth building, below =
-// fading. Context, not a trigger — a bare above/below read flips many times a
-// day.
+// A moving average OF the CBI line — breadth's baseline for the day. CBI above
+// it = breadth stronger than its recent norm, below = weaker. Breadth momentum
+// mean-reverts, so only a slow baseline helps: Auto is a 4-hour EMA; anything
+// under ~1.5 hours chases moves that reverse. The level against zero stays
+// the main read.
 //
 // Calculation timeframe: indicator(timeframe=) is unavailable to a script that
 // draws, so a higher timeframe is built by hand — the line is sampled at each
@@ -402,87 +370,66 @@ if barstate.isconfirmed and cbiInRth and not na(cbiLine)
 // ═════════════════════════════════════════════════════════════════════════════
 const string GROUP_SIGNAL = "〰️ Signal MA"
 const string GROUP_CALC = "🧮 Calculation"
-const string TT_SIGNAL_BB = "📐 'SMA + Bollinger Bands' only: band distance from the MA.\n• Default 2.0 standard deviations"
+const float  SIGNAL_AUTO_MINUTES = 240.0
+const int    SIGNAL_AUTO_FLOOR_BARS = 3
+const int    SIGNAL_AUTO_FALLBACK_BARS = 20
+const int    SIGNAL_AUTO_MAX_BARS = 1000
 
 // Signal-line slope colors — one blue family, so up/down read as one line
 // while the shade still shows its lean.
 const color SIGNAL_UP_COLOR = color.new(color = NORD8, transp = 20)
 const color SIGNAL_DOWN_COLOR = color.new(color = NORD9, transp = 60)
 
-signalMaType = input.string(defval = "SMA", title = "Type",
-     options = ["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"],
-     tooltip = "〰️ Moving average of the CBI line.\n• Bright = rising, dim = falling\n• CBI above it = breadth building, below = fading\n• Default SMA", group = GROUP_SIGNAL, display = display.none)
-signalMaLength = input.int(defval = 20, title = "Length", minval = 1,
-     tooltip = "🔢 MA lookback in bars of the Calculation timeframe.\n• Default 20", group = GROUP_SIGNAL, display = display.none)
-signalBbMult = input.float(defval = 2.0, title = "BB StdDev", minval = 0.001, maxval = 50, step = 0.5,
-     tooltip = TT_SIGNAL_BB, group = GROUP_SIGNAL, display = display.none)
+// Fill colors between the CBI and its signal MA — the signal pair at 10% /
+// 5% opacity, so both lines stay readable on top.
+const color FILL_UP_COLOR = color.new(color = NORD8, transp = 90)
+const color FILL_DOWN_COLOR = color.new(color = NORD9, transp = 95)
+
+signalMaType = input.string(defval = "EMA", title = "Type", options = ["SMA", "EMA"],
+     tooltip = "〰️ Moving average of the CBI line.\n• Bright = rising, dim = falling\n• CBI above it = breadth building, below = fading\n• Context only — the line's distance from zero is the read\n• Default EMA", group = GROUP_SIGNAL, display = display.none)
+signalAutoLength = input.bool(defval = true, title = "Auto", inline = "signal_length", group = GROUP_SIGNAL, display = display.none)
+signalMaLength = input.int(defval = 120, title = "Length", minval = 1, maxval = 1000, inline = "signal_length",
+     tooltip = "🔢 MA lookback, in bars of the Calculation timeframe.\n• Auto (default): 4 hours — 120 bars on 2-min, 40 on 6-min, 20 on daily\n• Untick Auto to use Length in bars\n• Under ~1.5 hours it chases breadth swings that reverse", group = GROUP_SIGNAL, display = display.none, active = not signalAutoLength)
 
 calcTimeframe = input.timeframe(defval = "", title = "Timeframe",
      tooltip = "🧮 Timeframe the CBI and its MA are shown on.\n• Chart (default) — follows the chart\n• Higher — line steps at each higher-timeframe close; MA counts those bars\n• The ◆ stay on the chart's own extremes", group = GROUP_CALC)
 calcWaitForClose = input.bool(defval = false, title = "Wait for timeframe closes",
      tooltip = "⏱ Higher timeframe only.\n• On — values only at each close, gaps between\n• Off (default) — CBI stays live, MA holds its last close", group = GROUP_CALC)
 
-bool signalEnabled = signalMaType != "None"
-bool signalIsBB = signalMaType == "SMA + Bollinger Bands"
-
-// Helper function — linearly weighted average of the window, newest heaviest.
-f_signalWma(array<float> samples) =>
-    float wmaWeightedSum = 0.0
-    float wmaWeightTotal = 0.0
-    for [sampleIndex, sampleValue] in samples
-        wmaWeightedSum += sampleValue * (sampleIndex + 1)
-        wmaWeightTotal += sampleIndex + 1
-    wmaWeightTotal > 0.0 ? wmaWeightedSum / wmaWeightTotal : na
-
-// Helper function — volume-weighted average of the window.
-f_signalVwma(array<float> samples, array<float> sampleVolumes) =>
-    float vwmaWeightedSum = 0.0
-    float vwmaVolumeTotal = 0.0
-    for [sampleIndex, sampleValue] in samples
-        float sampleVolume = array.get(id = sampleVolumes, index = sampleIndex)
-        vwmaWeightedSum += sampleValue * sampleVolume
-        vwmaVolumeTotal += sampleVolume
-    vwmaVolumeTotal > 0.0 ? vwmaWeightedSum / vwmaVolumeTotal : na
-
+// A higher timeframe only when it really is higher. The last chart bar inside
+// each HTF bar is its close.
 bool calcUsesHtf = calcTimeframe != "" and timeframe.in_seconds(timeframe = calcTimeframe) > timeframe.in_seconds()
 bool calcHtfClosing = not calcUsesHtf or time_close == time_close(timeframe = calcTimeframe)
 
-// Rolling window of samples (one per Calculation-timeframe bar). Each type
-// reproduces its ta.* built-in: SMA / WMA / VWMA / stdev need a full window,
-// EMA and SMMA (RMA) seed from the window's SMA and then recurse. The window
-// does not restart at 07:00 / 09:30 — the CBI is an oscillator, not a running
-// total, so it has no reset jump.
+// Helper function — the Auto length: `minutes` in bars of `barSeconds`,
+// clamped to SIGNAL_AUTO_FLOOR_BARS..SIGNAL_AUTO_MAX_BARS. A bar of a day or
+// longer falls back to SIGNAL_AUTO_FALLBACK_BARS, where minutes mean nothing.
+// `barSeconds` is the Calculation timeframe's bar.
+f_signalAutoBars(float minutes, int barSeconds) =>
+    barSeconds >= 86400 ? SIGNAL_AUTO_FALLBACK_BARS :
+         math.min(SIGNAL_AUTO_MAX_BARS, math.max(SIGNAL_AUTO_FLOOR_BARS, math.round(number = minutes * 60.0 / barSeconds)))
+
+int signalLength = signalAutoLength ? f_signalAutoBars(minutes = SIGNAL_AUTO_MINUTES,
+     barSeconds = calcUsesHtf ? timeframe.in_seconds(timeframe = calcTimeframe) : timeframe.in_seconds()) : signalMaLength
+
+// Rolling window of samples, one per Calculation-timeframe bar, instead of
+// ta.* built-ins (those must run every bar and would count chart bars). The
+// SMA needs a full window; the EMA seeds from that SMA and then recurses. On
+// the chart timeframe every bar is a sample, so both match the built-ins.
 var array<float> signalSamples = array.new<float>()
-var array<float> signalSampleVolumes = array.new<float>()
-var float signalVolumeAccumulator = 0.0
-var float signalRecursive = na
+var float signalEma = na
 var float signalLineSample = na
 var float signalMa = na
-var float signalStDev = na
-if not na(cbiLine)
-    signalVolumeAccumulator += nz(source = volume)
+// No restart at 07:00 / 09:30 — the CBI is an oscillator, not a running
+// total, so it has no reset jump.
 if calcHtfClosing and not na(cbiLine)
     signalLineSample := cbiLine
     array.push(id = signalSamples, value = cbiLine)
-    array.push(id = signalSampleVolumes, value = signalVolumeAccumulator)
-    signalVolumeAccumulator := 0.0
-    if array.size(id = signalSamples) > signalMaLength
+    if array.size(id = signalSamples) > signalLength
         array.shift(id = signalSamples)
-        array.shift(id = signalSampleVolumes)
-    bool signalWindowFull = array.size(id = signalSamples) == signalMaLength
-    float signalSma = signalWindowFull ? array.avg(id = signalSamples) : na
-    if signalMaType == "EMA" or signalMaType == "SMMA (RMA)"
-        float signalAlpha = signalMaType == "EMA" ? 2.0 / (signalMaLength + 1.0) : 1.0 / signalMaLength
-        signalRecursive := na(signalRecursive) ? signalSma : signalAlpha * cbiLine + (1.0 - signalAlpha) * signalRecursive
-    signalMa := switch signalMaType
-        "SMA"                   => signalSma
-        "SMA + Bollinger Bands" => signalSma
-        "EMA"                   => signalRecursive
-        "SMMA (RMA)"            => signalRecursive
-        "WMA"                   => signalWindowFull ? f_signalWma(samples = signalSamples) : na
-        "VWMA"                  => signalWindowFull ? f_signalVwma(samples = signalSamples, sampleVolumes = signalSampleVolumes) : na
-        => na
-    signalStDev := signalIsBB and signalWindowFull ? array.stdev(id = signalSamples) * signalBbMult : na
+    float signalSma = array.size(id = signalSamples) == signalLength ? array.avg(id = signalSamples) : na
+    signalEma := na(signalEma) ? signalSma : signalEma + 2.0 / (signalLength + 1.0) * (cbiLine - signalEma)
+    signalMa := signalMaType == "EMA" ? signalEma : signalSma
 
 // MA slope drives the color; hold the last direction on flat bars so it doesn't
 // flicker.
@@ -490,11 +437,16 @@ var bool signalRising = true
 signalRising := signalMa > signalMa[1] ? true : signalMa < signalMa[1] ? false : signalRising
 color signalColor = signalRising ? SIGNAL_UP_COLOR : SIGNAL_DOWN_COLOR
 
-// Plot series — chart timeframe: the line and MA wherever the CBI draws;
-// higher timeframe with wait-for-close: only on HTF closes.
-bool  calcGapNow = calcUsesHtf and calcWaitForClose and not calcHtfClosing
+// Plot series. Chart timeframe: the line and its MA wherever the line draws.
+// Higher timeframe: wait-for-close shows both only on HTF closes; otherwise
+// the line stays live and the MA holds its last close.
+bool calcGapNow = calcUsesHtf and calcWaitForClose and not calcHtfClosing
 float cbiPlotValue = calcGapNow ? na : calcUsesHtf and calcWaitForClose ? signalLineSample : cbiLine
 float signalPlotValue = calcGapNow or na(cbiLine) and not calcUsesHtf ? na : signalMa
+
+// Fill between the CBI and its signal MA: up color while the CBI is at or
+// above the MA, down color below it.
+color signalFillColor = cbiPlotValue >= signalPlotValue ? FILL_UP_COLOR : FILL_DOWN_COLOR
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 PLOTS
@@ -503,14 +455,10 @@ float signalPlotValue = calcGapNow or na(cbiLine) and not calcUsesHtf ? na : sig
 // ═════════════════════════════════════════════════════════════════════════════
 hline(price = 0, title = "Zero Line", color = NORD3, linewidth = 1, linestyle = hline.style_dashed,
      display = cbiShowZeroLine ? display.all : display.none)
-plot(series = cbiPlotValue, title = "CBI", color = CBI_LINE_COLOR, linewidth = 2)
-plot(series = signalPlotValue, title = "Signal MA", color = signalColor, linewidth = 3,
-     display = signalEnabled ? display.all : display.none)
-
-// Bollinger Bands — only drawn in 'SMA + Bollinger Bands' mode.
-bbUpperPlot = plot(series = signalIsBB ? signalPlotValue + signalStDev : na, title = "Upper Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
-bbLowerPlot = plot(series = signalIsBB ? signalPlotValue - signalStDev : na, title = "Lower Bollinger Band",
-     color = color.new(color = NORD8, transp = 40), display = signalIsBB ? display.all : display.none)
-fill(plot1 = bbUpperPlot, plot2 = bbLowerPlot, color = signalIsBB ? color.new(color = NORD8, transp = 92) : na,
-     title = "Bollinger Bands Background Fill", display = signalIsBB ? display.all : display.none)
+cbiPlot = plot(series = cbiPlotValue, title = "CBI", color = CBI_LINE_COLOR, linewidth = 1)
+// A fill must follow the plots it joins, and the Style tab lists entries in
+// declaration order. The MA is therefore plotted twice: a hidden, non-editable
+// edge for the fill, then the visible line — which lists the fill above it.
+signalFillEdge = plot(series = signalPlotValue, title = "Signal MA Fill Edge", color = na, editable = false, display = display.none)
+fill(plot1 = cbiPlot, plot2 = signalFillEdge, color = signalFillColor, title = "CBI / Signal Fill")
+plot(series = signalPlotValue, title = "Signal MA", color = signalColor, linewidth = 3)
