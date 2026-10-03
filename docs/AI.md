@@ -1173,38 +1173,33 @@ full-session window for "am I in RTH" tests only.
 ### Current Indicators
 
 1. **`composite-breadth.pine`**
-   - Intraday market-breadth composite in its own pane (VOLD, ADD,
-     PCTABOVEVWAP, CUMTICK), per-component universe routing across the six
-     dotted USI families; `request.security()` against the USI breadth feeds
-   - Line = smooth weighted stance. Hue is the SIDE OF ZERO only (Bullish
-     above / Bearish below); OPACITY carries everything else — consensus
-     (hysteresis sign votes with a deadband) dims by disagreement, the slope
-     splits impulse from retrace, the session regime caps it, and the render
-     transparency glides through a short EMA so the step functions don't
-     chop. The composite's VALUE is never modified; consensus has not
-     multiplied the line since 2026-07-13
-   - CUMTICK ships at weight 0 — deactivated by a 135-session cross-regime
-     log study (negative IC in all three chunks). Weights 40/30/30/0 are
-     near-1/N and deliberately un-tuned; don't re-optimize without an
-     out-of-sample sweep
-   - Two collaborator layers only: 🧭 LINE TRUST (opening volume + opening
-     volatility vs ~10-session baselines → expansion/neutral/quiet, which
-     sets the line's vividness ceiling, unlocks the trusted max-vivid step,
-     and flags quiet-tape pushes with a ▲ marker; Trust Readout table on
-     `barstate.islast`) and 🎯 PRICE CONFIRMATION (Dow non-confirmation ◆ at
-     session price extremes — the ONLY early/leading read in the file that
-     survived out-of-sample testing)
-   - NINE LAYERS WERE DELETED 2026-07-28/29 and must not be re-added without
-     new evidence — TICK extremes, zero-line persistence, early-shift dissent,
-     trend-day tell, Gao last-hour gate, PCCE put/call, Lowry 90% days, VOLD
-     extremes, adaptive levels, status badge. Every leading/divergence
-     construct among them was built, measured, and failed; the 🧪 CSV log
-     layer that measured them is in git history, not in the file
-   - NO `alertcondition()` — deliberate (2026-09-25): the pane is read, not
-     subscribed to. Do not add alerts back
-   - Uses AI.md's sanctioned global-inputs exception (inputs front-loaded
-     because the settings dialog orders by first `input()` appearance); the
-     constraint is documented in the file header as required
+   - LEAN REBUILD 2026-10-03 (Henry: "all those colors are annoying… make obv,
+     cvd and cbi extreme similar and simple"). 1,898 → ~530 lines; the
+     pre-lean file is at `~/Projects/Trading/cbi-logs/composite-breadth-pre-lean-2026-10-03.pine`.
+     REMOVED on purpose: opacity/consensus colouring, consensus votes and
+     tiers, Line Trust regime + Trust table + ▲ markers, time-of-day dims,
+     session divider, the fast/slow signal pair and its ±4 confirmation band,
+     data-window debug plots. Don't re-add them without Henry asking
+   - Engine kept: five legs (VOLD RTH-only from 09:30, ADD, %VWAP, CUMTICK
+     cash-session only on classic `USI:TICK`, NQ PREMIUM cash-session only on
+     Nasdaq-listed charts), per-leg universe routing on `ticker.new(...,
+     session.extended)`, 07:00 premarket start with per-leg de-bias, line drawn
+     07:00-16:00 ET, 6-minute display EMA
+   - WEIGHTS 75/5/10/20/40 (VOLD/ADD/%VWAP/CUMTICK/NQ) — 2026-10-03 sweep on
+     85 logged sessions, worst-regime direction +0.0114 → +0.0178 vs the old
+     75/5/20/20/20, shift unchanged; NQ above ~40 trades one chunk against
+     another and turns the line into futures premium
+   - Pane = obv.pine/cvd.pine pattern: CBI line NORD3 width 2; 〰️ Signal MA
+     identical to obv (SMA 20 default, slope NORD8/NORD9, width 3, BB option)
+     computed over a rolling sample window; 🧮 Calculation group (Timeframe /
+     Wait for timeframe closes) built manually because the ◆ are drawings.
+     The MA window does NOT restart at 07:00/09:30 (the CBI is a ±100
+     oscillator, not a running total). No vendor volume guard: every leg is a
+     USI/CME feed, so NDX/SPX charts without volume are valid hosts
+   - 🎯 PRICE CONFIRMATION ◆ kept (bullish 65-76% right at 30 min over 166
+     sessions; bearish never measured — both ON by default, tooltips say so),
+     coloured like cvd's divergences (NORD8 bull / NORD11 bear)
+   - NO `alertcondition()` — the pane is read, not subscribed to
 
 2. **`fundamental-view-indicator.pine`**
    - Displays comprehensive fundamental data table
@@ -1399,6 +1394,20 @@ full-session window for "am I in RTH" tests only.
     - Baseline modes: vs prior close (default), vs today's open, Both, and
       `vs SPY (relative)` which rebases every row to `row% − SPY%` on UDT
       `.copy()`s so the verdict engine still reads untouched originals
+    - The VERDICT FOLLOWS THE BASELINE (2026-10-02 — it used to be hard-wired to
+      vs-close, so the banner never changed and the input looked broken).
+      `Today's Open` runs the verdict, pair check and row colours vs the open
+      with every tier ×`QW_OPEN_TIER_SCALE` 0.64 (moves from the open are
+      ~0.64× moves from the close); FUTURES vs-open is their price at the 09:30
+      cash open (per-call-site `var` snapshot in `f_qwMakeReading`), not the
+      globex daily open. `Both` / `vs SPY` keep the verdict on vs-close. The
+      verdict row always names its baseline (`· vs open` / `· vs close`)
+    - Opening Range: daily ATR is `ta.atr(14)[1]` under `lookahead_on`
+      (yesterday's settled ATR on every bar — the old lookahead_off form used
+      TODAY'S developing ATR live, so live and history disagreed); baseline EMA
+      60 sessions (was 20 — out-of-sample R² 0.062→0.098 QQQ, 0.129→0.185 SPY
+      on 426 sessions; opening volume and prior-day range overfit and were left
+      out)
     - TWO independently-toggled day-type rows, **both OFF by default**, either
       of which can render alone as a corner banner:
       · **Regime Verdict** — COMMITTED / MILD / LOW CONV / BIFURCATED /
@@ -1477,98 +1486,63 @@ full-session window for "am I in RTH" tests only.
     - Bollinger Bands mode retained from the stock indicator
     - Deliberately carries no trend lines or horizontal S/R (Barry rejects both
       on OBV) — the signal MA is the only reference
+    - THE REFERENCE PATTERN for cvd.pine and composite-breadth.pine (line
+      NORD3 width 2, signal MA width 3, same inputs/groups). It alone uses the
+      built-in `indicator(timeframe = "", timeframe_gaps = false)` because it
+      draws nothing; no zero line because a chart-start cumulative total has
+      no meaningful zero
 
 16. **`cvd.pine`**
-    - Cumulative Volume Delta — ONE anchored line in its own pane, tuned for
-      QQQ on a 6-MINUTE chart (2026-09-30): Session anchor, Regular Hours
-      Only, 1-second intrabars, 200K budget, divergence pivots 5/5 spanning
-      5-30 bars. The arithmetic behind those, not tuning — 1 second because a
-      6-minute bar is 360 seconds (near trade-level in RTH) while 1 tick cannot
-      cover even one QQQ session inside 200K prints; 30 bars because 6 minutes
-      x 30 = 3 hours, and the previous 60 spanned six, pairing a thin
-      pre-market swing against an afternoon one. 5/5 was left alone on purpose:
-      6 vs 5 minutes is a 20% shift, inside the noise of what a pivot window
-      means, and re-tuning it without a sweep would be invention. NONE of this
-      is backtested
-    - The anchor reset comes from the SESSION (`session.isfirstbar_regular` /
-      `session.isfirstbar`), not from a `timeframe.change("1D")` — on a chart
-      displaying extended hours the two do not agree, and the `Session Data`
-      input (default `Regular Hours Only`) is what decides which is meant. The
-      reset is unconditional and separate from the accumulation: folding it in
-      made it depend on the anchor bar having intrabar data, and the 04:00 bar
-      is the likeliest bar of the day to have none
-    - ⚠️ `Regular Hours Only` filters the PAYLOAD per intrabar and must keep
-      doing so. Restricting the request with
-      `ticker.modify(session = session.regular)` is strictly cheaper — it does
-      not spend the newest-first budget on an overnight it discards — and it
-      was built that way on 2026-09-29 and REVERTED on 2026-09-30: **Bar Replay
-      does not serve a session-modified ticker**, so the mode rendered nothing
-      in replay while `Include Extended Hours` (a plain `syminfo.tickerid`)
-      worked. That A/B is the diagnostic; the history cost is the price — and
-      it is small: an intrabar exists per TRADED second, so QQQ's sparse
-      overnight is ~a fifth of a day's intrabars despite two thirds of its
-      clock (~7 sessions filtered vs ~8.5 restricted, not the halving the clock
-      split implies). The 2026-09-29 note claiming it "costs more than half the
-      chart history" was wrong and is what motivated the ticker in the first
-      place
-    - The filter returns `na` for an out-of-session intrabar, NEVER `0.0`.
-      `array.sum()` ignores na elements and returns na only when every element
-      is na, so one expression keeps both cases right: an all-overnight bar
-      reports "nothing measured", and a bar straddling the open still sums
-      exactly its regular-hours seconds. A `0.0` sums to a real zero and claims
-      the bar traded even — the same lie as a zero delta
-    - The anchor bar's slope color is read from its own delta, not from
-      `cvdValue > cvdValue[1]` — the latter compares a level just reset to zero
-      against yesterday's close and paints every session open as a fall
-    - TWO SERIES, deliberately: `cvdValue` is the private accumulator and runs
-      through everything; `cvdSeries` is the rendered line and is `na` on any
-      bar the pane did not measure — outside the session under Regular Hours
-      Only, and before the anchor period's first bar with intrabar data. The
-      pivots and the pivot readings take `cvdSeries`, not `cvdValue`: a swing
-      the eye cannot see on the pane is not a swing. A mid-session feed gap is
-      NOT unmeasured (`session.ismarket` still holds) so the level carries
-      forward and the line stays unbroken — that distinction is the whole
-      reason the two names exist. Two defects this closes: a flat overnight
-      stub asserting balance that was never measured, and — because `ta.pivot*`
-      does not let equal values on a pivot's LEFT veto it — that stub's last
-      bar confirming as a pivot against the post-reset values, handing the
-      divergence engine a swing manufactured by the anchor reset and priced off
-      a thin overnight print
-    - ⚠️ `request.security_lower_tf` returns an NA ARRAY ID, not an empty
-      array, when the request itself fails — which is exactly what
-      `ignore_invalid_*` produces (reachable: chart TF equal to the requested
-      resolution, or a symbol with no intrabar entitlement). `array.size()` on
-      an na id raises "Cannot call array methods when ID of array is 'na'", so
-      the size test must come AFTER an `na()` test or the ignore flags crash
-      the script in the one case they exist to survive. An empty array (size 0)
-      is the different, valid state: a bar the feed had no intrabars for
-    - ⚠️ NO `runtime.error` for a missing intrabar stream, unlike all three
-      reference CVD scripts. From inside the script "this symbol serves no
-      intrabars" is indistinguishable from "this CONTEXT serves none", and the
-      second is routine — Bar Replay above all, where an error kills the whole
-      indicator instead of leaving it blank. A dry feed renders nothing
-    - ⚠️ BAR REPLAY: intrabar coverage in replay is not the same as on a live
-      chart (seconds data exists only from Aug 2022, and tick-in-replay is an
-      Ultimate feature capped at ~7 days back), so the pane can be legitimately
-      blank there while fine live. The built-in A/B is the Session Data input:
-      `Include Extended Hours` requests plain `syminfo.tickerid` while
-      `Regular Hours Only` requests a `ticker.modify()` ticker, so flipping it
-      isolates "replay will not serve a session-modified ticker" from "replay
-      serves no intrabars here at all" with no code edit
-    - Deliberately no delta candles, MA, histogram, threshold coloring or info
-      table: the read is the line's shape against price, everything else is
-      clutter in front of it. Slope-colored with the same NORD8/NORD9 pair as
-      the stochastic %D and the macd-waves signal line; NORD3 dashed zero line
-      with a toggle
-    - Divergence engine: pivots taken on the CVD line only, price read on those
-      same two bars, dotted lines (regular) / dashed (hidden) connecting the
-      two CVD pivots. Pairs are rejected across an anchor reset — the reset
-      prints an artificial swing and the levels either side are not comparable
-    - Lines are minted on confirmed closes only (the pivot window's right side
-      includes the forming bar), and retire through `max_lines_count`. The
-      same-anchor guard reads the anchor start AS OF THE PIVOT BAR
-      (`cvdAnchorStartBar[divergencePivotRight]`); reading it as of the current
-      bar rejects valid same-period pairs for `right` bars after every reset
+    - Cumulative Volume Delta for QQQ / big tech on the 2-MINUTE / 6-MINUTE
+      pair. Rebuilt 2026-10-02, leaned to the obv.pine pattern 2026-10-03
+    - DELTA = `request.footprint(ticks_per_row = 100)` → `.delta()`, the ONLY
+      source (one call per script; Premium+). MEASURED on the cvd logs: where
+      1-second data exists (last ~8 sessions on a 2-min chart) it is IDENTICAL
+      to 1-second bars signed close vs open (2,514 bars, 0 diff) — NOT bid/ask
+      aggressor data; older bars come at ~1-minute resolution. The 1-second
+      intrabar request, Resolution/Budget inputs, delta-source input, slope
+      colours, Style and smoothing line were removed as redundant; never
+      offer a 1-tick resolution (200K budget = 1-3 h of QQQ)
+    - ANCHOR default SESSION (Henry's call). DECAY = total × (1 − 2/(N+1)) +
+      delta, N = 30 bars. Week / Month / Continuous kept. The reset comes from
+      the SESSION (`session.isfirstbar[_regular]`), not `timeframe.change("1D")`
+      — they disagree on an extended-hours chart — and is unconditional,
+      separate from the accumulation (the 04:00 bar is the likeliest to have
+      no footprint)
+    - TWO SERIES: `cvdValue` is the private accumulator; `cvdSeries` is the
+      rendered line, `na` outside the session under Regular Hours Only and
+      before the anchor's first measured bar. Pivot readings take `cvdSeries`.
+      A mid-session feed gap is NOT unmeasured — the level carries forward
+    - NO `runtime.error` for a missing footprint: "symbol serves none" and
+      "context serves none" (Bar Replay) are indistinguishable from inside
+    - Pane = obv.pine: one ⚖️ group (Anchor, Decay Length [`active` only on
+      Decay], Session Data, Zero Line); CVD NORD3 width 2; 〰️ Signal MA =
+      obv's (default SMA 20, slope NORD8 t20 / NORD9 t60, width 3, BB option);
+      🧮 Calculation (Timeframe + Wait for timeframe closes, default OFF like
+      obv's `timeframe_gaps = false`) built manually because
+      indicator(timeframe=) is barred for scripts that draw. The MA runs on a
+      rolling sample window (one per Calculation-timeframe bar; SMA/EMA/RMA/
+      WMA/VWMA/stdev rebuilt on arrays, EMA/RMA seeded from the window SMA)
+      and RESTARTS at every anchor reset — an average holding the pre-reset
+      period would paint every open as a cross. Wait-for-close saves nothing:
+      it only blanks the plot between HTF closes
+    - Divergences: pivots 5/5 on PRICE, CVD read on the same bars, extension
+      ≥ 0.75 ATR(14) as of the pivot bar, range 5-30 bars, same-anchor guard
+      on `cvdAnchorStartBar[divergencePivotRight]`. Default REGULAR (changed
+      from Both 2026-10-03 after Henry reported hidden false signals); regular
+      dotted / hidden dashed; R/H label tooltips carry the edge (footprint, 63
+      sessions, Session anchor, 20 min): reg bear +7.9 bps 73% n22 · reg bull
+      +2.0 52% n40 · hid bull +3.0 54% n35 but −0.1 at 30 min · hid bear +0.6
+      46% n39. HIDDEN HAS NO EDGE OVER THE PRICE SWING ALONE: the same higher
+      low without the CVD condition reads +2.2 bps 58% (n168); every rescue
+      filter tried (extension 1.0/1.5 ATR, net delta ≥10/20% of swing volume,
+      day's-flow side) either stayed flat, flipped sign by month, or left
+      n<12. The logic is correct (hidden = net delta between the two swings
+      against price's direction); it just does not predict. Lines and state
+      commit on confirmed closes only
+    - Code comments and tooltips carry logic only (emoji + bullets, key
+      values); dates, sample sizes and provenance live here, not in the file
+    - NO `alertcondition()`
 
 ### Common Features Across Indicators
 
@@ -1691,5 +1665,5 @@ Before submitting any code changes, verify:
 
 ---
 
-**Last Updated**: 2026-10-01
+**Last Updated**: 2026-10-02
 **Repository**: `/Users/henryoliver/Projects/Trading/pinescript-indicators`

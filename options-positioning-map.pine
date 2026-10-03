@@ -57,7 +57,6 @@ type OpmSnapshot
     float vex2
     float vex3
     float hedgingPeak
-    float maxPain
     float netCallOI
     float netPutOI
     float callOI
@@ -80,10 +79,10 @@ type OpmSnapshot
     float zeroDteShare
     float vanna
     float charm
-    float pocketUpLow
-    float pocketUpHigh
-    float pocketDownLow
-    float pocketDownHigh
+    float voidUpLow
+    float voidUpHigh
+    float voidDownLow
+    float voidDownHigh
     string expiry
     string expiryTime
     string oiSource
@@ -133,8 +132,7 @@ const string OPM_TIP_P3 = "🛡️ P3 — THIRD PUT WALL\nThe thinnest mapped fl
 const string OPM_TIP_ABS = "🌀 Ab1-Ab3 — GAMMA CONCENTRATION\nThe strikes with the most hedging of any kind, calls and puts combined, sign ignored.\n\n🧲 Where the tape gets sticky.\n👀 Direction-free: read them with the walls, not instead of them."
 const string OPM_TIP_VEX = "🌊 V1-V3 — VEGA EXPOSURE\nStrikes whose hedging reacts when implied vol moves, not when price does.\n\n💪 V1 sitting on C1 or P1 = doubly defended, the strongest level on the map.\n👀 V1 away from every wall = an IV-event level, quiet otherwise.\n⏳ Decays into expiry — trust it most in the morning."
 const string OPM_TIP_DEX = "🧭 D1-D3 — DELTA EXPOSURE\nWhere directional exposure sits right now.\n\n👀 A filter, not a trigger: it shows where the book stands, gamma shows how it reacts.\n🚫 Never a bull/bear signal on its own."
-const string OPM_TIP_HP = "👑 HP — HEDGING PEAK\nThe single strike carrying the most dealer gamma anywhere.\n\n🧲 The day's likeliest pin, strongest into the close.\n💪 Conviction is highest when HP, MP and a wall line up.\n🚫 Weak when an air pocket sits between price and it."
-const string OPM_TIP_MP = "📌 MP — MAX PAIN\nThe strike where the most option value expires worthless.\n\n🧲 A pin reference into expiry, not a level to trade on its own.\n💪 Build the day around it only when it agrees with HP and a wall."
+const string OPM_TIP_HP = "👑 HP — HEDGING PEAK\nThe strike with the largest NET dealer gamma: the biggest one-sided exposure on the board.\n\n🧲 A pin candidate, strongest into the close.\n👁️ Only drawn when it differs from C1 and P1 — on 95% of logged rows it IS one of them, and a duplicate line says nothing.\n⚖️ Net, not gross: Ab1 ranks call+put combined and often names a different strike.\n🚫 Weak when a gamma void sits between price and it."
 const string OPM_TIP_OI = "🏦 OI LEVELS\nWhere contracts are HELD — positioning carried overnight.\n\n👀 Slow-moving structure, updated once a day by the clearing house.\n🚫 Not today's flow: read with the volume levels."
 const string OPM_TIP_VOL = "⚡ VOLUME LEVELS\nWhere contracts are CHANGING HANDS today.\n\n👀 Fresh intent versus OI's inherited positioning.\n💪 Volume landing on an OI level is the strongest confirmation on the map."
 const string OPM_TIP_EXPMOVE = "📐 EXPECTED MOVE\nThe 1σ band options are pricing into the mapped expiry's close.\n\n✅ Positive gamma: trading inside the band fits the regime.\n⚠️ A wall inside the band is reachable today; one outside it is not.\n🚫 Not a ceiling — price closes outside it roughly 1 day in 5."
@@ -152,16 +150,14 @@ color opmPutWallColor = input.color(defval = color.new(color = NORD11, transp = 
 bool opmShowFlip = input.bool(defval = true, title = "Gamma Flip (FLIP)", group = GROUP_OPM_STRUCTURE, inline = "flip")
 color opmFlipColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "", group = GROUP_OPM_STRUCTURE, inline = "flip")
 string opmRegimeSymbol = input.string(defval = "●", title = "", options = ["●", "◆", "▲", "■"], group = GROUP_OPM_STRUCTURE, inline = "flip", tooltip = "Drawn beside the FLIP label in the colour of the side price is trading on.")
-bool opmShowPockets = input.bool(defval = true, title = "Air Pockets", group = GROUP_OPM_STRUCTURE, inline = "pocket")
-color opmPocketColor = input.color(defval = color.new(color = NORD3, transp = 88), title = "", group = GROUP_OPM_STRUCTURE, inline = "pocket", tooltip = "💨 AIR POCKET\nA run of strikes with almost no dealer gamma. Not support, not resistance — the ABSENCE of both, so it is about SPEED.\n\n🚫 Never fade inside one: a wall has a mechanism, a pocket has nothing.\n🎯 Use it for targets — when a wall breaks, the far side of the pocket is the destination.\n⚡ Pocket + negative gamma = the acceleration case.")
+bool opmShowVoids = input.bool(defval = true, title = "Gamma Voids", group = GROUP_OPM_STRUCTURE, inline = "void")
+color opmVoidColor = input.color(defval = color.new(color = NORD3, transp = 88), title = "", group = GROUP_OPM_STRUCTURE, inline = "void", tooltip = "💨 GAMMA VOID\nA run of strikes with almost no dealer gamma. Not support, not resistance — the ABSENCE of both, so it is about SPEED.\n\n🚫 Never fade inside one: a wall has a mechanism, a void has nothing.\n🎯 Use it for targets — when a wall breaks, the far side of the void is the destination.\n📍 A void drawn around price means the move has nothing to lean on either way.\n\n⚠️ Not an 'air pocket'. That term means the opposite structure — a put wall that FAILS in negative gamma and accelerates the drop. See the P1 note.")
 bool opmShowFlipZone = input.bool(defval = true, title = "Gamma Flip Zone", group = GROUP_OPM_STRUCTURE, inline = "flipzone")
 color opmFlipZoneColor = input.color(defval = color.new(color = NORD4, transp = 20), title = "", group = GROUP_OPM_STRUCTURE, inline = "flipzone")
 color opmFlipZoneFillColor = input.color(defval = color.new(color = NORD4, transp = 92), title = "", group = GROUP_OPM_STRUCTURE, inline = "flipzone", tooltip = "The crossing sits between two strikes, so the flip is really a band. Border colour, then the fill. No labels: the FLIP line already carries them.")
 
-bool opmShowHedgingPeak = input.bool(defval = true, title = "Hedging Peak (HP)", group = GROUP_OPM_PINS, inline = "hp")
+bool opmShowHedgingPeak = input.bool(defval = true, title = "Hedging Peak (HP, when distinct)", group = GROUP_OPM_PINS, inline = "hp")
 color opmHedgingPeakColor = input.color(defval = color.new(color = NORD7, transp = 20), title = "", group = GROUP_OPM_PINS, inline = "hp", tooltip = OPM_TIP_HP)
-bool opmShowMaxPain = input.bool(defval = true, title = "Max Pain (MP)", group = GROUP_OPM_PINS, inline = "mp")
-color opmMaxPainColor = input.color(defval = color.new(color = NORD12, transp = 20), title = "", group = GROUP_OPM_PINS, inline = "mp", tooltip = OPM_TIP_MP)
 
 bool opmShowAbsGex = input.bool(defval = true, title = "Abs GEX (Ab1-Ab3)", group = GROUP_OPM_CONTEXT, inline = "abs")
 color opmAbsGexColor = input.color(defval = color.new(color = NORD15, transp = 20), title = "", group = GROUP_OPM_CONTEXT, inline = "abs", tooltip = OPM_TIP_ABS)
@@ -224,25 +220,24 @@ const int OPM_SLOT_AB1 = 7
 const int OPM_SLOT_AB2 = 8
 const int OPM_SLOT_AB3 = 9
 const int OPM_SLOT_HP = 10
-const int OPM_SLOT_MP = 11
-const int OPM_SLOT_NCOI = 12
-const int OPM_SLOT_NPOI = 13
-const int OPM_SLOT_COI = 14
-const int OPM_SLOT_POI = 15
-const int OPM_SLOT_ABOI = 16
-const int OPM_SLOT_NCV = 17
-const int OPM_SLOT_NPV = 18
-const int OPM_SLOT_CV = 19
-const int OPM_SLOT_PV = 20
-const int OPM_SLOT_DEX1 = 21
-const int OPM_SLOT_DEX2 = 22
-const int OPM_SLOT_DEX3 = 23
-const int OPM_SLOT_EXPMOVE_HIGH = 24
-const int OPM_SLOT_EXPMOVE_LOW = 25
-const int OPM_SLOT_VEX1 = 26
-const int OPM_SLOT_VEX2 = 27
-const int OPM_SLOT_VEX3 = 28
-const int OPM_MAX_SLOTS = 29
+const int OPM_SLOT_NCOI = 11
+const int OPM_SLOT_NPOI = 12
+const int OPM_SLOT_COI = 13
+const int OPM_SLOT_POI = 14
+const int OPM_SLOT_ABOI = 15
+const int OPM_SLOT_NCV = 16
+const int OPM_SLOT_NPV = 17
+const int OPM_SLOT_CV = 18
+const int OPM_SLOT_PV = 19
+const int OPM_SLOT_DEX1 = 20
+const int OPM_SLOT_DEX2 = 21
+const int OPM_SLOT_DEX3 = 22
+const int OPM_SLOT_EXPMOVE_HIGH = 23
+const int OPM_SLOT_EXPMOVE_LOW = 24
+const int OPM_SLOT_VEX1 = 25
+const int OPM_SLOT_VEX2 = 26
+const int OPM_SLOT_VEX3 = 27
+const int OPM_MAX_SLOTS = 28
 const float OPM_SYMBOL_GAP_FRACTION = 0.5 // the regime symbol hugs FLIP at this share of the stack gap
 const int OPM_TOOLTIP_MAX = 3900     // Pine caps a tooltip at 4,096 characters
 
@@ -251,8 +246,8 @@ var array<label> opmStrikeLabels = array.new<label>()
 var array<label> opmCodeLabels = array.new<label>()
 var label opmRegimeLabel = na
 var box opmExpMoveBox = na
-var box opmPocketUpBox = na
-var box opmPocketDownBox = na
+var box opmVoidUpBox = na
+var box opmVoidDownBox = na
 var box opmFlipBox = na
 var line opmExpiryLine = na
 var array<OpmSnapshot> opmSnapshots = array.new<OpmSnapshot>()
@@ -267,8 +262,8 @@ var array<float> opmClusterAnchor = array.new<float>(OPM_MAX_SLOTS, na)
 // each redraw. FLIP and V1-V3 have their notes overwritten because theirs carry
 // the chain-context block.
 if array.size(id = opmSlots) == 0
-    array<string> opmSlotCodeSeed = array.from("C1", "C2", "C3", "FLIP", "P1", "P2", "P3", "Ab1", "Ab2", "Ab3", "HP", "MP", "nCOI", "nPOI", "COI", "POI", "AbOI", "nCV", "nPV", "CV", "PV", "D1", "D2", "D3", "D+", "D-", "V1", "V2", "V3")
-    array<string> opmSlotNoteSeed = array.from(OPM_TIP_C1, OPM_TIP_C2, OPM_TIP_C3, OPM_TIP_FLIP, OPM_TIP_P1, OPM_TIP_P2, OPM_TIP_P3, OPM_TIP_ABS, OPM_TIP_ABS, OPM_TIP_ABS, OPM_TIP_HP, OPM_TIP_MP, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_DEX, OPM_TIP_DEX, OPM_TIP_DEX, OPM_TIP_EXPMOVE, OPM_TIP_EXPMOVE, OPM_TIP_VEX, OPM_TIP_VEX, OPM_TIP_VEX)
+    array<string> opmSlotCodeSeed = array.from("C1", "C2", "C3", "FLIP", "P1", "P2", "P3", "Ab1", "Ab2", "Ab3", "HP", "nCOI", "nPOI", "COI", "POI", "AbOI", "nCV", "nPV", "CV", "PV", "D1", "D2", "D3", "D+", "D-", "V1", "V2", "V3")
+    array<string> opmSlotNoteSeed = array.from(OPM_TIP_C1, OPM_TIP_C2, OPM_TIP_C3, OPM_TIP_FLIP, OPM_TIP_P1, OPM_TIP_P2, OPM_TIP_P3, OPM_TIP_ABS, OPM_TIP_ABS, OPM_TIP_ABS, OPM_TIP_HP, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_OI, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_VOL, OPM_TIP_DEX, OPM_TIP_DEX, OPM_TIP_DEX, OPM_TIP_EXPMOVE, OPM_TIP_EXPMOVE, OPM_TIP_VEX, OPM_TIP_VEX, OPM_TIP_VEX)
     for seedIndex = 0 to OPM_MAX_SLOTS - 1
         array.push(id = opmSlots, value = OpmSlot.new(code = array.get(id = opmSlotCodeSeed, index = seedIndex), note = array.get(id = opmSlotNoteSeed, index = seedIndex), hoverText = "", price = na, visible = false, ownsStrike = true, padChars = 0, cluster = -1, tone = OPM_HIDDEN, width = OPM_THIN_WIDTH, lineStyle = line.style_solid, drawsLine = true))
 // varip, not var: a plain `var` write made on an unconfirmed realtime tick is
@@ -319,15 +314,14 @@ varip float opmChainGex = na
 varip float opmZeroDteShare = na
 varip float opmVanna = na
 varip float opmCharm = na
-varip float opmPocketUpLow = na
-varip float opmPocketUpHigh = na
-varip float opmPocketDownLow = na
-varip float opmPocketDownHigh = na
+varip float opmVoidUpLow = na
+varip float opmVoidUpHigh = na
+varip float opmVoidDownLow = na
+varip float opmVoidDownHigh = na
 varip float opmDex1 = na
 varip float opmDex2 = na
 varip float opmDex3 = na
 varip float opmHedgingPeak = na
-varip float opmMaxPain = na
 varip float opmNetCallOI = na
 varip float opmNetPutOI = na
 varip float opmCallOI = na
@@ -394,7 +388,7 @@ if opmShouldParse
         int rowHour = 0
         int rowMinute = 0
 
-        OpmSnapshot snapshot = OpmSnapshot.new(stamp = 0, callWall1 = na, callWall2 = na, callWall3 = na, flip = na, flipLow = na, flipHigh = na, putWall1 = na, putWall2 = na, putWall3 = na, absGex1 = na, absGex2 = na, absGex3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, maxPain = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, expMoveLow = na, expMoveHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, totalGex = na, netOverGross = na, chainGex = na, zeroDteShare = na, vanna = na, charm = na, pocketUpLow = na, pocketUpHigh = na, pocketDownLow = na, pocketDownHigh = na, expiry = "", expiryTime = "", oiSource = "", regime = "")
+        OpmSnapshot snapshot = OpmSnapshot.new(stamp = 0, callWall1 = na, callWall2 = na, callWall3 = na, flip = na, flipLow = na, flipHigh = na, putWall1 = na, putWall2 = na, putWall3 = na, absGex1 = na, absGex2 = na, absGex3 = na, dex1 = na, dex2 = na, dex3 = na, vex1 = na, vex2 = na, vex3 = na, hedgingPeak = na, netCallOI = na, netPutOI = na, callOI = na, putOI = na, absOI = na, netCallVol = na, netPutVol = na, callVol = na, putVol = na, expMoveLow = na, expMoveHigh = na, pcOI = na, pcVol = na, iv30 = na, hv30 = na, vix = na, totalGex = na, netOverGross = na, chainGex = na, zeroDteShare = na, vanna = na, charm = na, voidUpLow = na, voidUpHigh = na, voidDownLow = na, voidDownHigh = na, expiry = "", expiryTime = "", oiSource = "", regime = "")
 
         for tokenIndex = 3 to array.size(id = lineTokens) - 1
             array<string> keyValueParts = str.split(string = str.trim(source = array.get(id = lineTokens, index = tokenIndex)), separator = ":")
@@ -428,8 +422,6 @@ if opmShouldParse
                 snapshot.putWall3 := fieldValue
             else if fieldKey == "HP"
                 snapshot.hedgingPeak := fieldValue
-            else if fieldKey == "MP"
-                snapshot.maxPain := fieldValue
             else if fieldKey == "AB1"
                 snapshot.absGex1 := fieldValue
             else if fieldKey == "AB2"
@@ -470,14 +462,14 @@ if opmShouldParse
                 snapshot.vanna := fieldValue
             else if fieldKey == "CHARM"
                 snapshot.charm := fieldValue
-            else if fieldKey == "POCKET_UP_LOW"
-                snapshot.pocketUpLow := fieldValue
-            else if fieldKey == "POCKET_UP_HIGH"
-                snapshot.pocketUpHigh := fieldValue
-            else if fieldKey == "POCKET_DN_LOW"
-                snapshot.pocketDownLow := fieldValue
-            else if fieldKey == "POCKET_DN_HIGH"
-                snapshot.pocketDownHigh := fieldValue
+            else if fieldKey == "VOID_UP_LOW"
+                snapshot.voidUpLow := fieldValue
+            else if fieldKey == "VOID_UP_HIGH"
+                snapshot.voidUpHigh := fieldValue
+            else if fieldKey == "VOID_DN_LOW"
+                snapshot.voidDownLow := fieldValue
+            else if fieldKey == "VOID_DN_HIGH"
+                snapshot.voidDownHigh := fieldValue
             else if fieldKey == "NCOI"
                 snapshot.netCallOI := fieldValue
             else if fieldKey == "NPOI"
@@ -586,12 +578,11 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmZeroDteShare := na
             opmVanna := na
             opmCharm := na
-            opmPocketUpLow := na
-            opmPocketUpHigh := na
-            opmPocketDownLow := na
-            opmPocketDownHigh := na
+            opmVoidUpLow := na
+            opmVoidUpHigh := na
+            opmVoidDownLow := na
+            opmVoidDownHigh := na
             opmHedgingPeak := na
-            opmMaxPain := na
             opmNetCallOI := na
             opmNetPutOI := na
             opmCallOI := na
@@ -638,12 +629,11 @@ if opmShouldRedraw and array.size(id = opmSnapshots) > 0
             opmZeroDteShare := active.zeroDteShare
             opmVanna := active.vanna
             opmCharm := active.charm
-            opmPocketUpLow := active.pocketUpLow
-            opmPocketUpHigh := active.pocketUpHigh
-            opmPocketDownLow := active.pocketDownLow
-            opmPocketDownHigh := active.pocketDownHigh
+            opmVoidUpLow := active.voidUpLow
+            opmVoidUpHigh := active.voidUpHigh
+            opmVoidDownLow := active.voidDownLow
+            opmVoidDownHigh := active.voidDownHigh
             opmHedgingPeak := active.hedgingPeak
-            opmMaxPain := active.maxPain
             opmNetCallOI := active.netCallOI
             opmNetPutOI := active.netPutOI
             opmCallOI := active.callOI
@@ -841,8 +831,8 @@ if (barstate.islastconfirmedhistory or barstate.islast) and array.size(id = opmL
     opmExpiryLine := line.new(x1 = time, y1 = close, x2 = time, y2 = close, xloc = xloc.bar_time, color = OPM_HIDDEN, style = line.style_dotted, width = 1)
     opmFlipBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
     opmExpMoveBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
-    opmPocketUpBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
-    opmPocketDownBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
+    opmVoidUpBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
+    opmVoidDownBox := box.new(left = time, top = close, right = time, bottom = close, xloc = xloc.bar_time, border_color = OPM_HIDDEN, bgcolor = OPM_HIDDEN)
 
 // Chain-wide context travels with the row but describes the whole book, not the
 // mapped expiry, so it belongs in the tooltips of the levels it qualifies
@@ -921,17 +911,24 @@ if barstate.islast
         box.set_border_style(id = opmExpMoveBox, style = line.style_dashed)
         box.set_bgcolor(id = opmExpMoveBox, color = opmExpMoveVisible ? f_opmFade(source = opmExpMoveFillColor) : OPM_HIDDEN)
 
-        bool opmPocketUpVisible = opmShowPockets and opmSessionDraws and not na(opmPocketUpLow) and not na(opmPocketUpHigh)
-        box.set_lefttop(id = opmPocketUpBox, left = opmMapLeft, top = opmPocketUpVisible ? opmPocketUpHigh : close)
-        box.set_rightbottom(id = opmPocketUpBox, right = opmMapRight, bottom = opmPocketUpVisible ? opmPocketUpLow : close)
-        box.set_border_color(id = opmPocketUpBox, color = OPM_HIDDEN)
-        box.set_bgcolor(id = opmPocketUpBox, color = opmPocketUpVisible ? f_opmFade(source = opmPocketColor) : OPM_HIDDEN)
+        bool opmVoidUpVisible = opmShowVoids and opmSessionDraws and not na(opmVoidUpLow) and not na(opmVoidUpHigh)
+        box.set_lefttop(id = opmVoidUpBox, left = opmMapLeft, top = opmVoidUpVisible ? opmVoidUpHigh : close)
+        box.set_rightbottom(id = opmVoidUpBox, right = opmMapRight, bottom = opmVoidUpVisible ? opmVoidUpLow : close)
+        box.set_border_color(id = opmVoidUpBox, color = OPM_HIDDEN)
+        box.set_bgcolor(id = opmVoidUpBox, color = opmVoidUpVisible ? f_opmFade(source = opmVoidColor) : OPM_HIDDEN)
 
-        bool opmPocketDownVisible = opmShowPockets and opmSessionDraws and not na(opmPocketDownLow) and not na(opmPocketDownHigh)
-        box.set_lefttop(id = opmPocketDownBox, left = opmMapLeft, top = opmPocketDownVisible ? opmPocketDownHigh : close)
-        box.set_rightbottom(id = opmPocketDownBox, right = opmMapRight, bottom = opmPocketDownVisible ? opmPocketDownLow : close)
-        box.set_border_color(id = opmPocketDownBox, color = OPM_HIDDEN)
-        box.set_bgcolor(id = opmPocketDownBox, color = opmPocketDownVisible ? f_opmFade(source = opmPocketColor) : OPM_HIDDEN)
+        bool opmVoidDownVisible = opmShowVoids and opmSessionDraws and not na(opmVoidDownLow) and not na(opmVoidDownHigh)
+        box.set_lefttop(id = opmVoidDownBox, left = opmMapLeft, top = opmVoidDownVisible ? opmVoidDownHigh : close)
+        box.set_rightbottom(id = opmVoidDownBox, right = opmMapRight, bottom = opmVoidDownVisible ? opmVoidDownLow : close)
+        box.set_border_color(id = opmVoidDownBox, color = OPM_HIDDEN)
+        box.set_bgcolor(id = opmVoidDownBox, color = opmVoidDownVisible ? f_opmFade(source = opmVoidColor) : OPM_HIDDEN)
+
+        // HP names the largest NET dealer gamma, and on 95% of 606 logged rows
+        // that strike is already on the map as C1 or P1. Drawing it anyway put a
+        // second line and a second name on a level the map had already made, so
+        // it now draws only on the ~5% of rows where it points somewhere else —
+        // which is the only time it carries information the walls do not.
+        bool opmHedgingPeakDistinct = not na(opmHedgingPeak) and opmHedgingPeak != opmCallWall1 and opmHedgingPeak != opmPutWall1
 
         // Slot order is draw order, and draw order is read order: calls down from
         // the top, then the flip, then puts, then the pins and the implied range.
@@ -945,8 +942,7 @@ if barstate.islast
         f_opmArm(slotIndex = OPM_SLOT_AB1, levelPrice = opmAbsGex1, isVisible = opmShowAbsGex, tone = opmAbsGexColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)
         f_opmArm(slotIndex = OPM_SLOT_AB2, levelPrice = opmAbsGex2, isVisible = opmShowAbsGex, tone = opmAbsGexColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)
         f_opmArm(slotIndex = OPM_SLOT_AB3, levelPrice = opmAbsGex3, isVisible = opmShowAbsGex, tone = opmAbsGexColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)
-        f_opmArm(slotIndex = OPM_SLOT_HP, levelPrice = opmHedgingPeak, isVisible = opmShowHedgingPeak, tone = opmHedgingPeakColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dashed, drawsLine = true)
-        f_opmArm(slotIndex = OPM_SLOT_MP, levelPrice = opmMaxPain, isVisible = opmShowMaxPain, tone = opmMaxPainColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dashed, drawsLine = true)
+        f_opmArm(slotIndex = OPM_SLOT_HP, levelPrice = opmHedgingPeak, isVisible = opmShowHedgingPeak and opmHedgingPeakDistinct, tone = opmHedgingPeakColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dashed, drawsLine = true)
         f_opmArm(slotIndex = OPM_SLOT_NCOI, levelPrice = opmNetCallOI, isVisible = opmShowOI, tone = opmOIColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)
         f_opmArm(slotIndex = OPM_SLOT_NPOI, levelPrice = opmNetPutOI, isVisible = opmShowOI, tone = opmOIColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)
         f_opmArm(slotIndex = OPM_SLOT_COI, levelPrice = opmCallOI, isVisible = opmShowOI, tone = opmOIColor, lineWidth = OPM_THIN_WIDTH, lineStyle = line.style_dotted, drawsLine = true)

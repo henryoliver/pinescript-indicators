@@ -41,6 +41,13 @@ const color NORD15 = #B48EAD
 const float QW_NOISE_THRESHOLD       = 0.2
 const float QW_SERIOUS_THRESHOLD     = 0.5
 const float QW_COMMITTED_THRESHOLD   = 1.0
+// "Today's Open" tier scale. The 0.2/0.5/1.0 tiers are calibrated on change vs
+// YESTERDAY'S CLOSE; measured from the open the same tape moves less (median
+// |sector %| at 10:00 is 0.299 vs-open against 0.466 vs-close, SPY + QQQ,
+// 1,041 sessions), so the unscaled tiers collapse COMMITTED from ~9% of days
+// to ~1%. Under that baseline every tier is multiplied by 0.299 / 0.466 —
+// the same tiers, measured on the same share of the tape. Derived here.
+const float QW_OPEN_TIER_SCALE       = 0.64
 // Regime fractions, applied to SERIOUS sector counts (≥0.5%): ≥75% one-sided =
 // committed, 50-75% = mild. Derived here, not inherited.
 const float QW_COMMITTED_FRACTION    = 0.75
@@ -90,15 +97,16 @@ const float QW_PARTIAL_GAP_FRACTION  = 0.5
 // Compact records used to keep the three symbol groups (cash / futures /
 // sectors) iterable from a single rendering loop.
 // ═════════════════════════════════════════════════════════════════════════════
-// pctChange is the PRIMARY read used by all verdict math and single-baseline
-// display: vs prior daily close by default (source: "amateurs watch the open
-// and pros watch the close"), vs today's open only when the user selects that
-// baseline. In "Both" display mode the primary stays vs-close. pctChangeVsOpen
-// and pctChangeVsClose are always populated so the two-column "Both" view is
-// free. Cross-group checks (cash↔futures misalignment) must always use
-// pctChangeVsClose: cash ETFs open at 09:30 ET but CME futures' daily bar
-// opens at globex (~18:00 ET prior day), so vs-open values aren't comparable
-// across those groups.
+// pctChange is the PRIMARY read used by ALL verdict math and single-baseline
+// display, and it follows the % Change Baseline input: vs prior daily close by
+// default ("amateurs watch the open and pros watch the close"), vs today's
+// open when that baseline is selected. In "Both" and "vs SPY" modes the
+// primary is vs-close (the relative rebase happens on display copies only).
+// pctChangeVsOpen and pctChangeVsClose are always populated so the two-column
+// "Both" view is free. FUTURES vs-open is measured from the price at the 09:30
+// CASH open, not from the globex daily open (~18:00 ET prior day), so every
+// group's "today's open" means the same moment and cash↔futures pairs stay
+// comparable under either baseline.
 type QwReading
     string label
     float  pctChange
@@ -132,7 +140,7 @@ string qwBaselineMode = input.string(
      defval = "Yesterday's Close",
      title = "% Change Baseline",
      options = ["Yesterday's Close", "Today's Open", "Both", "vs SPY (relative)"],
-     tooltip = "Default 'Yesterday's Close' is the conventional reading — the close is the number professionals mark against. 'vs SPY (relative)' subtracts SPY's own change from every row, reproducing the source's sector routine — a TradingView PERCENT-CHANGE chart with SPY overlaid as a thick black line, where the read is each sector against the benchmark rather than against zero. Sorted, that ranks true out- and under-performers: his stated preference is to buy the UNDERperformer breaking its own prior high BEFORE it crosses back above SPY (the early/late principle — once it is parabolic above SPY there is no cycle low left to enter on). SPY's own row reads 0.00% because it is the benchmark. Display only: the regime verdict always runs on the vs-close numbers, since the 0.2/0.5/1.0 commitment tiers are calibrated on absolute change. 'Today's Open' is a clean pure-intraday read for cash and sector ETFs (which open at 09:30 ET) — CAVEAT: each CME contract's daily bar opens at globex (~18:00 ET prior day), so 'Today's Open' on the FUTURES rows still includes overnight. 'Both' shows the two baselines side by side, the way the source quote window keeps both columns up; verdict math then runs on the vs-close numbers. The internal cash↔futures misalignment check uses prior-close baseline regardless of this setting to keep cross-group comparisons apples-to-apples. Prices are read at the CHART's timeframe, so on an extended-hours chart the rows move during pre-market; on an RTH-only chart they start at the open.",
+     tooltip = "Default 'Yesterday's Close' is the conventional reading — the close is the number professionals mark against. 'vs SPY (relative)' subtracts SPY's own change from every row, reproducing the source's sector routine — a TradingView PERCENT-CHANGE chart with SPY overlaid as a thick black line, where the read is each sector against the benchmark rather than against zero. Sorted, that ranks true out- and under-performers: his stated preference is to buy the UNDERperformer breaking its own prior high BEFORE it crosses back above SPY (the early/late principle — once it is parabolic above SPY there is no cycle low left to enter on). SPY's own row reads 0.00% because it is the benchmark; the verdict stays on vs-close here, because index bifurcation against SPY itself is meaningless. 'Today's Open' is the pure-intraday read: cash and sector ETFs from their 09:30 open, and FUTURES from their price at the 09:30 cash open (not the globex open), so the overnight gap is out of every row. The VERDICT, the pair check and the row colours all switch to it, with the 0.2/0.5/1.0 tiers scaled ×0.64 (0.13/0.32/0.64) because moves from the open are smaller. 'Both' shows the two baselines side by side, the way the source keeps both columns up; the verdict then runs on vs-close. The verdict row always names the baseline it ran on. Prices are read at the CHART's timeframe, so on an extended-hours chart the rows move during pre-market; on an RTH-only chart they start at the open.",
      group = GROUP_QW_GENERAL
  )
 
@@ -156,7 +164,7 @@ int qwTextSize = input.int(
 bool qwSortRows = input.bool(
      defval = true,
      title = "Sort Rows by % Change",
-     tooltip = "Sort each group's rows by net percent change, descending — green at the top, red at the bottom, The market-selection read falls straight out of the ordering: on a directional day, trade the leaders at the top (or laggards at the bottom), not the middle. Display-only — the regime verdict and the cash↔futures pair check always run on the fixed symbol order. Sorts on the primary baseline; in 'Both' mode that is vs CLOSE. Off = fixed symbol order (SPY/QQQ/DIA/IWM etc.).",
+     tooltip = "Sort each group's rows by net percent change, descending — green at the top, red at the bottom. The market-selection read falls straight out of the ordering: on a directional day, trade the leaders at the top (or laggards at the bottom), not the middle. Display-only — the regime verdict and the cash↔futures pair check always run on the fixed symbol order. Sorts on the primary baseline; in 'Both' mode that is vs CLOSE. Off = fixed symbol order (SPY/QQQ/DIA/IWM etc.).",
      group = GROUP_QW_TABLE
  )
 
@@ -338,7 +346,7 @@ color qwRegimeDataGapColor = input.color(
 bool qwShowRangeRow = input.bool(
      defval = true,
      title = "Show Opening-Range Row",
-     tooltip = "Adds a second day-type row beneath the Regime Verdict: the chart symbol's own opening range measured against its trailing baseline, classified WIDE / NORMAL / NARROW. Independent of the quote window — it reads the instrument you are trading, not the sector basket. OFF by default; nothing computes when off except the shared daily-ATR request.",
+     tooltip = "Adds a second day-type row beneath the Regime Verdict: the chart symbol's own opening range measured against its trailing baseline, classified WIDE / NORMAL / NARROW. Independent of the quote window and of the % Change Baseline — it reads the instrument you are trading, not the sector basket. Nothing computes when off except its daily-ATR request.",
      group = GROUP_QW_RANGE
  )
 
@@ -353,11 +361,11 @@ int qwRangeMinutes = input.int(
  )
 
 int qwRangeBaselineDays = input.int(
-     defval = 20,
+     defval = 60,
      title = "Baseline (sessions)",
-     minval = 5,
-     maxval = 60,
-     tooltip = "Length of the trailing EMA of opening-range-÷-daily-ATR that today is compared against. Self-calibrating by design — a fixed cutoff cannot serve two symbols whose opening ranges differ structurally.",
+     minval = 10,
+     maxval = 120,
+     tooltip = "Length of the trailing EMA of opening-range-÷-daily-ATR that today is compared against. Self-calibrating by design — a fixed cutoff cannot serve two symbols whose opening ranges differ structurally.\n\n📐 60 since 2026-10-02 (was 20). Measured on 426 sessions of QQQ and SPY 30-min bars: a 20-session baseline erased most of the information — dividing by a SHORT mean forgets whether the last few weeks have been wide or narrow — while 60 lifted the forecast of the rest-of-day range from R² 0.072 → 0.095 (QQQ) and 0.114 → 0.150 (SPY), out of sample too, and widened the WIDE-vs-NARROW spread to 1.49× / 1.70×. 40-90 all score alike; 60 is the middle. Opening volume and the prior day's range were also tested and overfit out of sample, so they are not in.",
      group = GROUP_QW_RANGE
  )
 
@@ -378,7 +386,7 @@ float qwRangeNarrowRatio = input.float(
      maxval = 1.0,
      step = 0.05,
      inline = "qw_range_ratios",
-     tooltip = "Today's opening range ÷ its trailing baseline. At or above the wide ratio = WIDE, at or below the narrow ratio = NARROW, between = NORMAL. Defaults 1.25/0.80 gave balanced buckets on both SPY and QQQ (wide ~21-24% of sessions, narrow ~34-37%) with a monotonic 1.35-1.46x excursion spread, and match the expansion/quiet ratios used by composite-breadth's opening-volume regime.",
+     tooltip = "Today's opening range ÷ its trailing baseline. At or above the wide ratio = WIDE, at or below the narrow ratio = NARROW, between = NORMAL. With the 60-session baseline, 1.25/0.80 gives WIDE ~19-23% / NARROW ~38-40% of sessions on QQQ and SPY, with WIDE days running 1.49× / 1.70× the rest-of-day range of NARROW ones (2026-10-02, 426 sessions).",
      group = GROUP_QW_RANGE
  )
 
@@ -389,6 +397,21 @@ color qwRangeNarrowColor = input.color(defval = NORD3, title = "Narrow", inline 
 bool qwUseTodayOpenBaseline = qwBaselineMode == "Today's Open"
 bool qwBothBaselines        = qwBaselineMode == "Both"
 bool qwRelativeToSpy        = qwBaselineMode == "vs SPY (relative)"
+// Commitment tiers IN FORCE — scaled only when the verdict runs vs today's open.
+float qwTierScale        = qwUseTodayOpenBaseline ? QW_OPEN_TIER_SCALE : 1.0
+float qwNoiseTier        = QW_NOISE_THRESHOLD     * qwTierScale
+float qwSeriousTier      = QW_SERIOUS_THRESHOLD   * qwTierScale
+float qwCommittedTier    = QW_COMMITTED_THRESHOLD * qwTierScale
+string qwVerdictBaseline = qwUseTodayOpenBaseline ? "vs open" : "vs close"
+
+// Session edges, declared ABOVE the reading helper because it snapshots the
+// futures' 09:30 price. The OPEN window is deliberately narrow (see the
+// QW_SESSION_RTH_OPEN note); the NY day key resets per-day state at midnight ET.
+bool qwInRthOpenWindow   = not na(time(timeframe = timeframe.period, session = QW_SESSION_RTH_OPEN, timezone = "America/New_York"))
+bool qwSessionJustOpened = qwInRthOpenWindow and not qwInRthOpenWindow[1]
+bool qwInRthSession      = not na(time(timeframe = timeframe.period, session = QW_SESSION_RTH_FULL, timezone = "America/New_York"))
+int  qwNyDayKey = year(time = time, timezone = "America/New_York") * 10000 + month(time = time, timezone = "America/New_York") * 100 + dayofmonth(time = time, timezone = "America/New_York")
+bool qwNewNyDay = qwNyDayKey != qwNyDayKey[1]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -423,7 +446,7 @@ bool qwRelativeToSpy        = qwBaselineMode == "vs SPY (relative)"
 //
 // Computes BOTH baselines every time (vs-open and vs-close) and selects the
 // primary per the baseline mode — see the QwReading type comment.
-f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTodayOpenBaseline) =>
+f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTodayOpenBaseline, bool isFutures = false) =>
     // SESSION-PINNED TICKER (2026-09-27 correctness fix). `syminfo.tickerid`-style
     // plain symbols inherit the CHART's session setting, so with Extended Trading
     // Hours enabled a daily bar's `open` becomes the 04:00 pre-market print and
@@ -445,15 +468,26 @@ f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTod
          lookahead = barmerge.lookahead_on,
          ignore_invalid_symbol = true
      )
-    float qwReadingNowPrice = request.security(
+    [qwReadingBarOpen, qwReadingNowPrice] = request.security(
          symbol = qwReadingTicker,
          timeframe = timeframe.period,
-         expression = close,
+         expression = [open, close],
          lookahead = barmerge.lookahead_off,
          ignore_invalid_symbol = true
      )
-    float qwReadingVsOpenPct  = not na(qwReadingNowPrice) and not na(todayOpen) and todayOpen != 0.0 ?
-         (qwReadingNowPrice - todayOpen)  / todayOpen  * 100.0 : na
+    // FUTURES "today's open" = the price at the 09:30 CASH open, snapshotted per
+    // symbol (var inside the helper is per call site). Their daily bar opens at
+    // globex, so the daily `open` would leave the whole overnight in the row and
+    // make cash↔futures comparisons meaningless under this baseline. Before
+    // 09:30 the snapshot is na and so is the row — there is no cash open yet.
+    var float qwReadingCashOpenPrice = na
+    if qwNewNyDay
+        qwReadingCashOpenPrice := na
+    if qwSessionJustOpened and not na(qwReadingBarOpen)
+        qwReadingCashOpenPrice := qwReadingBarOpen
+    float qwReadingOpenBase = isFutures ? qwReadingCashOpenPrice : todayOpen
+    float qwReadingVsOpenPct  = not na(qwReadingNowPrice) and not na(qwReadingOpenBase) and qwReadingOpenBase != 0.0 ?
+         (qwReadingNowPrice - qwReadingOpenBase) / qwReadingOpenBase * 100.0 : na
     float qwReadingVsClosePct = not na(qwReadingNowPrice) and not na(prevClose) and prevClose != 0.0 ?
          (qwReadingNowPrice - prevClose) / prevClose * 100.0 : na
     float qwReadingPrimaryPct = useTodayOpenBaseline ? qwReadingVsOpenPct : qwReadingVsClosePct
@@ -462,14 +496,16 @@ f_qwMakeReading(string label, string symbolTicker, bool isCommodity, bool useTod
 f_qwCellTextColor(float pctChange) =>
     na(pctChange) ? color.new(color = NORD4, transp = 40) : color.new(color = NORD4, transp = 0)
 
-f_qwPctTextColor(float pctChange) =>
+// tierScale: 1.0 for vs-close numbers, QW_OPEN_TIER_SCALE for vs-open ones, so
+// a row's colour always matches the tiers the verdict applies to it.
+f_qwPctTextColor(float pctChange, float tierScale = 1.0) =>
     color qwPctColor = color.new(color = NORD4, transp = 40)
     if not na(pctChange)
-        if math.abs(number = pctChange) >= QW_COMMITTED_THRESHOLD
+        if math.abs(number = pctChange) >= QW_COMMITTED_THRESHOLD * tierScale
             qwPctColor := color.new(color = pctChange >= 0.0 ? NORD8 : NORD11, transp = 0)
-        else if math.abs(number = pctChange) >= QW_SERIOUS_THRESHOLD
+        else if math.abs(number = pctChange) >= QW_SERIOUS_THRESHOLD * tierScale
             qwPctColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 0)
-        else if math.abs(number = pctChange) > QW_NOISE_THRESHOLD
+        else if math.abs(number = pctChange) > QW_NOISE_THRESHOLD * tierScale
             qwPctColor := color.new(color = pctChange >= 0.0 ? NORD7 : NORD12, transp = 45)
         else
             qwPctColor := color.new(color = NORD3, transp = 0)
@@ -586,10 +622,10 @@ QwReading qwQqqReading  = f_qwMakeReading(label = "QQQ",  symbolTicker = "NASDAQ
 QwReading qwDiaReading  = f_qwMakeReading(label = "DIA",  symbolTicker = "AMEX:DIA",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 QwReading qwIwmReading  = f_qwMakeReading(label = "IWM",  symbolTicker = "AMEX:IWM",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 
-QwReading qwEsReading   = f_qwMakeReading(label = "ES",   symbolTicker = "CME_MINI:ES1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
-QwReading qwNqReading   = f_qwMakeReading(label = "NQ",   symbolTicker = "CME_MINI:NQ1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
-QwReading qwYmReading   = f_qwMakeReading(label = "YM",   symbolTicker = "CBOT_MINI:YM1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
-QwReading qwRtyReading  = f_qwMakeReading(label = "RTY",  symbolTicker = "CME_MINI:RTY1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
+QwReading qwEsReading   = f_qwMakeReading(label = "ES",   symbolTicker = "CME_MINI:ES1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline, isFutures = true)
+QwReading qwNqReading   = f_qwMakeReading(label = "NQ",   symbolTicker = "CME_MINI:NQ1!",  isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline, isFutures = true)
+QwReading qwYmReading   = f_qwMakeReading(label = "YM",   symbolTicker = "CBOT_MINI:YM1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline, isFutures = true)
+QwReading qwRtyReading  = f_qwMakeReading(label = "RTY",  symbolTicker = "CME_MINI:RTY1!", isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline, isFutures = true)
 
 QwReading qwXlcReading  = f_qwMakeReading(label = "XLC",  symbolTicker = "AMEX:XLC",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
 QwReading qwXlyReading  = f_qwMakeReading(label = "XLY",  symbolTicker = "AMEX:XLY",       isCommodity = false, useTodayOpenBaseline = qwUseTodayOpenBaseline)
@@ -625,8 +661,8 @@ array<QwReading> qwSectorReadings = array.from(
 //   • Sectors: mixture is tolerated up to a 25% minority of colors beyond
 //     the noise floor.
 // ─────────────────────────────────────────────────────────────────────────────
-bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = QW_NOISE_THRESHOLD, minorityFraction = 0.0)
-bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = QW_NOISE_THRESHOLD, minorityFraction = 0.0)
+bool qwCashBifurcated    = f_qwIsBifurcated(readings = qwCashReadings,    threshold = qwNoiseTier, minorityFraction = 0.0)
+bool qwFuturesBifurcated = f_qwIsBifurcated(readings = qwFuturesReadings, threshold = qwNoiseTier, minorityFraction = 0.0)
 
 // Group nets for the header rows. The primary follows the baseline mode; the
 // "Both" view renders the vs-open and vs-close nets side by side.
@@ -641,11 +677,10 @@ float qwFuturesNet = qwUseTodayOpenBaseline ? qwFuturesNetVsOpen : qwFuturesNetV
 // little green, but the ES is a little red … probably a good time to not
 // trade that market." Group means can wash out a single split pair (SPY +0.5%
 // vs ES −0.3% while the other three pairs align). Pairing relies on the two
-// arrays sharing index order: SPY↔ES, QQQ↔NQ, DIA↔YM, IWM↔RTY. Always
-// compared on prior-close baseline: cash ETFs open at 09:30 ET but CME
-// futures' daily bar opens at globex (~18:00 ET prior day), so vs-open values
-// aren't comparable across the pair — comparing them in "Today's Open" mode
-// would flag a phantom misalignment any time the overnight gap was meaningful.
+// arrays sharing index order: SPY↔ES, QQQ↔NQ, DIA↔YM, IWM↔RTY. Compared on
+// the PRIMARY baseline like the rest of the verdict: under "Today's Open" both
+// legs are measured from the 09:30 cash open (futures included — see
+// f_qwMakeReading), so the pair stays like-for-like.
 //
 // The split pairs are NAMED. A pair split is a per-INSTRUMENT veto, not a
 // global one: if SPY and ES disagree, that says nothing about QQQ. It still
@@ -680,11 +715,11 @@ int qwPairsOpposed    = 0
 for qwPairIndex = 0 to math.min(array.size(id = qwCashReadings), array.size(id = qwFuturesReadings)) - 1
     QwReading qwPairCash    = array.get(id = qwCashReadings, index = qwPairIndex)
     QwReading qwPairFutures = array.get(id = qwFuturesReadings, index = qwPairIndex)
-    if not na(qwPairCash.pctChangeVsClose) and not na(qwPairFutures.pctChangeVsClose) and
-         math.abs(number = qwPairCash.pctChangeVsClose)    > QW_NOISE_THRESHOLD and
-         math.abs(number = qwPairFutures.pctChangeVsClose) > QW_NOISE_THRESHOLD
+    if not na(qwPairCash.pctChange) and not na(qwPairFutures.pctChange) and
+         math.abs(number = qwPairCash.pctChange)    > qwNoiseTier and
+         math.abs(number = qwPairFutures.pctChange) > qwNoiseTier
         qwPairsComparable += 1
-        if (qwPairCash.pctChangeVsClose > 0.0) != (qwPairFutures.pctChangeVsClose > 0.0)
+        if (qwPairCash.pctChange > 0.0) != (qwPairFutures.pctChange > 0.0)
             qwPairsOpposed += 1
             array.push(id = qwMisalignedPairNames, value = qwPairCash.label + "/" + qwPairFutures.label)
 
@@ -694,7 +729,7 @@ for qwPairIndex = 0 to math.min(array.size(id = qwCashReadings), array.size(id =
 // all of them. Requiring the sweep INSIDE the computed window keeps the check
 // live for the other ~20 days a quarter it would otherwise be blind on, and
 // keeps a real one-pair split flagged even on roll day itself.
-bool qwRollSuspected = qwInRollWindow and qwPairsComparable >= 3 and qwPairsOpposed == qwPairsComparable
+bool qwRollSuspected = not qwUseTodayOpenBaseline and qwInRollWindow and qwPairsComparable >= 3 and qwPairsOpposed == qwPairsComparable
 qwCashFuturesMisaligned := qwPairsOpposed > 0 and not qwRollSuspected
 
 // ─── Sector read ─────────────────────────────────────────────────────────────
@@ -707,9 +742,9 @@ int qwSectorGreensAll = 0
 int qwSectorRedsAll   = 0
 for reading in qwSectorReadings
     if not na(reading.pctChange)
-        if reading.pctChange > QW_NOISE_THRESHOLD
+        if reading.pctChange > qwNoiseTier
             qwSectorGreensAll += 1
-        else if reading.pctChange < -QW_NOISE_THRESHOLD
+        else if reading.pctChange < -qwNoiseTier
             qwSectorRedsAll += 1
 // Minority colour: +1 = greens are the minority, −1 = reds are, 0 = one-sided
 // or an exact tie (a tie is a 50/50 tape, where nothing is "the exception").
@@ -728,8 +763,8 @@ int qwSectorRedsSerious   = 0
 array<string> qwSectorMinorityNames = array.new<string>()
 for reading in qwSectorReadings
     if not na(reading.pctChange)
-        int qwReadingSign = reading.pctChange > QW_NOISE_THRESHOLD ? 1 :
-             reading.pctChange < -QW_NOISE_THRESHOLD ? -1 : 0
+        int qwReadingSign = reading.pctChange > qwNoiseTier ? 1 :
+             reading.pctChange < -qwNoiseTier ? -1 : 0
         bool qwOnMinoritySide = qwSectorMinoritySign != 0 and qwReadingSign == qwSectorMinoritySign
         bool qwDiscounted = qwIgnoreCommoditySectors and reading.isCommodity and qwOnMinoritySide
         if not qwDiscounted
@@ -738,9 +773,9 @@ for reading in qwSectorReadings
                 qwSectorGreens += 1
             else if qwReadingSign == -1
                 qwSectorReds += 1
-            if reading.pctChange >= QW_SERIOUS_THRESHOLD
+            if reading.pctChange >= qwSeriousTier
                 qwSectorGreensSerious += 1
-            else if reading.pctChange <= -QW_SERIOUS_THRESHOLD
+            else if reading.pctChange <= -qwSeriousTier
                 qwSectorRedsSerious += 1
             if qwOnMinoritySide
                 array.push(id = qwSectorMinorityNames, value = reading.label)
@@ -824,17 +859,10 @@ var int qwRedsAtOpen   = na
 // FX, crypto) trip the reset at ~midnight, and stock-only charts trip it on
 // the first bar of the new RTH session (which is the 09:30 bar itself — the
 // reset runs before the snapshot assignment below).
-int qwNyDayKey = year(time = time, timezone = "America/New_York") * 10000 + month(time = time, timezone = "America/New_York") * 100 + dayofmonth(time = time, timezone = "America/New_York")
-if qwNyDayKey != qwNyDayKey[1]
+if qwNewNyDay
     qwGreensAtOpen := na
     qwRedsAtOpen   := na
 
-bool qwInRthOpenWindow  = not na(time(timeframe = timeframe.period, session = QW_SESSION_RTH_OPEN, timezone = "America/New_York"))
-bool qwSessionJustOpened = qwInRthOpenWindow and not qwInRthOpenWindow[1]
-// Shared "inside the cash session" test. Declared HERE, beside the session edge,
-// because both the opening-range engine and the log layer consume it and the
-// range engine sits above the log layer — a forward reference otherwise.
-bool qwInRthSession = not na(time(timeframe = timeframe.period, session = QW_SESSION_RTH_FULL, timezone = "America/New_York"))
 
 if qwSessionJustOpened
     qwGreensAtOpen := qwSectorGreensAll
@@ -877,11 +905,16 @@ else if qwDominantSeriousFraction >= QW_MILD_FRACTION
 // trailing EMA baseline, then fold today into that baseline — classify-then-
 // fold, so a session is never compared against itself.
 // ─────────────────────────────────────────────────────────────────────────────
+// YESTERDAY'S completed ATR on every bar (2026-10-02 fix): `[1]` under
+// lookahead_on is the settled-snapshot pattern. The old `ta.atr(14)` under
+// lookahead_off returned the prior day's ATR on history but TODAY'S developing
+// one live — already inflated by the opening range being measured — so the
+// live call could read NORMAL where history would have printed WIDE.
 float qwRangeDailyAtr = request.security(
      symbol = ticker.modify(tickerid = syminfo.tickerid, session = session.regular),
      timeframe = "D",
-     expression = ta.atr(length = 14),
-     lookahead = barmerge.lookahead_off
+     expression = ta.atr(length = 14)[1],
+     lookahead = barmerge.lookahead_on
  )
 
 var float qwRangeHigh     = na
@@ -990,7 +1023,7 @@ f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed, bo
          text_size = qwTextSize,
          bgcolor = qwRowBg)
     if bothColumns
-        color qwRowOpenText  = isDimmed ? qwRowDim : f_qwPctTextColor(pctChange = reading.pctChangeVsOpen)
+        color qwRowOpenText  = isDimmed ? qwRowDim : f_qwPctTextColor(pctChange = reading.pctChangeVsOpen, tierScale = QW_OPEN_TIER_SCALE)
         color qwRowCloseText = isDimmed ? qwRowDim : f_qwPctTextColor(pctChange = reading.pctChangeVsClose)
         table.cell(table_id = tableId, column = 1, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChangeVsOpen),
              text_color = qwRowOpenText,
@@ -1005,7 +1038,7 @@ f_qwReadingRow(table tableId, int rowIndex, QwReading reading, bool isDimmed, bo
              text_size = qwTextSize,
              bgcolor = qwRowBg)
     else
-        color qwRowPctText = isDimmed ? qwRowDim : f_qwPctTextColor(pctChange = reading.pctChange)
+        color qwRowPctText = isDimmed ? qwRowDim : f_qwPctTextColor(pctChange = reading.pctChange, tierScale = qwTierScale)
         table.cell(table_id = tableId, column = 1, row = rowIndex, text = f_qwFormatPct(pctChange = reading.pctChange),
              text_color = qwRowPctText,
              text_halign = text.align_right,
@@ -1044,6 +1077,7 @@ var string qwRegimeTooltip =
      "Over 0.2% to 0.5% = drift (color counts, conviction doesn't)\n" +
      "0.5-1% = serious (the color is taken seriously)\n" +
      "1% and above = committed to its bullish/bearish posture\n" +
+     "Under the 'Today's Open' baseline every tier scales ×0.64 (0.13 / 0.32 / 0.64%) — moves from the open are smaller, and the verdict row names the baseline it ran on.\n" +
      "\n" +
      "🏛️ SECTORS ARE GRADED, INDEXES ARE NOT\n" +
      "\"I don't need these to be all red or green\" — sector mixture is a dial, not a veto. Past a 25% minority the verdict is capped below COMMITTED; only a near 50/50 sector split reads BIFURCATED on its own. Commodity sectors (XLE, XLB) are discounted only when they sit on the MINORITY side: \"if all the sectors were green except for oil and gold, I wouldn't take that too seriously.\"\n" +
@@ -1181,8 +1215,8 @@ if barstate.islast
             // conditional 2026-09-25, so a commodity sector on the MAJORITY
             // side now counts and must not read as excluded.
             int qwSectorRowSign = na(sectorReading.pctChange) ? 0 :
-                 sectorReading.pctChange > QW_NOISE_THRESHOLD ? 1 :
-                 sectorReading.pctChange < -QW_NOISE_THRESHOLD ? -1 : 0
+                 sectorReading.pctChange > qwNoiseTier ? 1 :
+                 sectorReading.pctChange < -qwNoiseTier ? -1 : 0
             bool qwSectorRowDiscounted = qwIgnoreCommoditySectors and sectorReading.isCommodity and
                  qwSectorMinoritySign != 0 and qwSectorRowSign == qwSectorMinoritySign
             f_qwReadingRow(tableId = qwTable, rowIndex = qwRow, reading = sectorReading, isDimmed = qwSectorRowDiscounted, bothColumns = qwBothColumns)
@@ -1203,7 +1237,8 @@ if barstate.islast
                   qwSectorReceived,  qwSectorExpected) :
              str.format("{0}/{1}", math.max(qwSectorGreensSerious, qwSectorRedsSerious), qwSectorTotal) +
                   (qwSectorsCaution ? str.format("  ⚠{0}", qwSectorMinorityCount) : "") +
-                  (qwRollSuspected ? "  ⟲roll?" : "")
+                  (qwRollSuspected ? "  ⟲roll?" : "") +
+                  " · " + qwVerdictBaseline
         // A tie leaves qwSectorMinoritySign at 0, so no names are collected —
         // that is "even split", not "one-sided", and saying the latter on a
         // 50/50 tape would contradict the BIFURCATED verdict next to it.
@@ -1216,7 +1251,9 @@ if barstate.islast
              array.join(id = qwMisalignedPairNames, separator = " ")
         string qwRegimeDetailTooltip = qwDataGap ?
              "Per-group availability when a feed is missing: C=cash, F=futures, S=sectors. Format: received/expected." :
-             "Seriously-moving (0.5%+) sector count on the dominant side / total sectors counted.\n\n" +
+             "Verdict baseline: " + qwVerdictBaseline + " — tiers in force " + str.tostring(value = qwNoiseTier, format = "0.00") + " / " + str.tostring(value = qwSeriousTier, format = "0.00") + " / " + str.tostring(value = qwCommittedTier, format = "0.00") + "% (noise / serious / committed)." +
+             (qwBothBaselines or qwRelativeToSpy ? " This display mode keeps the verdict on vs-close." : "") + "\n\n" +
+             "Seriously-moving sector count on the dominant side / total sectors counted.\n\n" +
              "Minority sectors: " + qwMinorityText + "\n" +
              "(\"Look at the sectors in the minority and see what industries they represent.\")\n\n" +
              "Split cash/futures pairs: " + qwPairText + "\n" +
@@ -1246,7 +1283,7 @@ if barstate.islast
                  tooltip = qwRegimeDetailTooltip)
             qwRow += 1
         else
-            f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "REGIME", headerValue = qwBothColumns ? "" : "Verdict", bothColumns = qwBothColumns, headerValue2 = "Verdict")
+            f_qwHeaderRow(tableId = qwTable, rowIndex = qwRow, headerLabel = "REGIME", headerValue = qwBothColumns ? "" : "Verdict " + qwVerdictBaseline, bothColumns = qwBothColumns, headerValue2 = "Verdict " + qwVerdictBaseline)
             qwRow += 1
             table.cell(table_id = qwTable, column = 0, row = qwRow, text = qwRegimeText,
                  text_color = qwRegimeTextColor,
